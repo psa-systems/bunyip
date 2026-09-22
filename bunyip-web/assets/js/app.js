@@ -9,9 +9,14 @@
 //   [data-copy]          button- copy the attribute value to the clipboard
 //   [data-dialog-open]   button- showModal() the <dialog> with that id
 //   [data-dialog-close]  button- close the enclosing <dialog>
+//   [data-download-file] button- download the attribute value as a plain-text file
 //   [data-feedback-link] a     - append the current path as ?from=
 //   [data-redirect-to]   any   - navigate after [data-redirect-after] ms
 //   [data-reload-after]  any   - reload after that many ms
+//   [data-saved-gate]    div   - unlock its <a data-saved-gate-link> after a
+//                                nested [data-copy] or [data-download-file] fires
+//                                (BUNYIP-801: gate the recovery-codes Done link
+//                                behind at least one Copy or Download)
 //
 // Loaded with `defer` from the document head, so the DOM is parsed before it
 // runs and every listener below is registered once per page load.
@@ -215,6 +220,7 @@
         function () {
           restore('Copied', 1500);
           if (window.bunyipToast) window.bunyipToast('Copied to clipboard', 'success');
+          unlockSavedGate(btn);
         },
         function () {
           restore('Copy failed', 1500);
@@ -224,8 +230,63 @@
     } else {
       window.getSelection().selectAllChildren(btn.previousElementSibling);
       restore('Press Ctrl+C', 3000);
+      // The user is going to Ctrl+C what we just selected; count it as saved
+      // for the gate below (BUNYIP-801).
+      unlockSavedGate(btn);
     }
   });
+
+  // ------------------------------------------------------- download-as-file --
+  // The bytes come from the button's own data-download-file attribute (never
+  // the network), the filename from data-download-filename, so nothing here
+  // fetches or executes anything the server sent. Pure text/plain download.
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || typeof el.closest !== 'function') return;
+    var btn = el.closest('[data-download-file]');
+    if (!btn) return;
+    var text = btn.getAttribute('data-download-file') || '';
+    var filename = btn.getAttribute('data-download-filename') || 'download.txt';
+    try {
+      var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      // Revoke the object URL after the browser has had a chance to start the
+      // download; keeping it around leaks memory across saves.
+      setTimeout(function () { URL.revokeObjectURL(url); }, 500);
+      if (window.bunyipToast) window.bunyipToast('File downloaded', 'success');
+      unlockSavedGate(btn);
+    } catch (err) {
+      if (window.bunyipToast) window.bunyipToast('Download failed', 'error');
+    }
+  });
+
+  // unlock the <a data-saved-gate-link> inside the nearest
+  // [data-saved-gate] ancestor, so a "Done" affordance the operator can
+  // click sits behind at least one Copy or Download. `hidden` +
+  // `aria-hidden` on the initial link keeps the anchor unreachable to
+  // the keyboard until it is unlocked; a "not saved yet" hint slot
+  // (`[data-saved-gate-hint]`) is hidden in the opposite direction.
+  function unlockSavedGate(inside) {
+    if (!inside || typeof inside.closest !== 'function') return;
+    var gate = inside.closest('[data-saved-gate]');
+    if (!gate) return;
+    var link = gate.querySelector('[data-saved-gate-link]');
+    if (link) {
+      link.hidden = false;
+      link.removeAttribute('aria-hidden');
+    }
+    var hint = gate.querySelector('[data-saved-gate-hint]');
+    if (hint) {
+      hint.hidden = true;
+      hint.setAttribute('aria-hidden', 'true');
+    }
+  }
 
   // ---------------------------------------------------------- <dialog>s ----
   document.addEventListener('click', function (e) {

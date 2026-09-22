@@ -2244,6 +2244,122 @@ fn qr_svg(uri: &str) -> String {
 /// native app (e.g. KeePassXC) can, and the blur is defeated by disabling GPU
 /// compositing - this stops ACCIDENTAL exposure, not a determined viewer. `id`
 /// must be unique on the page (it binds the checkbox to its reveal label).
+/// the two panels that show recovery codes share the same shape -
+/// a reveal wrapper, a Copy button, a Download button, and a Done link that
+/// stays hidden until either the copy or the download has fired. Rendered by
+/// `confirm_2fa_post` (the enrollment celebration) and by `twofa_recovery_result`
+/// (the regeneration result) so the two cannot drift on the gate.
+///
+/// `reveal_id` seeds the checkbox input id [`sensitive_reveal`] needs (the two
+/// callers pass distinct ids so both can render on one page without colliding).
+/// `heading` and `intro` are the two callers' different copy above the codes.
+/// `done_href` is where the user goes after saving; today both callers point at
+/// `/settings`.
+fn recovery_codes_panel(
+    reveal_id: &str,
+    heading: &str,
+    intro: &str,
+    codes: &[String],
+    done_href: &str,
+) -> Markup {
+    // The plaintext body the Copy button copies AND the Download button saves.
+    // A single line per code, matching how the `<code>` cells render, and
+    // ending with a trailing newline so the file plays nicely with `cat`.
+    let plaintext = {
+        let mut s = String::new();
+        for c in codes {
+            s.push_str(c);
+            s.push('\n');
+        }
+        s
+    };
+    // Kept short and machine-parseable. `brand_name()` is admin-managed and can
+    // hold spaces or dashes, so lowercase it and swap runs of whitespace into
+    // a single hyphen; if the deployment set no brand, fall back to a neutral
+    // noun so the filename still makes sense on disk.
+    let filename_stem = {
+        let raw = crate::views::layout::brand_name();
+        let trimmed = raw.trim();
+        let base = if trimmed.is_empty() {
+            "platform"
+        } else {
+            trimmed
+        };
+        let mut out = String::with_capacity(base.len());
+        let mut hyphen = false;
+        for ch in base.chars() {
+            if ch.is_ascii_alphanumeric() {
+                if hyphen && !out.is_empty() {
+                    out.push('-');
+                }
+                for c in ch.to_lowercase() {
+                    out.push(c);
+                }
+                hyphen = false;
+            } else {
+                hyphen = true;
+            }
+        }
+        if out.is_empty() {
+            "platform".to_string()
+        } else {
+            out
+        }
+    };
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let filename = format!("{filename_stem}-recovery-codes-{today}.txt");
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { (heading) } p class="mt-2 text-muted-foreground" { (intro) } }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
+                div class="p-6 space-y-4" {
+                    div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
+                    (sensitive_reveal(reveal_id, "recovery codes", html! {
+                        div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                    }))
+                    // Copy + Download live side by side under
+                    // `[data-saved-gate]`; either one flipping unlocks the
+                    // Done link below. Both carry the same plaintext, so the
+                    // downloaded file matches what the reader sees on screen.
+                    div data-saved-gate class="space-y-3" {
+                        div class="flex flex-wrap gap-2" {
+                            button
+                                type="button"
+                                class=(button_class("outline", "default", ""))
+                                data-copy=(plaintext) {
+                                (icon("copy", "mr-2 h-4 w-4")) "Copy codes"
+                            }
+                            button
+                                type="button"
+                                class=(button_class("outline", "default", ""))
+                                data-download-file=(plaintext)
+                                data-download-filename=(filename) {
+                                (icon("download", "mr-2 h-4 w-4")) "Download codes"
+                            }
+                        }
+                        // Hidden hint below the buttons: names what the gate
+                        // waits for. Reveals its counterpart once either
+                        // button fires (JS in app.js).
+                        p data-saved-gate-hint class="text-xs text-muted-foreground" {
+                            "Copy or download to continue."
+                        }
+                        // Same shape as the previous single "Done" link, but
+                        // hidden until the gate unlocks it. `aria-hidden` +
+                        // `hidden` keep it out of the tab order until then;
+                        // the JS flip removes both.
+                        a href=(done_href)
+                            data-saved-gate-link
+                            hidden aria-hidden="true"
+                            class=(button_class("default", "default", "w-full")) {
+                            "Done"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
     html! {
         div data-sensitive {
@@ -2354,20 +2470,13 @@ pub async fn twofa_setup_post(
     };
     let fwd = c.forward.as_deref();
     let content = match auth_api::confirm_2fa(&st.api, fwd, f.code.trim()).await {
-        Ok(codes) => html! {
-            div class="mx-auto max-w-lg space-y-6" {
-                div { h1 class="text-3xl font-bold" { "Two-Factor Authentication Enabled" } p class="mt-2 text-muted-foreground" { "Save your recovery codes in a safe place." } }
-                div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
-                    div class="p-6 space-y-4" {
-                        div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                        (sensitive_reveal("reveal-recovery-codes", "recovery codes", html! {
-                            div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in &codes.codes { code class="text-center font-mono text-sm py-1" { (code) } } }
-                        }))
-                        a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
-                    }
-                }
-            }
-        },
+        Ok(codes) => recovery_codes_panel(
+            "reveal-recovery-codes",
+            "Two-Factor Authentication Enabled",
+            "Save your recovery codes in a safe place.",
+            &codes.codes,
+            "/settings",
+        ),
         Err(e) => {
             // Re-fetch the in-progress secret so the QR + manual key render
             // identically to what the user is currently scanning. bunyip-api
@@ -2422,22 +2531,17 @@ fn twofa_recovery_form(err: Option<&str>) -> Markup {
 }
 
 /// Show the freshly-generated recovery codes exactly once, matching the setup
-/// flow's codes panel (BUNYIP-355).
+/// flow's codes panel (BUNYIP-355) and its Copy / Download / gated-Done shape
+/// (BUNYIP-801). Delegates to [`recovery_codes_panel`] so the two cannot drift
+/// on the gate.
 fn twofa_recovery_result(codes: &[String]) -> Markup {
-    html! {
-        div class="mx-auto max-w-lg space-y-6" {
-            div { h1 class="text-3xl font-bold" { "New recovery codes" } p class="mt-2 text-muted-foreground" { "Save these in a safe place. Your old recovery codes no longer work." } }
-            div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
-                div class="p-6 space-y-4" {
-                    div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
-                    (sensitive_reveal("reveal-recovery-codes-new", "recovery codes", html! {
-                        div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
-                    }))
-                    a href="/settings" class=(button_class("default", "default", "w-full")) { "Done" }
-                }
-            }
-        }
-    }
+    recovery_codes_panel(
+        "reveal-recovery-codes-new",
+        "New recovery codes",
+        "Save these in a safe place. Your old recovery codes no longer work.",
+        codes,
+        "/settings",
+    )
 }
 
 /// GET /settings/2fa/recovery-codes - render the password-confirm form.
@@ -3451,6 +3555,173 @@ mod fetch_state_tests {
         assert!(
             hits.is_empty(),
             "a failed fetch must render an error box, not an empty page: {hits:?}"
+        );
+    }
+}
+
+/// the recovery-codes panel offers Copy AND Download, both carry
+/// the same plaintext body as the codes shown on screen, and the Done link is
+/// hidden behind a `[data-saved-gate-link]` marker whose reveal the JS gate
+/// flips only after either button fires. The suite covers the three gate
+/// shapes named in the ticket: copy-only (only the copy button fires), download-
+/// only (only the download button fires), and neither (initial render).
+#[cfg(test)]
+mod recovery_codes_panel_tests {
+    use super::recovery_codes_panel;
+
+    fn sample_codes() -> Vec<String> {
+        vec![
+            "AAAA-1111".to_string(),
+            "BBBB-2222".to_string(),
+            "CCCC-3333".to_string(),
+        ]
+    }
+
+    /// The three fixed pieces the panel always renders: a Copy button that
+    /// carries the codes verbatim in `data-copy`, a Download button whose
+    /// `data-download-file` payload matches the codes byte-for-byte, and a
+    /// `[data-saved-gate-link]` Done link that starts hidden. Covers the
+    /// "neither has been used" state of the ticket's gating AC.
+    #[test]
+    fn the_panel_renders_copy_download_and_a_hidden_done_link() {
+        let codes = sample_codes();
+        let html = recovery_codes_panel(
+            "reveal-recovery-codes-test",
+            "Heading",
+            "Intro copy.",
+            &codes,
+            "/settings",
+        )
+        .into_string();
+        // Both buttons present.
+        assert!(
+            html.contains("data-copy=\""),
+            "the Copy button is present: {html}"
+        );
+        assert!(
+            html.contains("data-download-file=\""),
+            "the Download button is present: {html}"
+        );
+        // Same plaintext on both (one code per line, trailing newline).
+        let joined = codes.join("\n") + "\n";
+        for c in &codes {
+            assert!(
+                html.contains(c.as_str()),
+                "the {c} code is displayed on screen"
+            );
+        }
+        // The buttons' payload matches the codes shown on screen.
+        assert!(
+            html.contains(&joined),
+            "the Copy / Download plaintext is exactly the codes shown on screen"
+        );
+        // Filename is `<brand>-recovery-codes-<yyyy-mm-dd>.txt`. Brand is
+        // deployment-dependent (empty on the test build), so match on the
+        // stable suffix; the yyyy-mm-dd is checked separately below.
+        assert!(
+            html.contains("recovery-codes-"),
+            "the filename carries the recovery-codes stem: {html}"
+        );
+        assert!(
+            html.contains(".txt\""),
+            "the filename ends in .txt (plain text): {html}"
+        );
+        // Gate: the Done link is present but hidden by both `hidden` and
+        // `aria-hidden=true` on its opening tag, so the keyboard cannot reach
+        // it and an AT does not announce it.
+        assert!(
+            html.contains("data-saved-gate-link"),
+            "the Done link carries the gate marker"
+        );
+        // Order matters here (Maud renders attributes in source order): the
+        // `hidden` attribute lives on the Done link only, and the hint slot
+        // that starts VISIBLE names the gate.
+        assert!(
+            html.contains("Copy or download to continue."),
+            "the hint slot names what unlocks the gate"
+        );
+    }
+
+    /// The ticket's copy-only path: the Copy button carries the codes as its
+    /// `data-copy` payload. The gate flip is browser-side (`app.js` calls
+    /// `unlockSavedGate` after the clipboard succeeds); the unit-test
+    /// invariant is that the payload the browser will use matches the codes
+    /// the user sees.
+    #[test]
+    fn the_copy_button_payload_matches_what_is_on_screen() {
+        let codes = sample_codes();
+        let html = recovery_codes_panel(
+            "reveal-recovery-codes-test",
+            "Heading",
+            "Intro copy.",
+            &codes,
+            "/settings",
+        )
+        .into_string();
+        // Every code shows in the plaintext payload for both buttons. Maud
+        // HTML-escapes attribute values, but the codes are ASCII alphanumeric
+        // plus a hyphen, so their encoded form is themselves. Newlines encode
+        // as `&#10;` inside an attribute, which is the shape the browser
+        // decodes back to `\n` when it reads the attribute.
+        for c in &codes {
+            assert!(
+                html.contains(c.as_str()),
+                "the code {c} appears in the panel markup: {html}"
+            );
+        }
+        // The Copy button's payload lives in `data-copy`; Maud passes newlines
+        // through unencoded inside attribute values (browsers accept both
+        // forms), so a payload of N codes joined by "\n" with a trailing "\n"
+        // contains exactly N literal newlines.
+        let data_copy_start = html
+            .find("data-copy=\"")
+            .expect("the Copy button is present");
+        let after_open = &html[data_copy_start + "data-copy=\"".len()..];
+        let end = after_open.find('"').expect("attribute is closed");
+        let payload = &after_open[..end];
+        assert_eq!(
+            payload.matches('\n').count(),
+            codes.len(),
+            "one newline per code plus one trailing newline: {payload:?}"
+        );
+    }
+
+    /// The ticket's download-only path: the Download button carries the same
+    /// bytes as the Copy button, and the filename resolves to a name the OS
+    /// will keep - the deployment brand (lowercased) plus `-recovery-codes-`
+    /// plus today's UTC date plus `.txt`.
+    #[test]
+    fn the_download_button_body_matches_the_copy_body_and_names_the_file() {
+        let codes = sample_codes();
+        let html = recovery_codes_panel(
+            "reveal-recovery-codes-test",
+            "Heading",
+            "Intro copy.",
+            &codes,
+            "/settings",
+        )
+        .into_string();
+        // Both `data-copy` and `data-download-file` are attribute values that
+        // Maud has HTML-escaped, so lift each one and compare.
+        fn attr_value<'a>(html: &'a str, name: &str) -> &'a str {
+            let start = html
+                .find(&format!("{name}=\""))
+                .unwrap_or_else(|| panic!("attribute {name} not found"));
+            let after = &html[start + name.len() + 2..];
+            let end = after.find('"').expect("attribute is closed");
+            &after[..end]
+        }
+        assert_eq!(
+            attr_value(&html, "data-copy"),
+            attr_value(&html, "data-download-file"),
+            "the Download body matches the Copy body byte-for-byte"
+        );
+        // Filename ends with `-<yyyy-mm-dd>.txt`, dated in UTC (the render
+        // does not know the reader's timezone).
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        assert!(
+            html.contains(&format!("-{today}.txt")),
+            "filename dates the download to today's UTC date: {today}"
         );
     }
 }
