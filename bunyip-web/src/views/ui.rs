@@ -749,6 +749,46 @@ mod tests {
         );
     }
 
+    /// BUNYIP-815 (F7): `BTN_BASE`'s `disabled:pointer-events-none` takes a
+    /// disabled button out of hit-testing and keyboard focus, so a `title`
+    /// tooltip on it never fires and its reason is unreachable by keyboard or
+    /// touch. Every disabled action states its reason in the visible label
+    /// (`disabled_button`) instead; this scan keeps a `title`-only reason from
+    /// reappearing on a `disabled` button anywhere in the tree.
+    #[test]
+    fn no_disabled_button_hides_its_reason_in_a_title() {
+        // Split so this scan's own needle does not match itself.
+        let needle = concat!("title", "=");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+        let mut stack = vec![src, web_kit_src()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("readable source dir") {
+                let path = entry.expect("readable dir entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let body = std::fs::read_to_string(&path).expect("readable source file");
+                for (n, line) in body.lines().enumerate() {
+                    if line.contains("disabled") && line.contains(needle) {
+                        offenders.push(format!("{}:{}", path.display(), n + 1));
+                    }
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a disabled button's reason belongs in the visible label \
+             (`disabled_button`), not a `title` attribute a disabled element \
+             never receives focus or a hover event to trigger:\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// The label on the `inverse` variant is the regression itself: it sits on
     /// the variant's own fill, so it has to clear AA there rather than on the
     /// gradient panel behind it.
