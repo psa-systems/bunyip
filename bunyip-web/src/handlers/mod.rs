@@ -20,7 +20,7 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::Markup;
 
-use crate::api::types::{Application, PricingResponse, User, UserRole};
+use crate::api::types::{PricingResponse, User, UserRole};
 use crate::auth::{self, AuthCtx};
 use crate::util::urlenc;
 use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
@@ -48,41 +48,70 @@ pub fn rotating_index(len: usize) -> usize {
     (chrono::Utc::now().timestamp_subsec_nanos() as usize) % len
 }
 
-/// Authenticate (optional) and fetch the chrome's shared data: the applications
-/// list (header + footer) and the public pricing payload.
+/// Authenticate (optional) and fetch the chrome's shared data: the public
+/// pricing payload.
 ///
 /// BUNYIP-487: the pricing payload rides along because the Pricing nav link and
 /// footer link must vanish whenever `/pricing` would 404.
 ///
-/// BUNYIP-515: both fetches still degrade to an empty value, because a dead nav
-/// link is worse for a visitor than a missing one, but neither degrades
+/// BUNYIP-515: the fetch still degrades to an empty value, because a dead nav
+/// link is worse for a visitor than a missing one, but it does not degrade
 /// silently. The failure is logged at `error` with the endpoint first: a public
-/// page rendering without its pricing or its app list is a deployment fault, and
-/// the operator has no other witness (the visitor sees a page that merely looks
-/// thin, and the admin sees /pricing 404 with nothing to explain it).
+/// page rendering without its pricing is a deployment fault, and the operator
+/// has no other witness (the visitor sees a page that merely looks thin, and
+/// the admin sees /pricing 404 with nothing to explain it).
 ///
-/// BUNYIP-518/555: both payloads drive chrome on EVERY public render, so both go
-/// through a short-TTL cache (`AppState::public_applications` / `pricing`):
-/// renders coalesce into one upstream call each, keeping the per-render fetches
-/// off the rate-limit floor that used to 404 `/pricing` and empty the footer. A
-/// cache miss on both runs the two fetches CONCURRENTLY - neither consumes the
-/// other's result - so the render costs the slower of the two, not their sum.
-/// `join!`, not `try_join!`: each payload degrades independently.
+/// BUNYIP-518/555: pricing drives chrome on EVERY public render, so it goes
+/// through a short-TTL cache (`AppState::pricing`): renders coalesce into one
+/// upstream call, keeping per-render fetches off the rate-limit floor that
+/// used to 404 `/pricing` and empty the footer.
+///
+/// `public_applications` no longer rides here. The public header
+/// and footer stopped rendering per-application entries in BUNYIP-667/682, so
+/// the application list feeds only the landing page's cards now, and that one
+/// caller fetches it beside `public_ctx` (`skin/public::landing`) instead of
+/// every public render paying for a cache read that nothing else uses.
 pub async fn public_ctx(
     st: &AppState,
     headers: &HeaderMap,
-) -> (AuthCtx, Arc<Vec<Application>>, Arc<PricingResponse>) {
+) -> (AuthCtx, Arc<PricingResponse>, bool) {
     let (c, _fwd) = ctx(st, headers).await;
-    let (apps, pricing) = tokio::join!(st.public_applications(), st.pricing());
-    (c, apps, pricing)
+    let pricing = st.pricing().await;
+    // resolve once per render so every chrome surface that could
+    // render an application link (header, footer, landing app section) reads
+    // the same decision as the destination's own verification gate. Kept
+    // beside `pricing` rather than joined here: `needs_onboarding` may
+    // consult the shared `setup_status` cache but returns without an API
+    // round-trip on the common named+verified path.
+    let app_links_allowed = application_links_allowed(st, c.user.as_ref()).await;
+    (c, pricing, app_links_allowed)
+}
+
+/// whether the visitor should be shown any application link.
+///
+/// An anonymous visitor sees none, and a signed-in visitor sees them only when
+/// the destination's own verification gate would let them through. That gate
+/// is [`needs_onboarding`]: the two calls read the same thing, so a rendered
+/// link and its destination cannot disagree - an unverified non-admin on a
+/// deployment with email delivery on gets no link, and the admin exemption
+/// plus the email-off exemption already baked into `needs_onboarding`
+/// (BUNYIP-515) carry over unchanged. `None` is a signed-out visitor: the
+/// chrome already hid the Applications entry from them (BUNYIP-667/682), and
+/// this preserves that; a landing-page section that could otherwise leak
+/// per-application links is now gated on the same bool as well.
+pub async fn application_links_allowed(st: &AppState, user: Option<&User>) -> bool {
+    match user {
+        None => false,
+        Some(u) => !needs_onboarding(st, u).await,
+    }
 }
 
 /// Wrap content in the public shell + document and relay any refreshed cookies.
 pub fn public_response(
     st: &AppState,
     c: &AuthCtx,
-    apps: &[Application],
     pricing: &PricingResponse,
+    app_links_allowed: bool,
     title: &str,
     launcher: bool,
     content: Markup,
@@ -90,8 +119,8 @@ pub fn public_response(
     let body = public_shell(
         &st.cfg,
         c.user.as_ref(),
-        apps,
         pricing.published(),
+        app_links_allowed,
         launcher,
         content,
     );
@@ -106,8 +135,8 @@ pub async fn auth_page(
     title: &str,
     content: Markup,
 ) -> Response {
-    let (c, apps, pricing) = public_ctx(st, headers).await;
-    public_response(st, &c, &apps, &pricing, title, false, content)
+    let (c, pricing, app_links_allowed) = public_ctx(st, headers).await;
+    public_response(st, &c, &pricing, app_links_allowed, title, false, content)
 }
 
 /// Read a single named cookie from the request.

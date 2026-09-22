@@ -334,11 +334,13 @@ pub async fn login_get(
             &c.set_cookies,
         );
     }
-    // BUNYIP-555: the two chrome payloads come from the shared TTL caches and
-    // are fetched concurrently on a miss; neither consumes the other's result.
-    let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
+    // BUNYIP-555: pricing comes from the shared TTL cache.
+    // no longer joins `public_applications()` beside it -
+    // the public chrome does not render the list any more.
+    let pricing = pricing_published(&st).await;
     let content = login_content(None, q.redirect.as_deref().unwrap_or("/dashboard"));
-    let body = public_shell(&st.cfg, None, &apps, pricing, false, content);
+    // signed-out visitor, so app_links_allowed = false.
+    let body = public_shell(&st.cfg, None, pricing, false, false, content);
     html(document("Sign in", body))
 }
 
@@ -382,9 +384,12 @@ pub async fn login_post(
             redirect_cookies(&path, &cookies)
         }
         Err(e) => {
-            let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
+            // public_applications() dropped, per its removal
+            // from the public chrome.
+            let pricing = pricing_published(&st).await;
             let content = login_content(Some(&e.user_message()), &target);
-            let body = public_shell(&st.cfg, None, &apps, pricing, false, content);
+            // signed-out visitor, so app_links_allowed = false.
+            let body = public_shell(&st.cfg, None, pricing, false, false, content);
             html(document("Sign in", body))
         }
     }
@@ -1285,10 +1290,14 @@ pub async fn verify_email(
         // The celebration card needs to ride out on a response that carries
         // the rotated `Set-Cookie` headers; `auth_page`'s shell doesn't
         // accept extra cookies, so render through the lower-level path
-        // directly here. The chrome payloads come from the same shared TTL
-        // caches `public_ctx` reads (BUNYIP-555).
-        let (apps, pricing) = tokio::join!(st.public_applications(), pricing_published(&st));
-        let body = public_shell(&st.cfg, None, &apps, pricing, false, card);
+        // directly here. Pricing comes from the same shared TTL cache
+        // `public_ctx` reads (BUNYIP-555).
+        // `public_applications()` dropped, per its removal
+        // from the public chrome.
+        let pricing = pricing_published(&st).await;
+        // signed-out visitor path (post-verify celebration),
+        // so app_links_allowed = false.
+        let body = public_shell(&st.cfg, None, pricing, false, false, card);
         html_cookies(document("Verify email", body), &rotated_cookies)
     }
 }
