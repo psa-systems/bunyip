@@ -2244,7 +2244,7 @@ fn qr_svg(uri: &str) -> String {
 /// native app (e.g. KeePassXC) can, and the blur is defeated by disabling GPU
 /// compositing - this stops ACCIDENTAL exposure, not a determined viewer. `id`
 /// must be unique on the page (it binds the checkbox to its reveal label).
-/// BUNYIP-801: the two panels that show recovery codes share the same shape -
+/// the two panels that show recovery codes share the same shape -
 /// a reveal wrapper, a Copy button, a Download button, and a Done link that
 /// stays hidden until either the copy or the download has fired. Rendered by
 /// `confirm_2fa_post` (the enrollment celebration) and by `twofa_recovery_result`
@@ -2309,7 +2309,7 @@ fn recovery_codes_panel(
                     (sensitive_reveal(reveal_id, "recovery codes", html! {
                         div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
                     }))
-                    // BUNYIP-801: Copy + Download live side by side under
+                    // Copy + Download live side by side under
                     // `[data-saved-gate]`; either one flipping unlocks the
                     // Done link below. Both carry the same plaintext, so the
                     // downloaded file matches what the reader sees on screen.
@@ -3551,7 +3551,7 @@ mod fetch_state_tests {
     }
 }
 
-/// BUNYIP-801: the recovery-codes panel offers Copy AND Download, both carry
+/// the recovery-codes panel offers Copy AND Download, both carry
 /// the same plaintext body as the codes shown on screen, and the Done link is
 /// hidden behind a `[data-saved-gate-link]` marker whose reveal the JS gate
 /// flips only after either button fires. The suite covers the three gate

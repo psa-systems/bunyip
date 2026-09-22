@@ -266,7 +266,7 @@
     }
   });
 
-  // BUNYIP-801: unlock the <a data-saved-gate-link> inside the nearest
+  // unlock the <a data-saved-gate-link> inside the nearest
   // [data-saved-gate] ancestor, so a "Done" affordance the operator can
   // click sits behind at least one Copy or Download. `hidden` +
   // `aria-hidden` on the initial link keeps the anchor unreachable to
