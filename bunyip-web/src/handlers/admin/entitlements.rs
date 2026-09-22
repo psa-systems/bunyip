@@ -32,7 +32,7 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
                     @if !reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        (empty_state("package", "No applications", None))
+                        (empty_state("package", "No applications.", None))
                     } @else {
                         // BUNYIP-415: flow product rows into two columns (one
                         // below lg) so the catalog uses the width.
@@ -126,7 +126,7 @@ pub async fn user_entitlements(
                     @if !granted_reachable {
                         (error_box("Could not reach the API to load entitlements."))
                     } @else if granted.is_empty() {
-                        (empty_state("shield-check", "No entitlements granted", None))
+                        (empty_state("shield-check", "No entitlements granted.", None))
                     } @else {
                         div class="divide-y" {
                             @for e in &granted {
@@ -147,7 +147,7 @@ pub async fn user_entitlements(
                     @if !apps_reachable {
                         (error_box("Could not reach the API to load applications."))
                     } @else if apps.is_empty() {
-                        (empty_state("package", "No applications", None))
+                        (empty_state("package", "No applications.", None))
                     } @else {
                         div class="divide-y" {
                             @for app in &apps {
