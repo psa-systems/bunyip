@@ -19,7 +19,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
@@ -136,8 +136,8 @@ pub(super) fn tier_settings_content(
                             "Organizations and teams",
                             Some("Off by default. While this is off, the Organizations nav entry is hidden and its page returns 404. A change reaches the web app within a minute."),
                             html! {
-                                label class="flex items-center gap-3 text-sm font-medium" {
-                                    input id="orgs_enabled" name="orgs_enabled" type="checkbox" value="true" checked[values.orgs_enabled] class="h-4 w-4 rounded border-input";
+                                div class="flex items-center gap-3 text-sm font-medium" {
+                                    (toggle_switch_field("orgs_enabled", "orgs_enabled", values.orgs_enabled, "Enable organizations and teams"))
                                     "Enable organizations and teams"
                                 }
                             },

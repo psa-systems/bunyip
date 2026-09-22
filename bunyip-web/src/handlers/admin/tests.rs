@@ -813,6 +813,44 @@ mod two_column_layout_tests {
         assert!(html_none.contains(r#"placeholder="Not set""#));
     }
 
+    /// BUNYIP-811: `smtp_password` and `imap_password` are hand-rolled
+    /// `type=password` inputs bound to a per-field `_editable` flag. In the
+    /// default `database` secrets-storage mode they ARE editable, so they must
+    /// get the same reveal toggle as every other typed password; when a
+    /// deployment declares them read-only (e.g. `SECRETS_STORAGE=environment`)
+    /// no toggle should render, since it would be inert.
+    #[test]
+    fn smtp_and_imap_password_reveal_toggle_tracks_the_editable_flag() {
+        let mut cfg = email_cfg();
+        cfg.smtp_password_editable = true;
+        cfg.imap_password_editable = true;
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        assert!(
+            html.contains(r#"data-pw-toggle="smtp_password""#),
+            "editable SMTP password gets a reveal toggle: {html}"
+        );
+        assert!(
+            html.contains(r#"data-pw-toggle="imap_password""#),
+            "editable IMAP password gets a reveal toggle: {html}"
+        );
+
+        let mut readonly_cfg = email_cfg();
+        readonly_cfg.smtp_password_editable = false;
+        readonly_cfg.imap_password_editable = false;
+        let readonly_values = EmailSettingsValues::from_config(&readonly_cfg);
+        let readonly_html =
+            email_settings_content(Some(&readonly_cfg), &readonly_values, None).into_string();
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="smtp_password""#),
+            "a genuinely read-only SMTP password renders no toggle: {readonly_html}"
+        );
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="imap_password""#),
+            "a genuinely read-only IMAP password renders no toggle: {readonly_html}"
+        );
+    }
+
     #[test]
     fn email_screen_uses_two_column_blocks() {
         let cfg = email_cfg();
@@ -1139,12 +1177,32 @@ mod two_column_layout_tests {
             .into_string();
         let off = super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable"), None)
             .into_string();
+        // Isolate the publish switch's own `<input>` tag: the surrounding markup
+        // carries static `peer-checked:` classes on every render, whatever the
+        // state, so a bare `contains("checked")` over the whole page would match
+        // those instead of the input's actual `checked` attribute.
+        let pricing_input = |html: &str| -> String {
+            let rest = html
+                .split_once(r#"id="pricing_enabled""#)
+                .expect("the publish switch renders")
+                .1;
+            rest.split_once('>')
+                .expect("the input closes")
+                .0
+                .to_string()
+        };
         assert!(
             on.contains(r#"name="pricing_enabled""#),
             "publish switch present in the catalog mapping"
         );
-        assert!(on.contains("checked"), "checked when the switch is on");
-        assert!(!off.contains("checked"), "unchecked when the switch is off");
+        assert!(
+            pricing_input(&on).contains("checked"),
+            "checked when the switch is on"
+        );
+        assert!(
+            !pricing_input(&off).contains("checked"),
+            "unchecked when the switch is off"
+        );
     }
 
     // BUNYIP-515 / BUNYIP-524: the catalog mapping says what /pricing is serving
@@ -1415,8 +1473,11 @@ mod stripe_admin_tests {
     // integration tests (this port calls those existing endpoints); here we
     // cover the rendering + the dollars->cents parsing, including the $0.00
     // lifetime-price case that must render as a real price, not "--".
-    use super::{parse_price_cents, stripe_prices_block, stripe_products_block, WebhookRetry};
-    use crate::api::types::{StripePrice, StripeProduct};
+    use super::{
+        parse_price_cents, stripe_prices_block, stripe_products_block, stripe_secret_fields,
+        WebhookRetry,
+    };
+    use crate::api::types::{StripeConfigResponse, StripePrice, StripeProduct};
     use crate::api::ApiError;
     use crate::util::format_stripe_amount;
 
@@ -1455,6 +1516,16 @@ mod stripe_admin_tests {
         }
     }
 
+    /// Counts literal `checked` HTML attributes, not the `peer-checked:` CSS
+    /// class name every `toggle_switch_field` renders regardless of state
+    /// (BUNYIP-819 F15): a bare substring count over the whole page would see
+    /// two extra false-positive hits per toggle, checked or not.
+    fn true_checked_count(html: &str) -> usize {
+        html.match_indices("checked")
+            .filter(|(i, _)| !html[..*i].ends_with('-'))
+            .count()
+    }
+
     /// A generic 500 from bunyip-api: `user_message` collapses it (BUNYIP-477),
     /// so the block itself has to name the likely cause.
     fn load_error() -> ApiError {
@@ -1479,6 +1550,51 @@ mod stripe_admin_tests {
             retry_after: None,
             request_id: Some("req_perm001".into()),
         }
+    }
+
+    fn stripe_cfg(secrets_editable: bool) -> StripeConfigResponse {
+        StripeConfigResponse {
+            secret_key_masked: Some("sk_live_…".into()),
+            webhook_secret_masked: Some("whsec_…".into()),
+            has_secret_key: true,
+            has_webhook_secret: true,
+            app_tag: "bunyip".into(),
+            success_url: String::new(),
+            cancel_url: String::new(),
+            trial_period_days: 0,
+            updated_at: None,
+            source: "database".into(),
+            secrets_storage: "database".into(),
+            secrets_editable,
+        }
+    }
+
+    /// BUNYIP-811: `secret_key` and `webhook_secret` are hand-rolled
+    /// `type=password` inputs bound to `secrets_editable`, which defaults to
+    /// `true` in the default `database` secrets-storage mode. Editable gets the
+    /// same reveal toggle as every other typed password; a genuinely read-only
+    /// deployment (e.g. `SECRETS_STORAGE=environment`) renders no toggle.
+    #[test]
+    fn secret_key_and_webhook_secret_reveal_toggle_tracks_the_editable_flag() {
+        let editable_html = stripe_secret_fields(&stripe_cfg(true)).into_string();
+        assert!(
+            editable_html.contains(r#"data-pw-toggle="secret_key""#),
+            "editable secret key gets a reveal toggle: {editable_html}"
+        );
+        assert!(
+            editable_html.contains(r#"data-pw-toggle="webhook_secret""#),
+            "editable webhook secret gets a reveal toggle: {editable_html}"
+        );
+
+        let readonly_html = stripe_secret_fields(&stripe_cfg(false)).into_string();
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="secret_key""#),
+            "a genuinely read-only secret key renders no toggle: {readonly_html}"
+        );
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="webhook_secret""#),
+            "a genuinely read-only webhook secret renders no toggle: {readonly_html}"
+        );
     }
 
     #[test]
@@ -2031,7 +2147,7 @@ mod stripe_admin_tests {
             "the stored price is selected on a plain load"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             1,
             "exactly the one stored-visible tier is checked on a plain load"
         );
@@ -2067,7 +2183,7 @@ mod stripe_admin_tests {
             "the stored price is no longer selected"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             0,
             "the unticked box is not restored from the stored-visible row"
         );
@@ -2092,7 +2208,7 @@ mod stripe_admin_tests {
         )
         .into_string();
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             2,
             "the submitted ticked switch and box are restored, the stored-on box unticked"
         );
@@ -2739,7 +2855,8 @@ mod rate_limit_management_tests {
             submitter_ip: Some("203.0.113.7".to_string()),
             user_agent: Some("Mozilla/5.0 Firefox/121.0".to_string()),
         };
-        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam).into_string();
+        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam, None, None)
+            .into_string();
         assert!(
             html.contains(r#"href="/admin/ip-bans?ip=203.0.113.7""#),
             "the IP links into the ip-bans add flow"
@@ -2748,6 +2865,50 @@ mod rate_limit_management_tests {
             html.contains("Mozilla/5.0 Firefox/121.0"),
             "user agent shown"
         );
+    }
+
+    /// BUNYIP-810: a rejected or failed reply re-renders the detail page with
+    /// the admin's just-typed text, not the persisted `admin_response` and
+    /// not an empty field, and the inline error sits inside the response
+    /// form so the admin sees why it was rejected right next to their draft.
+    #[test]
+    fn rejected_reply_echoes_the_typed_text_with_the_error_inside_the_form() {
+        let detail = AdminFeedbackDetail {
+            id: "33333333-3333-3333-3333-333333333333".to_string(),
+            name: Some("Ada".to_string()),
+            email: Some("ada@example.com".to_string()),
+            email_masked: Some("a***@example.com".to_string()),
+            subject: Some("Broken button".to_string()),
+            tags: vec![],
+            message: "It does not work".to_string(),
+            page_path: None,
+            status: FeedbackStatus::New,
+            admin_response: Some("An old stored reply".to_string()),
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            responded_at: Some("2026-08-01T01:00:00Z".to_string()),
+            attachments: vec![],
+            submitter_ip: None,
+            user_agent: None,
+        };
+        let html = feedback_detail_view(
+            &detail,
+            super::FeedbackTab::Active,
+            Some("A brand new draft the admin just typed"),
+            Some("Could not send response"),
+        )
+        .into_string();
+
+        assert!(
+            html.contains("A brand new draft the admin just typed"),
+            "the just-typed draft is redisplayed, not the stored response: {html}"
+        );
+        assert!(
+            !html.contains("An old stored reply"),
+            "the stale stored response is not shown once a draft is submitted: {html}"
+        );
+        let form = html.find("<form").expect("response form");
+        let error = html.find("Could not send response").expect("inline error");
+        assert!(form < error, "error renders inside the response form");
     }
 
     #[test]

@@ -171,6 +171,7 @@ pub fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
                 a href=(item.href)
                   target=[item.external.then_some("_blank")]
                   rel=[item.external.then_some("noopener noreferrer")]
+                  aria-current=[(active == item.href).then_some("page")]
                   class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
                     (icon(item.icon, "h-4 w-4"))
                     (item.title)
