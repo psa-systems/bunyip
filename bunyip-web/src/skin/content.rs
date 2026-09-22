@@ -1115,7 +1115,7 @@ fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
     } else {
         "block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
     };
-    html! { a class=(classes) href=(href) { (label) } }
+    html! { a class=(classes) href=(href) aria-current=[(href == active).then_some("page")] { (label) } }
 }
 
 /// The left-hand section menu shared by every `/docs` surface.

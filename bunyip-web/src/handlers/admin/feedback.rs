@@ -90,10 +90,10 @@ fn feedback_tabs(current: FeedbackTab) -> Markup {
     };
     html! {
         nav class="flex items-center gap-2 border-b border-border/50" aria-label="Feedback view" {
-            a href="/admin/feedback" class=(tab_class(current == FeedbackTab::Active)) { "Active" }
-            a href="/admin/feedback/closed" class=(tab_class(current == FeedbackTab::Closed)) { "Closed" }
-            a href="/admin/feedback/spam" class=(tab_class(current == FeedbackTab::Spam)) { "Spam" }
-            a href="/admin/feedback/archive" class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
+            a href="/admin/feedback" aria-current=[(current == FeedbackTab::Active).then_some("page")] class=(tab_class(current == FeedbackTab::Active)) { "Active" }
+            a href="/admin/feedback/closed" aria-current=[(current == FeedbackTab::Closed).then_some("page")] class=(tab_class(current == FeedbackTab::Closed)) { "Closed" }
+            a href="/admin/feedback/spam" aria-current=[(current == FeedbackTab::Spam).then_some("page")] class=(tab_class(current == FeedbackTab::Spam)) { "Spam" }
+            a href="/admin/feedback/archive" aria-current=[(current == FeedbackTab::Archive).then_some("page")] class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
         }
     }
 }

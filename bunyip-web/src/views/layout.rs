@@ -287,11 +287,12 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 (body)
                 // Toast surface: lives at top-right with pointer-events:none
                 // on the container and pointer-events:auto on each pill, so
-                // dismissed regions never block clicks. polite + atomic so
-                // screen readers announce each message in full.
+                // dismissed regions never block clicks. BUNYIP-818: the
+                // container itself carries no aria-live; each pill announces
+                // itself via its own `role` (`status` or `alert`), so a live
+                // region is never nested inside another.
                 div id="bunyip-toast-root"
-                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2"
-                    aria-live="polite" aria-atomic="true" {}
+                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2" {}
             }
         }
     }
@@ -403,7 +404,7 @@ fn header(
             div class="container flex h-16 items-center justify-between" {
                 div class="flex items-center gap-6" {
                     (brand())
-                    nav class="hidden md:flex items-center gap-6" {
+                    nav class="hidden md:flex items-center gap-6" aria-label="Primary" {
                         // BUNYIP-487: /pricing 404s unless an admin enabled it
                         // and a tier resolves to a Stripe price, so the link
                         // exists only when the page does.
@@ -787,7 +788,7 @@ fn mobile_nav(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Mar
                     aria-label="Open navigation" {
                 (icon("menu", "h-5 w-5"))
             }
-            nav class="absolute left-0 z-50 mt-2 max-h-[70vh] w-64 space-y-1 overflow-y-auto rounded-md border border-border/60 bg-background p-2 shadow-lg" {
+            nav class="absolute left-0 z-50 mt-2 max-h-[70vh] w-64 space-y-1 overflow-y-auto rounded-md border border-border/60 bg-background p-2 shadow-lg" aria-label="Main" {
                 (nav_links(&sections, active))
             }
         }
@@ -808,7 +809,7 @@ fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup
                     span class="ml-2 rounded bg-gradient-to-r from-indigo-500/20 to-teal-500/20 px-2 py-0.5 text-xs font-medium text-indigo-600 dark:text-indigo-400" { "Admin" }
                 }
             }
-            nav class="flex-1 space-y-1 overflow-y-auto p-4" {
+            nav class="flex-1 space-y-1 overflow-y-auto p-4" aria-label="Main" {
                 (nav_links(&sections, active))
             }
         }
