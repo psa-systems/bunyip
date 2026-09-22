@@ -123,7 +123,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-teal-500" {
                         (icon("app-window", "h-4 w-4 text-white"))
                     }
-                    h2 class="text-xl font-semibold tracking-tight" { "Your Applications" }
+                    h2 class="text-3xl font-semibold tracking-tight" { "Your Applications" }
                 }
                 (dashboard_apps_grid(&apps, apps_reachable, &base_domain, is_member))
             }
@@ -504,7 +504,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             } @else {
                 @for (name, members) in &group_sections {
                     section class="space-y-3" {
-                        h2 class="text-xl font-semibold tracking-tight" { (name) }
+                        h2 class="text-3xl font-semibold tracking-tight" { (name) }
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                             @for &app in members { (app_card(app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
                         }
@@ -512,7 +512,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 }
                 @if !ungrouped.is_empty() {
                     section class="space-y-3" {
-                        @if has_groups { h2 class="text-xl font-semibold tracking-tight" { "Other" } }
+                        @if has_groups { h2 class="text-3xl font-semibold tracking-tight" { "Other" } }
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                             @for &app in &ungrouped { (app_card(app, &domain, is_member, download_groups.iter().find(|g| g.app_slug == app.slug))) }
                         }
@@ -520,7 +520,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                 }
                 @if !catalog_only.is_empty() {
                     section class="space-y-3" {
-                        h2 class="text-xl font-semibold tracking-tight" { "More downloads" }
+                        h2 class="text-3xl font-semibold tracking-tight" { "More downloads" }
                         div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3" {
                             @for &g in &catalog_only { (download_only_card(g, is_member)) }
                         }

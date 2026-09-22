@@ -345,7 +345,7 @@ fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
                         div class="flex items-start gap-3" {
                             (icon("check", "h-5 w-5 text-primary-text flex-shrink-0 mt-0.5"))
                             div {
-                                h3 class="font-semibold leading-none tracking-tight" { (name) }
+                                h3 class="text-2xl font-semibold leading-none tracking-tight" { (name) }
                                 p class="mt-2 text-sm text-muted-foreground" { (desc) }
                             }
                         }

@@ -73,6 +73,7 @@ fn integrations_card(integrations: &[IntegrationStatus], reachable: bool) -> Mar
 fn status_content(integrations: &[IntegrationStatus], reachable: bool) -> Markup {
     html! {
         div class="space-y-6" {
+            div { h1 class="text-3xl font-bold" { "System Status" } p class="mt-2 text-muted-foreground" { "Each optional integration and whether it is configured, off, or half-configured." } }
             (integrations_card(integrations, reachable))
         }
     }
