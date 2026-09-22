@@ -20,6 +20,7 @@ use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
+    toggle_switch_field,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -708,8 +709,8 @@ pub(super) fn stripe_catalog_section(
                 }
                 // BUNYIP-527: per-tier visibility. Hidden tiers are dropped from
                 // the public page even when mapped, under the global switch above.
-                label class="flex items-center gap-2 pt-1 text-sm font-medium" {
-                    input name=(visible_name) type="checkbox" value="true" checked[visible] class="h-4 w-4 rounded border-input";
+                div class="flex items-center gap-2 pt-1 text-sm font-medium" {
+                    (toggle_switch_field(visible_name, visible_name, visible, "Show this tier on the pricing page"))
                     "Show this tier on the pricing page"
                 }
             }
@@ -745,8 +746,8 @@ pub(super) fn stripe_catalog_section(
                             html! {
                                 div class="space-y-4" {
                                     (pricing_status_block(status))
-                                    label class="flex items-center gap-3 text-sm font-medium" {
-                                        input id="pricing_enabled" name="pricing_enabled" type="checkbox" value="true" checked[pricing_enabled] class="h-4 w-4 rounded border-input";
+                                    div class="flex items-center gap-3 text-sm font-medium" {
+                                        (toggle_switch_field("pricing_enabled", "pricing_enabled", pricing_enabled, "Show pricing on the public page"))
                                         "Show pricing on the public page"
                                     }
                                 }

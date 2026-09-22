@@ -1139,12 +1139,32 @@ mod two_column_layout_tests {
             .into_string();
         let off = super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable"), None)
             .into_string();
+        // Isolate the publish switch's own `<input>` tag: the surrounding markup
+        // carries static `peer-checked:` classes on every render, whatever the
+        // state, so a bare `contains("checked")` over the whole page would match
+        // those instead of the input's actual `checked` attribute.
+        let pricing_input = |html: &str| -> String {
+            let rest = html
+                .split_once(r#"id="pricing_enabled""#)
+                .expect("the publish switch renders")
+                .1;
+            rest.split_once('>')
+                .expect("the input closes")
+                .0
+                .to_string()
+        };
         assert!(
             on.contains(r#"name="pricing_enabled""#),
             "publish switch present in the catalog mapping"
         );
-        assert!(on.contains("checked"), "checked when the switch is on");
-        assert!(!off.contains("checked"), "unchecked when the switch is off");
+        assert!(
+            pricing_input(&on).contains("checked"),
+            "checked when the switch is on"
+        );
+        assert!(
+            !pricing_input(&off).contains("checked"),
+            "unchecked when the switch is off"
+        );
     }
 
     // BUNYIP-515 / BUNYIP-524: the catalog mapping says what /pricing is serving
@@ -1453,6 +1473,16 @@ mod stripe_admin_tests {
             member_count,
             ..price(id, product_id, Some(300), true)
         }
+    }
+
+    /// Counts literal `checked` HTML attributes, not the `peer-checked:` CSS
+    /// class name every `toggle_switch_field` renders regardless of state
+    /// (BUNYIP-819 F15): a bare substring count over the whole page would see
+    /// two extra false-positive hits per toggle, checked or not.
+    fn true_checked_count(html: &str) -> usize {
+        html.match_indices("checked")
+            .filter(|(i, _)| !html[..*i].ends_with('-'))
+            .count()
     }
 
     /// A generic 500 from bunyip-api: `user_message` collapses it (BUNYIP-477),
@@ -2031,7 +2061,7 @@ mod stripe_admin_tests {
             "the stored price is selected on a plain load"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             1,
             "exactly the one stored-visible tier is checked on a plain load"
         );
@@ -2067,7 +2097,7 @@ mod stripe_admin_tests {
             "the stored price is no longer selected"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             0,
             "the unticked box is not restored from the stored-visible row"
         );
@@ -2092,7 +2122,7 @@ mod stripe_admin_tests {
         )
         .into_string();
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             2,
             "the submitted ticked switch and box are restored, the stored-on box unticked"
         );
