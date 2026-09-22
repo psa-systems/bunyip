@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use maud::{html, Markup, PreEscaped, DOCTYPE};
 
-use crate::api::types::{Application, Branding, User, UserRole};
+use crate::api::types::{Branding, User, UserRole};
 use crate::config::Config;
 use crate::views::ui::{button_class, icon};
 
@@ -381,18 +381,12 @@ fn feedback_launcher() -> Markup {
 /// `_show_feedback` is the public-shell flag that gates whether the floating
 /// launcher is mounted; the header itself no longer renders any feedback
 /// affordance (the launcher lives below the page content, mounted by the
-/// shell). `_cfg` and `_apps` went the same way in BUNYIP-667: the header
-/// stopped rendering per-application links, so it reads neither the application
-/// list nor the app domain those links were built from. All three parameters
-/// are kept so `public_shell`'s call sites do not change (removing the list is
-/// BUNYIP-683); the underscore silences the unused-arg lint.
-fn header(
-    _cfg: &Config,
-    user: Option<&User>,
-    _apps: &[Application],
-    pricing: bool,
-    _show_feedback: bool,
-) -> Markup {
+/// shell). `_cfg` went the same way in BUNYIP-667: the header stopped
+/// rendering per-application links, so it no longer reads the app domain
+/// those links were built from. The application-list argument that used
+/// to ride here as `_apps` is gone entirely (BUNYIP-683): the list feeds
+/// only the landing page now.
+fn header(_cfg: &Config, user: Option<&User>, pricing: bool, _show_feedback: bool) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
         header class="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60" {
@@ -510,14 +504,13 @@ fn footer(cfg: &Config, user: Option<&User>, pricing: bool) -> Markup {
 pub fn public_shell(
     cfg: &Config,
     user: Option<&User>,
-    apps: &[Application],
     pricing: bool,
     show_feedback: bool,
     content: Markup,
 ) -> Markup {
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(cfg, user, apps, pricing, show_feedback))
+            (header(cfg, user, pricing, show_feedback))
             main class="flex-1" { (content) }
             (footer(cfg, user, pricing))
             @if show_feedback { (feedback_launcher()) }
@@ -1514,14 +1507,14 @@ mod tests {
     #[test]
     fn pricing_links_track_whether_the_page_exists() {
         let cfg = Config::from_env();
-        let shown = public_shell(&cfg, None, &[], true, false, html! {}).into_string();
+        let shown = public_shell(&cfg, None, true, false, html! {}).into_string();
         assert_eq!(
             shown.matches(r#"href="/pricing""#).count(),
             2,
             "nav link + footer link when the page is published"
         );
 
-        let hidden = public_shell(&cfg, None, &[], false, false, html! {}).into_string();
+        let hidden = public_shell(&cfg, None, false, false, html! {}).into_string();
         assert!(
             !hidden.contains("/pricing"),
             "no rendered page links to a 404 pricing route"
@@ -1541,12 +1534,14 @@ mod tests {
     ///
     /// Every one of those links is a PLAIN `/docs` link built from nothing
     /// fetched, which is the AC that the chrome degrades when the documented-
-    /// application list cannot be loaded: with the public shell handed an empty
-    /// application list and no pricing, the entry still renders and still works.
+    /// application list cannot be loaded: with the public shell handed no
+    /// pricing, the entry still renders and still works. BUNYIP-683 removed
+    /// the application list from the shell entirely, so nothing to hand in
+    /// there any more either.
     #[test]
     fn documentation_is_reachable_from_every_chrome_surface() {
         let cfg = Config::from_env();
-        let degraded = public_shell(&cfg, None, &[], false, false, html! {}).into_string();
+        let degraded = public_shell(&cfg, None, false, false, html! {}).into_string();
         assert_eq!(
             degraded.matches(r#"href="/docs""#).count(),
             2,
@@ -1665,28 +1660,10 @@ mod tests {
         }
     }
 
-    fn test_app(slug: &str, subdomain: Option<&str>, display_name: &str) -> Application {
-        Application {
-            id: slug.into(),
-            slug: slug.into(),
-            display_name: display_name.into(),
-            description: None,
-            icon_url: None,
-            version: None,
-            source_code_url: None,
-            release_notes_url: None,
-            subdomain: subdomain.map(str::to_string),
-            // The cached public list is fetched anonymously, so these two are
-            // NOT this visitor's: the chrome must not read either of them.
-            is_accessible: false,
-            maintenance_mode: true,
-            maintenance_message: None,
-            group_id: None,
-        }
-    }
-
     /// BUNYIP-667 (header) and BUNYIP-682 (footer): the public chrome carries ONE
     /// `Applications` link per half, signed-in only, never an entry per app.
+    /// the shell is not handed the application list any more, so
+    /// there is nothing to render an entry from even if the code tried to.
     /// BUNYIP-638's one-click launch still lives on the dashboard.
     #[test]
     fn the_public_chrome_carries_one_applications_link_not_one_per_app() {
@@ -1694,52 +1671,43 @@ mod tests {
             app_domain: "a8n.systems".into(),
             ..Config::from_env()
         };
-        let apps = [
-            test_app("lets-chat", Some("chat"), "Chat"),
-            test_app("atlas", None, "Atlas"),
-        ];
         let user = test_user(UserRole::Subscriber);
 
-        let signed_in =
-            public_shell(&cfg, Some(&user), &apps, false, false, html! {}).into_string();
-        // An empty list must render the same entries: a per-app list cannot.
-        let empty = public_shell(&cfg, Some(&user), &[], false, false, html! {}).into_string();
-        for page in [&signed_in, &empty] {
-            let (head, foot) = page
-                .split_once("<footer")
-                .expect("the public shell renders a footer");
-            for (half, markup) in [("header", head), ("footer", foot)] {
-                assert_eq!(
-                    markup.matches(r#"href="/applications""#).count(),
-                    1,
-                    "exactly one Applications entry in the {half}"
-                );
-                assert!(markup.contains(">Applications<"), "labelled in the {half}");
-                for name in ["Chat", "Atlas"] {
-                    assert!(
-                        !markup.contains(&format!(">{name}<")),
-                        "no application display name reaches the {half}: {name}"
-                    );
-                }
-                for host in ["chat", "atlas"] {
-                    assert!(
-                        !markup.contains(&format!("https://{host}.a8n.systems")),
-                        "no per-application link in the {half}: {host}"
-                    );
-                }
+        let signed_in = public_shell(&cfg, Some(&user), false, false, html! {}).into_string();
+        let (head, foot) = signed_in
+            .split_once("<footer")
+            .expect("the public shell renders a footer");
+        for (half, markup) in [("header", head), ("footer", foot)] {
+            assert_eq!(
+                markup.matches(r#"href="/applications""#).count(),
+                1,
+                "exactly one Applications entry in the {half}"
+            );
+            assert!(markup.contains(">Applications<"), "labelled in the {half}");
+            for name in ["Chat", "Atlas"] {
                 assert!(
-                    markup
-                        .find("/docs")
-                        .expect("the chrome carries Documentation")
-                        < markup
-                            .find(r#"href="/applications""#)
-                            .expect("and Applications"),
-                    "Applications follows the site links in the {half}"
+                    !markup.contains(&format!(">{name}<")),
+                    "no application display name reaches the {half}: {name}"
                 );
             }
+            for host in ["chat", "atlas"] {
+                assert!(
+                    !markup.contains(&format!("https://{host}.a8n.systems")),
+                    "no per-application link in the {half}: {host}"
+                );
+            }
+            assert!(
+                markup
+                    .find("/docs")
+                    .expect("the chrome carries Documentation")
+                    < markup
+                        .find(r#"href="/applications""#)
+                        .expect("and Applications"),
+                "Applications follows the site links in the {half}"
+            );
         }
 
-        let anon = public_shell(&cfg, None, &apps, false, false, html! {}).into_string();
+        let anon = public_shell(&cfg, None, false, false, html! {}).into_string();
         assert!(
             !anon.contains(r#"href="/applications""#),
             "an anonymous visitor gets no Applications entry in header or footer"
