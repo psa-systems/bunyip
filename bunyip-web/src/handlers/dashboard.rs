@@ -2280,7 +2280,11 @@ fn recovery_codes_panel(
     let filename_stem = {
         let raw = crate::views::layout::brand_name();
         let trimmed = raw.trim();
-        let base = if trimmed.is_empty() { "platform" } else { trimmed };
+        let base = if trimmed.is_empty() {
+            "platform"
+        } else {
+            trimmed
+        };
         let mut out = String::with_capacity(base.len());
         let mut hyphen = false;
         for ch in base.chars() {
@@ -2296,7 +2300,11 @@ fn recovery_codes_panel(
                 hyphen = true;
             }
         }
-        if out.is_empty() { "platform".to_string() } else { out }
+        if out.is_empty() {
+            "platform".to_string()
+        } else {
+            out
+        }
     };
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     let filename = format!("{filename_stem}-recovery-codes-{today}.txt");
@@ -3586,7 +3594,10 @@ mod recovery_codes_panel_tests {
         )
         .into_string();
         // Both buttons present.
-        assert!(html.contains("data-copy=\""), "the Copy button is present: {html}");
+        assert!(
+            html.contains("data-copy=\""),
+            "the Copy button is present: {html}"
+        );
         assert!(
             html.contains("data-download-file=\""),
             "the Download button is present: {html}"
@@ -3594,7 +3605,10 @@ mod recovery_codes_panel_tests {
         // Same plaintext on both (one code per line, trailing newline).
         let joined = codes.join("\n") + "\n";
         for c in &codes {
-            assert!(html.contains(c.as_str()), "the {c} code is displayed on screen");
+            assert!(
+                html.contains(c.as_str()),
+                "the {c} code is displayed on screen"
+            );
         }
         // The buttons' payload matches the codes shown on screen.
         assert!(
