@@ -146,10 +146,10 @@ async fn render_feedback_list(
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
 
     let (section_title, empty_msg) = match tab {
-        FeedbackTab::Active => ("Submissions", "No feedback yet"),
-        FeedbackTab::Closed => ("Closed", "No closed feedback"),
-        FeedbackTab::Spam => ("Spam", "No spam"),
-        FeedbackTab::Archive => ("Archive", "Archive is empty"),
+        FeedbackTab::Active => ("Submissions", "No feedback yet."),
+        FeedbackTab::Closed => ("Closed", "No closed feedback."),
+        FeedbackTab::Spam => ("Spam", "No spam."),
+        FeedbackTab::Archive => ("Archive", "Archive is empty."),
     };
 
     let content = html! {
@@ -839,7 +839,7 @@ pub async fn feedback_archive(
                                 }
                             }
                         }
-                        @if items.is_empty() { (empty_state("message-square-quote", "Archive is empty", None)) }
+                        @if items.is_empty() { (empty_state("message-square-quote", "Archive is empty.", None)) }
                     }
                     (pager("/admin/feedback/archive", "page", page, total_pages))
                     }

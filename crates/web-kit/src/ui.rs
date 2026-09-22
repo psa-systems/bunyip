@@ -307,6 +307,27 @@ pub fn toggle_switch(on: bool, label: &str) -> Markup {
     }
 }
 
+/// A checkbox-backed toggle switch for a boolean field inside a larger,
+/// explicitly-submitted form (BUNYIP-819 F15). Same visual language and
+/// `role="switch"` / `aria-label` semantics as [`toggle_switch`], but is a
+/// real `<input type="checkbox">` (visually hidden via `peer sr-only`) so it
+/// submits alongside the form's other fields instead of self-submitting:
+/// unchecked, the field is simply absent from the POST body, exactly like a
+/// hand-rolled checkbox. `label` and the sibling track/knob spans carry the
+/// state visually and for assistive tech since there is no visible text.
+pub fn toggle_switch_field(id: &str, name: &str, checked: bool, label: &str) -> Markup {
+    html! {
+        span class="relative inline-flex h-6 w-11 shrink-0 items-center" {
+            input type="checkbox" id=(id) name=(name) value="true" checked[checked]
+                role="switch" aria-label=(label) class="peer sr-only";
+            label for=(id)
+                class="absolute inset-0 cursor-pointer rounded-full bg-muted-foreground/40 transition-colors peer-checked:bg-primary peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2" {}
+            span aria-hidden="true"
+                class="pointer-events-none absolute left-0.5 top-0.5 inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform peer-checked:translate-x-[22px]" {}
+        }
+    }
+}
+
 /// Cap a banner message before it is rendered. The value is already
 /// Maud-escaped (so this is not an XSS guard); it bounds a hand-crafted
 /// `?ok=` / `?error=` link that stuffs the param with kilobytes of text to blow
@@ -387,7 +408,9 @@ pub fn empty_state(icon_name: &str, message: &str, cta: Option<Markup>) -> Marku
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_msg, empty_state, error_box, icon, success_box, toggle_switch};
+    use super::{
+        clamp_msg, empty_state, error_box, icon, success_box, toggle_switch, toggle_switch_field,
+    };
 
     /// BUNYIP-420: the toggle switch reflects state via color + knob position
     /// and carries the right ARIA, so it reads as an on/off control (not text).
@@ -413,6 +436,43 @@ mod tests {
             "off state is not primary-colored"
         );
         assert!(off.contains("translate-x-0.5"), "off keeps the knob left");
+    }
+
+    /// BUNYIP-819 F15: the in-form variant is a real checkbox (submits with
+    /// the rest of the form) rather than a self-submitting button, but keeps
+    /// the same switch semantics and visual language.
+    #[test]
+    fn toggle_switch_field_is_a_checkbox_with_switch_semantics() {
+        let on = toggle_switch_field(
+            "orgs_enabled",
+            "orgs_enabled",
+            true,
+            "Enable organizations and teams",
+        )
+        .into_string();
+        assert!(on.contains(r#"type="checkbox""#));
+        assert!(on.contains(r#"role="switch""#));
+        assert!(on.contains(r#"aria-label="Enable organizations and teams""#));
+        assert!(on.contains(r#"name="orgs_enabled""#));
+        assert!(on.contains("checked"));
+        assert!(on.contains("peer-checked:bg-primary"));
+        assert!(on.contains("peer-checked:translate-x-[22px]"));
+
+        let off = toggle_switch_field(
+            "orgs_enabled",
+            "orgs_enabled",
+            false,
+            "Enable organizations and teams",
+        )
+        .into_string();
+        let input = off
+            .split_once("<input")
+            .expect("the checkbox renders")
+            .1
+            .split_once('>')
+            .expect("the input tag closes")
+            .0;
+        assert!(!input.contains("checked"), "unchecked when off: {input}");
     }
 
     /// BUNYIP-404: the reorder arrows must resolve to a real glyph, not the
