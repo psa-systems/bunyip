@@ -1667,7 +1667,7 @@ mod tests {
 
     /// BUNYIP-667 (header) and BUNYIP-682 (footer): the public chrome carries ONE
     /// `Applications` link per half, signed-in only, never an entry per app.
-    /// BUNYIP-683: the shell is not handed the application list any more, so
+    /// the shell is not handed the application list any more, so
     /// there is nothing to render an entry from even if the code tried to.
     /// BUNYIP-638's one-click launch still lives on the dashboard.
     #[test]

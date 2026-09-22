@@ -165,7 +165,7 @@ fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup
 }
 
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    // BUNYIP-683: the application list feeds only the landing cards now, so
+    // the application list feeds only the landing cards now, so
     // it is fetched here rather than in `public_ctx` (which every public
     // render paid for). `join!` keeps the miss cost the slower of the two,
     // not their sum.

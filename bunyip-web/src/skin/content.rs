@@ -1273,7 +1273,7 @@ pub async fn app_docs_index(
 ) -> Response {
     // BUNYIP-635: the section menu rides along, so the reader can move between
     // documentation sections without going back to the hub first.
-    // BUNYIP-683: the public application list is not in `public_ctx` any
+    // the public application list is not in `public_ctx` any
     // more, but this page still needs it as the fallback for
     // `app_display_name` (an app with a hosted slug but no documentation
     // entry). Ride it beside the two `public_ctx` fetches so the miss
@@ -1337,7 +1337,7 @@ pub async fn app_docs_page(
     headers: HeaderMap,
     Path((slug, doc_slug)): Path<(String, String)>,
 ) -> Response {
-    // BUNYIP-683: same rationale as `app_docs_index` - keep the fallback
+    // same rationale as `app_docs_index` - keep the fallback
     // for `app_display_name` by fetching the public applications list
     // beside the two `public_ctx` fetches.
     let ((c, pricing), apps, documented) = tokio::join!(

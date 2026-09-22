@@ -240,7 +240,7 @@ mod chrome_fetch_guards {
     #[test]
     fn post_guard_fetches_run_concurrently() {
         const FANOUT: &[(&str, &str, &str)] = &[
-            // BUNYIP-683: `public_ctx` used to be a two-fetch fan-out
+            // `public_ctx` used to be a two-fetch fan-out
             // (pricing + applications). The application list moved onto
             // the landing handler alone, so `public_ctx` now serves a
             // single upstream call and no `tokio::join!` is required.
