@@ -79,7 +79,20 @@ fn reorder_script() -> Markup {
     html! { script src=(crate::views::layout::asset("/assets/js/app-reorder.js")) defer {} }
 }
 
-pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
+/// Query params on the applications list. `error` is set when a field toggle
+/// (archive/unarchive, maintenance mode) bounces back (BUNYIP-812: matches the
+/// server-rendered `?error=` shape used everywhere else in this file, so a
+/// failure reports the same way with or without JavaScript).
+#[derive(Deserialize)]
+pub struct ApplicationsQuery {
+    pub error: Option<String>,
+}
+
+pub async fn applications(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ApplicationsQuery>,
+) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -90,6 +103,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 
     let content = html! {
         div class="space-y-6" {
+            @if let Some(e) = &q.error { (error_box(e)) }
             div class="flex items-center justify-between gap-4" {
                 div { h1 class="text-3xl font-bold" { "Applications" } p class="mt-2 text-muted-foreground" { "Configure available applications." } }
                 a href="/admin/applications/new" class=(button_class("default", "default", "")) { "New application" }
@@ -143,7 +157,7 @@ pub async fn application_field(
         Err(e) => {
             tracing::warn!(app_id = %id, field = %f.field, error = ?e, "admin update application failed");
             format!(
-                "/admin/applications?toast_err={}",
+                "/admin/applications?error={}",
                 urlenc("Could not update application")
             )
         }
@@ -987,11 +1001,21 @@ fn doc_fields(prefix: &str, d: Option<&AppDoc>) -> Markup {
     }
 }
 
+/// Query params on the docs manager. `error` is set when a page create /
+/// update / delete bounces back (BUNYIP-812: the server-rendered `?error=`
+/// shape used everywhere else in this file, so a failure reports the same way
+/// with or without JavaScript).
+#[derive(Deserialize)]
+pub struct AppDocsQuery {
+    pub error: Option<String>,
+}
+
 /// GET /admin/applications/{id}/docs - manage an app's documentation pages.
 pub async fn application_docs(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(q): Query<AppDocsQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -1032,6 +1056,7 @@ pub async fn application_docs(
                 h1 class="text-3xl font-bold" { "Documentation: " (app_name) }
                 p class="mt-2 text-muted-foreground" { "Public pages, rendered as markdown (raw HTML is stripped). Lower sort order shows first." }
             }
+            @if let Some(e) = &q.error { (error_box(e)) }
             div class="space-y-6" {
                 @if !docs_reachable {
                     (error_box("Could not reach the API to load documentation pages."))
@@ -1095,7 +1120,7 @@ pub async fn application_doc_create(
         Err(e) => {
             tracing::warn!(app_id = %id, slug = %f.slug, error = ?e, "admin create app doc failed");
             format!(
-                "/admin/applications/{id}/docs?toast_err={}",
+                "/admin/applications/{id}/docs?error={}",
                 urlenc("Could not create documentation page")
             )
         }
@@ -1130,7 +1155,7 @@ pub async fn application_doc_update(
         Err(e) => {
             tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin update app doc failed");
             format!(
-                "/admin/applications/{id}/docs?toast_err={}",
+                "/admin/applications/{id}/docs?error={}",
                 urlenc("Could not update documentation page")
             )
         }
@@ -1153,7 +1178,7 @@ pub async fn application_doc_delete(
         Err(e) => {
             tracing::warn!(app_id = %id, doc_id = %doc_id, error = ?e, "admin delete app doc failed");
             format!(
-                "/admin/applications/{id}/docs?toast_err={}",
+                "/admin/applications/{id}/docs?error={}",
                 urlenc("Could not delete documentation page")
             )
         }
@@ -1190,6 +1215,26 @@ mod tests {
         ] {
             assert!(html.contains(marker), "danger zone lost {marker}: {html}");
         }
+    }
+
+    /// BUNYIP-812: every action in this file reports failure through the
+    /// server-rendered `?error=` channel, the one that still renders with
+    /// JavaScript disabled (`error_box` in `applications`/`application_docs`),
+    /// never the client-drained toast overlay - so an archive/create/edit
+    /// failure on the same page always reports the same way.
+    #[test]
+    fn this_file_reports_every_failure_through_the_server_rendered_channel() {
+        let src = include_str!("applications.rs");
+        let markup = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields a head");
+        let needle = concat!("toast", "_err");
+        let other_needle = concat!("toast", "_ok");
+        assert!(
+            !markup.contains(needle) && !markup.contains(other_needle),
+            "applications.rs must not redirect through the client-only toast channel"
+        );
     }
 
     fn doc(id: &str) -> AppDoc {
