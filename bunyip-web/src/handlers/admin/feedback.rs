@@ -90,10 +90,10 @@ fn feedback_tabs(current: FeedbackTab) -> Markup {
     };
     html! {
         nav class="flex items-center gap-2 border-b border-border/50" aria-label="Feedback view" {
-            a href="/admin/feedback" class=(tab_class(current == FeedbackTab::Active)) { "Active" }
-            a href="/admin/feedback/closed" class=(tab_class(current == FeedbackTab::Closed)) { "Closed" }
-            a href="/admin/feedback/spam" class=(tab_class(current == FeedbackTab::Spam)) { "Spam" }
-            a href="/admin/feedback/archive" class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
+            a href="/admin/feedback" aria-current=[(current == FeedbackTab::Active).then_some("page")] class=(tab_class(current == FeedbackTab::Active)) { "Active" }
+            a href="/admin/feedback/closed" aria-current=[(current == FeedbackTab::Closed).then_some("page")] class=(tab_class(current == FeedbackTab::Closed)) { "Closed" }
+            a href="/admin/feedback/spam" aria-current=[(current == FeedbackTab::Spam).then_some("page")] class=(tab_class(current == FeedbackTab::Spam)) { "Spam" }
+            a href="/admin/feedback/archive" aria-current=[(current == FeedbackTab::Archive).then_some("page")] class=(tab_class(current == FeedbackTab::Archive)) { "Archive" }
         }
     }
 }
@@ -573,7 +573,7 @@ pub async fn feedback_detail(
         Ok(d) => d,
         Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
     };
-    let content = feedback_detail_view(&detail, tab);
+    let content = feedback_detail_view(&detail, tab, None, None);
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
@@ -585,7 +585,17 @@ pub struct FeedbackDetailQuery {
     pub from: Option<String>,
 }
 
-pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) -> Markup {
+/// Renders the feedback detail page. `response_value` overrides the
+/// textarea's pre-fill with a just-submitted (and possibly rejected) draft;
+/// `None` falls back to the persisted `admin_response` (the plain GET case).
+/// `error` renders inline inside the response form when a submit was
+/// rejected (BUNYIP-810).
+pub(super) fn feedback_detail_view(
+    f: &AdminFeedbackDetail,
+    tab: FeedbackTab,
+    response_value: Option<&str>,
+    error: Option<&str>,
+) -> Markup {
     // BUNYIP-94: render the masked email, never the raw one. Admins do
     // not need the raw address to reply (the API holds it and routes the
     // response server-side); leaking the raw address on the detail page
@@ -705,16 +715,21 @@ pub(super) fn feedback_detail_view(f: &AdminFeedbackDetail, tab: FeedbackTab) ->
                     // either way. On success the POST bounces back to this
                     // same detail page with a `?toast_ok=` confirmation.
                     @let existing_response = f.admin_response.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                    // BUNYIP-810: a rejected or failed submit re-renders this
+                    // page with the admin's just-typed text, not the stored
+                    // value or an empty field.
+                    @let display_response = response_value.or(existing_response);
                     @if existing_response.is_some() {
                         @if let Some(at) = &f.responded_at {
                             p class="text-xs text-muted-foreground" { "Sent " (rel_time(at)) }
                         }
                     }
                     form method="post" action=(format!("/admin/feedback/{}/respond", f.id)) class="space-y-3" {
+                        @if let Some(err) = error { (error_box(err)) }
                         div class="grid gap-2" {
                             label for="response" class="text-sm font-medium" { "Reply to the submitter" }
                             textarea id="response" name="response" rows="6" required placeholder="Type a response. The submitter will receive this verbatim by email." class={ (dashboard_input()) " min-h-[120px]" } {
-                                @if let Some(resp) = existing_response { (resp) }
+                                @if let Some(resp) = display_response { (resp) }
                             }
                         }
                         div class="flex justify-end" {
@@ -749,32 +764,45 @@ pub async fn feedback_respond(
         return refusal;
     }
     let response = body.response.trim();
-    if response.is_empty() {
-        // Empty body: short-circuit and reload the detail page; the user
-        // can re-type. No toast - they will see the empty textarea and
-        // figure it out.
-        return redirect_cookies(&format!("/admin/feedback/{id}"), &c.set_cookies);
-    }
     // BUNYIP-117: bound the admin response at the web edge. The body is
     // emailed verbatim and stored in feedback_responses (TEXT); 16k chars
     // is generous for a support reply while still rejecting a runaway
     // paste. Authoritative validation happens in
     // `services::feedback::respond` once the API tightens its own bound.
     const RESPONSE_MAX: usize = 16_000;
-    if response.len() > RESPONSE_MAX {
+    // BUNYIP-810: every rejection path (empty, over-length, failed send)
+    // re-renders this same detail page with the submitted text still in the
+    // textarea, instead of redirecting to a fresh GET that would drop it.
+    let error = if response.is_empty() {
+        // Still known-empty after trim - short-circuit before calling the
+        // API - but render like the other two paths rather than a silent
+        // redirect, so the empty state is not special-cased.
+        Some("Response cannot be empty".to_string())
+    } else if response.len() > RESPONSE_MAX {
+        Some(format!(
+            "Response must be {RESPONSE_MAX} characters or fewer"
+        ))
+    } else {
+        match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
+            Ok(()) => None,
+            Err(_) => Some("Could not send response".to_string()),
+        }
+    };
+
+    let Some(error) = error else {
         return redirect_cookies(
-            &format!(
-                "/admin/feedback/{id}?toast_err=Response%20must%20be%20{RESPONSE_MAX}%20characters%20or%20fewer"
-            ),
+            &format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
             &c.set_cookies,
         );
-    }
-    let target =
-        match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
-            Ok(()) => format!("/admin/feedback/{id}?toast_ok=Response%20sent"),
-            Err(_) => format!("/admin/feedback/{id}?toast_err=Could%20not%20send%20response"),
-        };
-    redirect_cookies(&target, &c.set_cookies)
+    };
+
+    let tab = FeedbackTab::Active;
+    let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
+        Ok(d) => d,
+        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
+    };
+    let content = feedback_detail_view(&detail, tab, Some(response), Some(&error));
+    admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
 /// GET /admin/feedback/archive

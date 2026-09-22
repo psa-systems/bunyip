@@ -14,6 +14,15 @@
 //! to keep the typed characters through a failure the browser can evaluate
 //! itself is to not make the round trip. `handlers::password_ok` stays the
 //! backstop: with JS off the form posts exactly as it did before.
+//!
+//! `data-pw-guard` is a deliberately lighter, accepted SECOND tier of the
+//! app's a11y-error idioms, not an ad hoc pattern awaiting a fix (BUNYIP-813):
+//! one `role="alert"` message node with a submit-cancel guard, no per-field
+//! `aria-invalid`/`aria-describedby` wiring. It fits a form with a single
+//! guard condition (a password re-entry), where there is no per-field state
+//! to track. `views::form_errors` (BUNYIP-541/813) is the fuller tier for a
+//! form with more than one independently required field, as the feedback
+//! form has; the two are meant to coexist rather than converge.
 
 use maud::{html, Markup};
 

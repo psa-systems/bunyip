@@ -304,7 +304,7 @@ pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, Au
 /// email, and points at the resend control that clears it. The reason must be
 /// unmistakable, per the acceptance criteria.
 pub const VERIFICATION_REQUIRED_MESSAGE: &str =
-    "Verify your email before performing this action. Use the resend link on your dashboard.";
+    "Verify your email before performing this action. Use the resend link on your settings page.";
 
 /// BUNYIP-619: a principal is verification-complete once their name is present
 /// AND their email is verified. This is the property a privileged action
