@@ -387,7 +387,7 @@ fn feedback_launcher() -> Markup {
 /// to ride here as `_apps` is gone entirely (BUNYIP-683): the list feeds
 /// only the landing page now.
 ///
-/// BUNYIP-685: the Applications link is gated on `app_links_allowed` rather
+/// the Applications link is gated on `app_links_allowed` rather
 /// than `user.is_some()`, so an unverified user does not see a link that
 /// would immediately redirect them to `/onboarding`.
 fn header(
@@ -427,7 +427,7 @@ fn header(
                         // launch itself is unchanged on the dashboard, which is
                         // where `app_launch_link` and its `/dashboard` SSO deep
                         // link still live. Same-origin, so no `target="_blank"`.
-                        // BUNYIP-685: rendered only when the destination's
+                        // rendered only when the destination's
                         // gate would let the user through, so the link never
                         // dead-ends at /onboarding for an unverified visitor.
                         @if app_links_allowed {
@@ -480,7 +480,7 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
                             // BUNYIP-682: one signed-in link, like the header
                             // (BUNYIP-667), never an entry per application.
-                            // BUNYIP-685: same gate as the header - the link
+                            // same gate as the header - the link
                             // is not shown to a user the destination would
                             // redirect to /onboarding.
                             @if app_links_allowed {
@@ -1524,7 +1524,7 @@ mod tests {
     #[test]
     fn pricing_links_track_whether_the_page_exists() {
         let cfg = Config::from_env();
-        // BUNYIP-685: app_links_allowed is a separate axis from pricing,
+        // app_links_allowed is a separate axis from pricing,
         // so this test pins it to false throughout (an anonymous visitor,
         // which is the shape it exercises).
         let shown = public_shell(&cfg, None, true, false, false, html! {}).into_string();
@@ -1693,7 +1693,7 @@ mod tests {
         };
         let user = test_user(UserRole::Subscriber);
 
-        // BUNYIP-685: `app_links_allowed = true` is the shape this test
+        // `app_links_allowed = true` is the shape this test
         // covers (a signed-in visitor the destination would let through).
         // The false shape is exercised by
         // `an_unverified_user_sees_no_application_link_in_any_chrome_surface`.
@@ -1732,7 +1732,7 @@ mod tests {
             );
         }
 
-        // BUNYIP-685: an anonymous visitor is `app_links_allowed = false`;
+        // an anonymous visitor is `app_links_allowed = false`;
         // the chrome hides the Applications entry regardless of the bool.
         let anon = public_shell(&cfg, None, false, false, false, html! {}).into_string();
         assert!(
@@ -1751,7 +1751,7 @@ mod tests {
         }
     }
 
-    /// BUNYIP-685: a user the destination would redirect to `/onboarding`
+    /// a user the destination would redirect to `/onboarding`
     /// (`app_links_allowed = false`) sees no Applications entry in the
     /// header or footer, so no rendered link dead-ends in the redirect.
     /// The verified counterpart is

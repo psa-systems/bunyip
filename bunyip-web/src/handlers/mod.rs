@@ -77,7 +77,7 @@ pub async fn public_ctx(
 ) -> (AuthCtx, Arc<PricingResponse>, bool) {
     let (c, _fwd) = ctx(st, headers).await;
     let pricing = st.pricing().await;
-    // BUNYIP-685: resolve once per render so every chrome surface that could
+    // resolve once per render so every chrome surface that could
     // render an application link (header, footer, landing app section) reads
     // the same decision as the destination's own verification gate. Kept
     // beside `pricing` rather than joined here: `needs_onboarding` may
@@ -87,7 +87,7 @@ pub async fn public_ctx(
     (c, pricing, app_links_allowed)
 }
 
-/// BUNYIP-685: whether the visitor should be shown any application link.
+/// whether the visitor should be shown any application link.
 ///
 /// An anonymous visitor sees none, and a signed-in visitor sees them only when
 /// the destination's own verification gate would let them through. That gate
