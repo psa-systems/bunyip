@@ -1385,7 +1385,7 @@ mod tests {
         );
     }
 
-    /// BUNYIP-808: every `/assets/<file>` referenced from `src/*.rs` has to
+    /// every `/assets/<file>` referenced from `src/*.rs` has to
     /// exist under `bunyip-web/assets/`. Before this the mascot could go
     /// missing on the homepage silently: a rename or a removed asset
     /// compiled fine, tests referencing the string still passed (the
