@@ -308,7 +308,7 @@ impl FromRequest for AdminUser {
 /// `bunyip-api/src/handlers/admin.rs`, since the two binaries share no crate a
 /// Rust constant could live in.
 pub const VERIFICATION_REQUIRED_MESSAGE: &str =
-    "Verify your email before performing this action. Use the resend link on your dashboard.";
+    "Verify your email before performing this action. Use the resend link on your settings page.";
 
 /// BUNYIP-732: a principal is verification-complete once their name is present
 /// AND their email is verified. Mirrors bunyip-web's `is_verified`
