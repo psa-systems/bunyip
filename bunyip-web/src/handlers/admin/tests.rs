@@ -813,6 +813,44 @@ mod two_column_layout_tests {
         assert!(html_none.contains(r#"placeholder="Not set""#));
     }
 
+    /// BUNYIP-811: `smtp_password` and `imap_password` are hand-rolled
+    /// `type=password` inputs bound to a per-field `_editable` flag. In the
+    /// default `database` secrets-storage mode they ARE editable, so they must
+    /// get the same reveal toggle as every other typed password; when a
+    /// deployment declares them read-only (e.g. `SECRETS_STORAGE=environment`)
+    /// no toggle should render, since it would be inert.
+    #[test]
+    fn smtp_and_imap_password_reveal_toggle_tracks_the_editable_flag() {
+        let mut cfg = email_cfg();
+        cfg.smtp_password_editable = true;
+        cfg.imap_password_editable = true;
+        let values = EmailSettingsValues::from_config(&cfg);
+        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        assert!(
+            html.contains(r#"data-pw-toggle="smtp_password""#),
+            "editable SMTP password gets a reveal toggle: {html}"
+        );
+        assert!(
+            html.contains(r#"data-pw-toggle="imap_password""#),
+            "editable IMAP password gets a reveal toggle: {html}"
+        );
+
+        let mut readonly_cfg = email_cfg();
+        readonly_cfg.smtp_password_editable = false;
+        readonly_cfg.imap_password_editable = false;
+        let readonly_values = EmailSettingsValues::from_config(&readonly_cfg);
+        let readonly_html =
+            email_settings_content(Some(&readonly_cfg), &readonly_values, None).into_string();
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="smtp_password""#),
+            "a genuinely read-only SMTP password renders no toggle: {readonly_html}"
+        );
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="imap_password""#),
+            "a genuinely read-only IMAP password renders no toggle: {readonly_html}"
+        );
+    }
+
     #[test]
     fn email_screen_uses_two_column_blocks() {
         let cfg = email_cfg();
@@ -1435,8 +1473,11 @@ mod stripe_admin_tests {
     // integration tests (this port calls those existing endpoints); here we
     // cover the rendering + the dollars->cents parsing, including the $0.00
     // lifetime-price case that must render as a real price, not "--".
-    use super::{parse_price_cents, stripe_prices_block, stripe_products_block, WebhookRetry};
-    use crate::api::types::{StripePrice, StripeProduct};
+    use super::{
+        parse_price_cents, stripe_prices_block, stripe_products_block, stripe_secret_fields,
+        WebhookRetry,
+    };
+    use crate::api::types::{StripeConfigResponse, StripePrice, StripeProduct};
     use crate::api::ApiError;
     use crate::util::format_stripe_amount;
 
@@ -1509,6 +1550,51 @@ mod stripe_admin_tests {
             retry_after: None,
             request_id: Some("req_perm001".into()),
         }
+    }
+
+    fn stripe_cfg(secrets_editable: bool) -> StripeConfigResponse {
+        StripeConfigResponse {
+            secret_key_masked: Some("sk_live_…".into()),
+            webhook_secret_masked: Some("whsec_…".into()),
+            has_secret_key: true,
+            has_webhook_secret: true,
+            app_tag: "bunyip".into(),
+            success_url: String::new(),
+            cancel_url: String::new(),
+            trial_period_days: 0,
+            updated_at: None,
+            source: "database".into(),
+            secrets_storage: "database".into(),
+            secrets_editable,
+        }
+    }
+
+    /// BUNYIP-811: `secret_key` and `webhook_secret` are hand-rolled
+    /// `type=password` inputs bound to `secrets_editable`, which defaults to
+    /// `true` in the default `database` secrets-storage mode. Editable gets the
+    /// same reveal toggle as every other typed password; a genuinely read-only
+    /// deployment (e.g. `SECRETS_STORAGE=environment`) renders no toggle.
+    #[test]
+    fn secret_key_and_webhook_secret_reveal_toggle_tracks_the_editable_flag() {
+        let editable_html = stripe_secret_fields(&stripe_cfg(true)).into_string();
+        assert!(
+            editable_html.contains(r#"data-pw-toggle="secret_key""#),
+            "editable secret key gets a reveal toggle: {editable_html}"
+        );
+        assert!(
+            editable_html.contains(r#"data-pw-toggle="webhook_secret""#),
+            "editable webhook secret gets a reveal toggle: {editable_html}"
+        );
+
+        let readonly_html = stripe_secret_fields(&stripe_cfg(false)).into_string();
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="secret_key""#),
+            "a genuinely read-only secret key renders no toggle: {readonly_html}"
+        );
+        assert!(
+            !readonly_html.contains(r#"data-pw-toggle="webhook_secret""#),
+            "a genuinely read-only webhook secret renders no toggle: {readonly_html}"
+        );
     }
 
     #[test]

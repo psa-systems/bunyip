@@ -18,6 +18,7 @@ use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
+use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
     toggle_switch_field,
@@ -954,6 +955,42 @@ pub(super) fn stripe_permission_block(
     }
 }
 
+/// BUNYIP-542: both secrets live in the store `SECRETS_STORAGE` declares.
+/// `environment` has no writable store, so the fields render read-only and
+/// name the file to edit rather than accepting a value that would land
+/// nowhere. BUNYIP-811: while editable, they get the same reveal toggle as
+/// every other typed password.
+pub(super) fn stripe_secret_fields(s: &crate::api::types::StripeConfigResponse) -> Markup {
+    html! {
+        @if s.secrets_editable {
+            (password_field("secret_key", "secret_key", "Secret key", PwRole::New, PwField {
+                autocomplete: Some("new-password"),
+                placeholder: Some(&s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())),
+                ..Default::default()
+            }))
+        } @else {
+            div class="space-y-2" {
+                label for="secret_key" class="text-sm font-medium" { "Secret key" }
+                input id="secret_key" name="secret_key" type="password" readonly disabled placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input());
+            }
+        }
+        p class="text-xs text-muted-foreground" { (secret_field_note(s.secrets_editable, &s.secrets_storage, s.has_secret_key, "STRIPE_SECRET_KEY", "stripe_secret_key")) }
+        @if s.secrets_editable {
+            (password_field("webhook_secret", "webhook_secret", "Webhook secret", PwRole::New, PwField {
+                autocomplete: Some("new-password"),
+                placeholder: Some(&s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())),
+                ..Default::default()
+            }))
+        } @else {
+            div class="space-y-2" {
+                label for="webhook_secret" class="text-sm font-medium" { "Webhook secret" }
+                input id="webhook_secret" name="webhook_secret" type="password" readonly disabled placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input());
+            }
+        }
+        p class="text-xs text-muted-foreground" { (secret_field_note(s.secrets_editable, &s.secrets_storage, s.has_webhook_secret, "STRIPE_WEBHOOK_SECRET", "stripe_webhook_secret")) }
+    }
+}
+
 pub async fn stripe(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1010,20 +1047,7 @@ pub async fn stripe(
                                 Some(&format!("Source: {}. Leave a field blank to keep the existing value.", s.source)),
                                 html! {
                                     div class="space-y-4" {
-                                        // BUNYIP-542: both secrets live in the store SECRETS_STORAGE
-                                        // declares. `environment` has no writable store, so the fields
-                                        // render read-only and name the file to edit rather than
-                                        // accepting a value that would land nowhere.
-                                        div class="space-y-2" {
-                                            label for="secret_key" class="text-sm font-medium" { "Secret key" }
-                                            input id="secret_key" name="secret_key" type="password" readonly[!s.secrets_editable] disabled[!s.secrets_editable] placeholder=(s.secret_key_masked.clone().unwrap_or_else(|| "sk_live_…".into())) class=(dashboard_input());
-                                            p class="text-xs text-muted-foreground" { (secret_field_note(s.secrets_editable, &s.secrets_storage, s.has_secret_key, "STRIPE_SECRET_KEY", "stripe_secret_key")) }
-                                        }
-                                        div class="space-y-2" {
-                                            label for="webhook_secret" class="text-sm font-medium" { "Webhook secret" }
-                                            input id="webhook_secret" name="webhook_secret" type="password" readonly[!s.secrets_editable] disabled[!s.secrets_editable] placeholder=(s.webhook_secret_masked.clone().unwrap_or_else(|| "whsec_…".into())) class=(dashboard_input());
-                                            p class="text-xs text-muted-foreground" { (secret_field_note(s.secrets_editable, &s.secrets_storage, s.has_webhook_secret, "STRIPE_WEBHOOK_SECRET", "stripe_webhook_secret")) }
-                                        }
+                                        (stripe_secret_fields(s))
                                         div class="space-y-2" { label for="app_tag" class="text-sm font-medium" { "App tag" } input id="app_tag" name="app_tag" value=(s.app_tag) class=(dashboard_input()); p class="text-xs text-muted-foreground" { "Only Stripe products tagged with this value are shown below." } }
                                     }
                                 },
@@ -1045,6 +1069,9 @@ pub async fn stripe(
                     (stripe_products_block(products_loaded, prices_loaded))
                     (stripe_prices_block(prices_loaded, products_loaded))
                     (stripe_webhooks_block(webhooks_loaded, &st.cfg.api_public_origin, s.has_webhook_secret, &retry))
+                    // BUNYIP-811: without the controller the reveal toggles on the
+                    // editable secret fields above are dead markup.
+                    (crate::views::password::script())
                 },
             }
         }

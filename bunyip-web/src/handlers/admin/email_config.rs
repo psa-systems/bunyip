@@ -12,6 +12,7 @@ use crate::api::admin as admin_api;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
+use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{button_class, error_box, icon, success_box, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
@@ -112,17 +113,27 @@ pub(super) fn email_settings_content(
                                         }
                                     }
                                     div class="space-y-2" { label for="smtp_username" class="text-sm font-medium" { "SMTP username" } input id="smtp_username" name="smtp_username" value=(values.smtp_username) autocomplete="off" class=(dashboard_input()); }
-                                    div class="space-y-2" {
-                                        label for="smtp_password" class="text-sm font-medium" { "SMTP password" }
-                                        // BUNYIP-432: the placeholder is a fixed-length mask driven only
-                                        // by has_smtp_password; the real password (and its length) never
-                                        // reaches the browser. Leave blank to keep the current one.
-                                        // BUNYIP-542: in SECRETS_STORAGE=environment there is no writable
-                                        // store, so the field is read-only and names the file to edit.
-                                        input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password" readonly[!e.smtp_password_editable] disabled[!e.smtp_password_editable] placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
-                                        p class="text-xs text-muted-foreground" {
-                                            (secret_field_note(e.smtp_password_editable, &e.secrets_storage, e.has_smtp_password, "SMTP_PASSWORD", "smtp_password"))
+                                    // BUNYIP-432: the placeholder is a fixed-length mask driven only
+                                    // by has_smtp_password; the real password (and its length) never
+                                    // reaches the browser. Leave blank to keep the current one.
+                                    // BUNYIP-542: in SECRETS_STORAGE=environment there is no writable
+                                    // store, so the field is read-only and names the file to edit.
+                                    // BUNYIP-811: editable means the admin can type a new value here,
+                                    // so it gets the same reveal toggle as every other typed password.
+                                    @if e.smtp_password_editable {
+                                        (password_field("smtp_password", "smtp_password", "SMTP password", PwRole::New, PwField {
+                                            autocomplete: Some("new-password"),
+                                            placeholder: Some(if e.has_smtp_password { "••••••••" } else { "Not set" }),
+                                            ..Default::default()
+                                        }))
+                                    } @else {
+                                        div class="space-y-2" {
+                                            label for="smtp_password" class="text-sm font-medium" { "SMTP password" }
+                                            input id="smtp_password" name="smtp_password" type="password" autocomplete="new-password" readonly disabled placeholder=(if e.has_smtp_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
                                         }
+                                    }
+                                    p class="text-xs text-muted-foreground" {
+                                        (secret_field_note(e.smtp_password_editable, &e.secrets_storage, e.has_smtp_password, "SMTP_PASSWORD", "smtp_password"))
                                     }
                                 }
                             },
@@ -139,13 +150,22 @@ pub(super) fn email_settings_content(
                                     div class="space-y-2" { label for="imap_host" class="text-sm font-medium" { "IMAP host" } input id="imap_host" name="imap_host" value=(values.imap_host) placeholder="imap.example.com" class=(dashboard_input()); }
                                     div class="space-y-2" { label for="imap_port" class="text-sm font-medium" { "IMAP port" } input id="imap_port" name="imap_port" type="number" min="1" max="65535" value=(values.imap_port) class=(dashboard_input()); }
                                     div class="space-y-2" { label for="imap_username" class="text-sm font-medium" { "IMAP username" } input id="imap_username" name="imap_username" value=(values.imap_username) autocomplete="off" class=(dashboard_input()); }
-                                    div class="space-y-2" {
-                                        label for="imap_password" class="text-sm font-medium" { "IMAP password" }
-                                        // Write-only, same rules as the SMTP password (BUNYIP-432/542).
-                                        input id="imap_password" name="imap_password" type="password" autocomplete="new-password" readonly[!e.imap_password_editable] disabled[!e.imap_password_editable] placeholder=(if e.has_imap_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
-                                        p class="text-xs text-muted-foreground" {
-                                            (secret_field_note(e.imap_password_editable, &e.secrets_storage, e.has_imap_password, "SUPPORT_IMAP_PASSWORD", "support_imap_password"))
+                                    // Write-only, same rules as the SMTP password (BUNYIP-432/542).
+                                    // BUNYIP-811: editable gets the same reveal toggle as SMTP password.
+                                    @if e.imap_password_editable {
+                                        (password_field("imap_password", "imap_password", "IMAP password", PwRole::New, PwField {
+                                            autocomplete: Some("new-password"),
+                                            placeholder: Some(if e.has_imap_password { "••••••••" } else { "Not set" }),
+                                            ..Default::default()
+                                        }))
+                                    } @else {
+                                        div class="space-y-2" {
+                                            label for="imap_password" class="text-sm font-medium" { "IMAP password" }
+                                            input id="imap_password" name="imap_password" type="password" autocomplete="new-password" readonly disabled placeholder=(if e.has_imap_password { "••••••••" } else { "Not set" }) class=(dashboard_input());
                                         }
+                                    }
+                                    p class="text-xs text-muted-foreground" {
+                                        (secret_field_note(e.imap_password_editable, &e.secrets_storage, e.has_imap_password, "SUPPORT_IMAP_PASSWORD", "support_imap_password"))
                                     }
                                     div class="space-y-2" { label for="imap_mailbox" class="text-sm font-medium" { "Mailbox" } input id="imap_mailbox" name="imap_mailbox" value=(values.imap_mailbox) placeholder="INBOX" class=(dashboard_input()); }
                                 }
@@ -179,6 +199,9 @@ pub(super) fn email_settings_content(
                         button type="submit" class=(button_class("outline", "default", "")) { (icon("mail", "mr-2 h-4 w-4")) "Test email" }
                         p class="text-xs text-muted-foreground" { "Sends a real test message to your own address using the saved SMTP settings. Save changes first." }
                     }
+                    // BUNYIP-811: without the controller the reveal toggles on the
+                    // editable secret fields above are dead markup.
+                    (crate::views::password::script())
                 },
             }
         }

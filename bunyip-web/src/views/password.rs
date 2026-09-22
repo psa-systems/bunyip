@@ -53,6 +53,10 @@ pub struct PwField<'a> {
     /// Rendered opposite the label, on the label's own row. The sign-in card
     /// puts its "Forgot password?" link there.
     pub label_suffix: Option<Markup>,
+    /// BUNYIP-811: the masked-value hint (`"••••••••"` / `"Not set"`) an
+    /// editable admin secret input shows in place of the stored value, which
+    /// is never sent to the browser.
+    pub placeholder: Option<&'a str>,
 }
 
 /// BUNYIP-554: both eye states, pre-rendered. `input.css` shows exactly one per
@@ -97,6 +101,7 @@ pub fn password_field(id: &str, name: &str, label: &str, role: PwRole, opts: PwF
                 input id=(id) name=(name) type="password" autocomplete=(autocomplete)
                     autofocus[opts.autofocus]
                     required[opts.required]
+                    placeholder=[opts.placeholder]
                     data-pw-new[role == PwRole::New]
                     data-pw-confirm[role == PwRole::Confirm]
                     class=(input_class);
