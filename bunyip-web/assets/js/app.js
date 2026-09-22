@@ -416,10 +416,10 @@
     }
     // Set or clear an inline error under a field: flip aria-invalid on the
     // input (the aria-[invalid=true]: variant paints the red border) and fill
-    // the field's own [data-feedback-error] slot.
+    // the field's own [data-field-error] slot (views::form_errors, BUNYIP-813).
     function setFieldError(el, msg) {
       if (!el) return;
-      var slot = form.querySelector('[data-feedback-error="' + el.id + '"]');
+      var slot = form.querySelector('[data-field-error="' + el.id + '"]');
       if (msg) {
         el.setAttribute('aria-invalid', 'true');
         if (slot) {
