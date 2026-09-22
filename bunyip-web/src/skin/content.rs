@@ -1115,7 +1115,7 @@ fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
     } else {
         "block rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-colors"
     };
-    html! { a class=(classes) href=(href) { (label) } }
+    html! { a class=(classes) href=(href) aria-current=[(href == active).then_some("page")] { (label) } }
 }
 
 /// The left-hand section menu shared by every `/docs` surface.
@@ -1130,6 +1130,7 @@ fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
 fn docs_menu(documented: Option<&[DocumentedApp]>, active: &str) -> Markup {
     html! {
         nav class="w-full shrink-0 md:w-56" aria-label="Documentation sections" {
+            (docs_menu_link("/docs", "Docs home", active))
             p class="px-3 pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground" { "Guides" }
             @for &(slug, title, _) in DOCS.iter() {
                 (docs_menu_link(&format!("/docs/{slug}"), title, active))
@@ -1262,13 +1263,12 @@ pub async fn docs_page(
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
     let active = format!("/docs/{slug}");
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
-        let content = html! {
-            div class="container max-w-4xl py-12" {
-                h1 class="text-4xl font-bold mb-4" { "Document not found" }
-                p class="text-muted-foreground" { "No such doc." }
-                div class="mt-4" { (back_link("/docs", "Back to documentation")) }
-            }
+        let body = html! {
+            h1 class="text-4xl font-bold mb-4" { "Document not found" }
+            p class="text-muted-foreground" { "No such doc." }
+            div class="mt-4" { (back_link("/docs", "Back to documentation")) }
         };
+        let content = docs_layout(documented.as_deref().map(|v| &**v), &active, body);
         let mut resp = public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
         *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
         return resp;
@@ -1411,15 +1411,18 @@ pub async fn app_docs_page(
                 code = %e.code,
                 "rendering the docs not-found page"
             );
-            let content = html! {
-                div class="container max-w-4xl py-12" {
-                    h1 class="text-4xl font-bold mb-4" { "Document not found" }
-                    p class="text-muted-foreground" { "No such page." }
-                    div class="mt-4" {
-                        (back_link(&format!("/apps/{slug}/docs"), &format!("Back to {app_name} docs")))
-                    }
+            let body = html! {
+                h1 class="text-4xl font-bold mb-4" { "Document not found" }
+                p class="text-muted-foreground" { "No such page." }
+                div class="mt-4" {
+                    (back_link(&format!("/apps/{slug}/docs"), &format!("Back to {app_name} docs")))
                 }
             };
+            let content = docs_layout(
+                documented.as_deref().map(|v| &**v),
+                &format!("/apps/{slug}/docs"),
+                body,
+            );
             let mut resp =
                 public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content);
             *resp.status_mut() = axum::http::StatusCode::NOT_FOUND;
@@ -1449,7 +1452,7 @@ pub async fn app_docs_page(
 
 #[cfg(test)]
 mod docs_hub_tests {
-    use super::{docs_index_body, docs_menu, DocumentedApp, DOCS};
+    use super::{docs_index_body, docs_layout, docs_menu, DocumentedApp, DOCS};
 
     fn documented(slugs: &[(&str, &str)]) -> Vec<DocumentedApp> {
         slugs
@@ -1517,6 +1520,7 @@ mod docs_hub_tests {
             .iter()
             .map(|&(slug, _, _)| format!("/docs/{slug}"))
             .collect();
+        allowed.push("/docs".to_string());
         allowed.push("/apps/mokosh/docs".to_string());
 
         for link in menu.split("href=\"").skip(1) {
@@ -1544,6 +1548,45 @@ mod docs_hub_tests {
         assert!(!menu.contains("/apps/"));
         for &(slug, _, _) in DOCS.iter() {
             assert!(menu.contains(&format!("/docs/{slug}")));
+        }
+    }
+
+    /// BUNYIP-817 F11: the `/docs` hub highlights its own "Docs home" entry in
+    /// its section menu, and that entry stays unhighlighted on every other
+    /// docs surface.
+    #[test]
+    fn the_hub_entry_is_highlighted_only_on_the_hub() {
+        let hub_menu = docs_menu(Some(&[]), "/docs").into_string();
+        assert!(hub_menu.contains("href=\"/docs\""));
+        let hub_entry = hub_menu
+            .split("<a ")
+            .find(|a| a.contains("href=\"/docs\""))
+            .expect("the hub entry is rendered");
+        assert!(
+            hub_entry.contains("bg-accent text-accent-foreground"),
+            "the hub entry is active"
+        );
+
+        let guide_menu = docs_menu(Some(&[]), "/docs/getting-started").into_string();
+        let hub_entry = guide_menu
+            .split("<a ")
+            .find(|a| a.contains("href=\"/docs\""))
+            .expect("the hub entry is rendered");
+        assert!(
+            !hub_entry.contains("bg-accent text-accent-foreground"),
+            "the hub entry must not be highlighted while reading a guide"
+        );
+    }
+
+    /// BUNYIP-817 F12: a nonexistent `/docs/{slug}` still renders the shared
+    /// two-column layout with its section menu, not a bare not-found div.
+    #[test]
+    fn a_docs_not_found_body_still_carries_the_section_menu() {
+        let body = maud::html! { h1 { "Document not found" } };
+        let wrapped = docs_layout(Some(&[]), "/docs/some-missing-slug", body).into_string();
+        assert!(wrapped.contains("Documentation sections"));
+        for &(slug, _, _) in DOCS.iter() {
+            assert!(wrapped.contains(&format!("/docs/{slug}")));
         }
     }
 

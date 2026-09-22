@@ -79,7 +79,11 @@
     var pill = document.createElement('div');
     pill.className =
       'pointer-events-auto flex items-start gap-3 rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
-    pill.setAttribute('role', 'status');
+    // BUNYIP-818: an error pill is at least as urgent as the app's other
+    // client-injected error surfaces, which use role="alert" alone; success
+    // and info stay role="status" since the container no longer carries its
+    // own aria-live (nesting two live regions announced every pill twice).
+    pill.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     pill.style.transition = 'opacity 200ms ease, transform 200ms ease';
     pill.style.opacity = '0';
     pill.style.transform = 'translateY(-8px)';

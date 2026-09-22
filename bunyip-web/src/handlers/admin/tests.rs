@@ -1139,12 +1139,32 @@ mod two_column_layout_tests {
             .into_string();
         let off = super::stripe_catalog_section(Ok(&cfg(false)), None, Err("unavailable"), None)
             .into_string();
+        // Isolate the publish switch's own `<input>` tag: the surrounding markup
+        // carries static `peer-checked:` classes on every render, whatever the
+        // state, so a bare `contains("checked")` over the whole page would match
+        // those instead of the input's actual `checked` attribute.
+        let pricing_input = |html: &str| -> String {
+            let rest = html
+                .split_once(r#"id="pricing_enabled""#)
+                .expect("the publish switch renders")
+                .1;
+            rest.split_once('>')
+                .expect("the input closes")
+                .0
+                .to_string()
+        };
         assert!(
             on.contains(r#"name="pricing_enabled""#),
             "publish switch present in the catalog mapping"
         );
-        assert!(on.contains("checked"), "checked when the switch is on");
-        assert!(!off.contains("checked"), "unchecked when the switch is off");
+        assert!(
+            pricing_input(&on).contains("checked"),
+            "checked when the switch is on"
+        );
+        assert!(
+            !pricing_input(&off).contains("checked"),
+            "unchecked when the switch is off"
+        );
     }
 
     // BUNYIP-515 / BUNYIP-524: the catalog mapping says what /pricing is serving
@@ -1453,6 +1473,16 @@ mod stripe_admin_tests {
             member_count,
             ..price(id, product_id, Some(300), true)
         }
+    }
+
+    /// Counts literal `checked` HTML attributes, not the `peer-checked:` CSS
+    /// class name every `toggle_switch_field` renders regardless of state
+    /// (BUNYIP-819 F15): a bare substring count over the whole page would see
+    /// two extra false-positive hits per toggle, checked or not.
+    fn true_checked_count(html: &str) -> usize {
+        html.match_indices("checked")
+            .filter(|(i, _)| !html[..*i].ends_with('-'))
+            .count()
     }
 
     /// A generic 500 from bunyip-api: `user_message` collapses it (BUNYIP-477),
@@ -2031,7 +2061,7 @@ mod stripe_admin_tests {
             "the stored price is selected on a plain load"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             1,
             "exactly the one stored-visible tier is checked on a plain load"
         );
@@ -2067,7 +2097,7 @@ mod stripe_admin_tests {
             "the stored price is no longer selected"
         );
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             0,
             "the unticked box is not restored from the stored-visible row"
         );
@@ -2092,7 +2122,7 @@ mod stripe_admin_tests {
         )
         .into_string();
         assert_eq!(
-            html.matches("checked").count(),
+            true_checked_count(&html),
             2,
             "the submitted ticked switch and box are restored, the stored-on box unticked"
         );
@@ -2739,7 +2769,8 @@ mod rate_limit_management_tests {
             submitter_ip: Some("203.0.113.7".to_string()),
             user_agent: Some("Mozilla/5.0 Firefox/121.0".to_string()),
         };
-        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam).into_string();
+        let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam, None, None)
+            .into_string();
         assert!(
             html.contains(r#"href="/admin/ip-bans?ip=203.0.113.7""#),
             "the IP links into the ip-bans add flow"
@@ -2748,6 +2779,50 @@ mod rate_limit_management_tests {
             html.contains("Mozilla/5.0 Firefox/121.0"),
             "user agent shown"
         );
+    }
+
+    /// BUNYIP-810: a rejected or failed reply re-renders the detail page with
+    /// the admin's just-typed text, not the persisted `admin_response` and
+    /// not an empty field, and the inline error sits inside the response
+    /// form so the admin sees why it was rejected right next to their draft.
+    #[test]
+    fn rejected_reply_echoes_the_typed_text_with_the_error_inside_the_form() {
+        let detail = AdminFeedbackDetail {
+            id: "33333333-3333-3333-3333-333333333333".to_string(),
+            name: Some("Ada".to_string()),
+            email: Some("ada@example.com".to_string()),
+            email_masked: Some("a***@example.com".to_string()),
+            subject: Some("Broken button".to_string()),
+            tags: vec![],
+            message: "It does not work".to_string(),
+            page_path: None,
+            status: FeedbackStatus::New,
+            admin_response: Some("An old stored reply".to_string()),
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            responded_at: Some("2026-08-01T01:00:00Z".to_string()),
+            attachments: vec![],
+            submitter_ip: None,
+            user_agent: None,
+        };
+        let html = feedback_detail_view(
+            &detail,
+            super::FeedbackTab::Active,
+            Some("A brand new draft the admin just typed"),
+            Some("Could not send response"),
+        )
+        .into_string();
+
+        assert!(
+            html.contains("A brand new draft the admin just typed"),
+            "the just-typed draft is redisplayed, not the stored response: {html}"
+        );
+        assert!(
+            !html.contains("An old stored reply"),
+            "the stale stored response is not shown once a draft is submitted: {html}"
+        );
+        let form = html.find("<form").expect("response form");
+        let error = html.find("Could not send response").expect("inline error");
+        assert!(form < error, "error renders inside the response form");
     }
 
     #[test]

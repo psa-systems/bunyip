@@ -105,7 +105,7 @@ fn bunyip_auth_cookie_clears(cfg: &Config, secure: bool) -> Vec<String> {
     }
     out
 }
-use crate::views::ui::{back_link, button_class, error_box, icon};
+use crate::views::ui::{back_link, button_class, error_box, icon, toggle_switch_field};
 use crate::web::{html, html_cookies, redirect, redirect_cookies, AppState};
 
 /// BUNYIP-486: `field_with_value` for the FIRST editable field of a single-purpose auth
@@ -287,8 +287,8 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                 ..Default::default()
             }))
             div class="flex items-center space-x-2" {
-                input id="remember" name="remember" type="checkbox" value="on" class="h-4 w-4 rounded border-border";
-                label for="remember" class="text-sm font-normal cursor-pointer" { "Remember me for 30 days" }
+                (toggle_switch_field("remember", "remember", false, "Remember me for 30 days"))
+                span class="text-sm font-normal" { "Remember me for 30 days" }
             }
             button type="submit" class=(button_class("default", "default", "w-full")) { "Sign in" }
         }
