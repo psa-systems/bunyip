@@ -10,7 +10,7 @@ use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::{Application, DocumentedApp, PricingResponse, User};
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
-use crate::util::format_stripe_amount;
+use crate::util::{format_stripe_amount, price_period};
 use crate::views::form_errors::{aria_invalid, field_error_slot, field_invalid_class};
 use crate::views::ui::{back_link, button_class, empty_state, error_box, icon};
 use crate::web::AppState;
@@ -75,6 +75,7 @@ fn pricing_card(
     title: &str,
     desc: &str,
     price: &str,
+    period: &str,
     value_line: &str,
     features: &[&str],
     scarcity: &str,
@@ -96,7 +97,7 @@ fn pricing_card(
                 p class="text-sm text-muted-foreground" { (desc) }
                 div class="mt-6" {
                     span class="text-5xl font-bold" { (price) }
-                    span class="text-muted-foreground" { "/month" }
+                    span class="text-muted-foreground" { "/" (period) }
                 }
                 // BUNYIP-526: per-tier, so the trial length shown is this tier's
                 // own, not one number pretending to be global.
@@ -172,6 +173,7 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
                             tier_name(&t.tier),
                             "Everything around the product, nothing in it",
                             &format_stripe_amount(Some(t.amount), &t.currency),
+                            price_period(t.interval.as_deref()),
                             &card_value_line(is_lifetime, t.trial_days),
                             &PERSONAL,
                             &scarcity_line(t.slots_remaining, t.available),
@@ -1860,6 +1862,30 @@ mod pricing_tests {
             html.contains("$12.50"),
             "a different mapped price renders a different amount"
         );
+    }
+
+    /// BUNYIP-828: a tier mapped to a yearly Stripe price renders "/year", not
+    /// the previously hardcoded "/month" - an order-of-magnitude misstatement
+    /// of the actual cost.
+    #[test]
+    fn a_yearly_priced_tier_states_its_real_period() {
+        let yearly = PricingResponse {
+            enabled: true,
+            trial_days: 30,
+            tiers: vec![PricingTier {
+                tier: MembershipTier::Standard,
+                amount: 9_900,
+                currency: "usd".into(),
+                interval: Some("year".into()),
+                trial_days: 30,
+                available: true,
+                slots_remaining: None,
+            }],
+        };
+        let html = pricing_content(&yearly, true, false).into_string();
+        assert!(html.contains("$99.00"), "{html}");
+        assert!(html.contains("/year"), "{html}");
+        assert!(!html.contains("/month"), "{html}");
     }
 
     /// BUNYIP-515: every tier the API publishes gets its own card. The page
