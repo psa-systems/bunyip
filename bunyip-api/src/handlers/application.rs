@@ -99,12 +99,12 @@ fn catalog_visible(
 /// distribution products are excluded; they surface via /v1/downloads and
 /// the OCI registry instead.
 ///
-/// A restricted product (BUNYIP-39) is dropped from the response for a
-/// caller who is not entitled, so the list does not leak the existence of
-/// products a standard user cannot reach and cannot see the metadata of.
+/// A restricted product is dropped from the response for a caller who is
+/// not entitled, so the list does not leak the existence of products a
+/// standard user cannot reach and cannot see the metadata of.
 /// `get_application` (singular) already refuses them; the list route did
-/// not, so an anonymous or non-entitled caller received their names,
-/// icons and subdomains alongside `is_accessible: false`. Admins and the
+/// not, so an anonymous or non-entitled caller received their names, icons
+/// and subdomains alongside `is_accessible: false`. Admins and the
 /// entitled see the same set they did before.
 pub async fn list_applications(
     req: HttpRequest,
