@@ -136,6 +136,20 @@ pub struct SystemSettings {
     pub country_deny: Vec<String>,
 }
 
+/// BUNYIP-831: serializes the read-merge-write span of an admin system-config
+/// save. Each individual file write in [`SystemSettings::save`] is already
+/// atomic, but the four-key set as a whole has no lock across the read
+/// ([`SystemSettings::current`]) and the write: two overlapping saves that each
+/// read the same starting snapshot before either writes silently drop
+/// whichever change the later write does not carry. A caller holds this for the
+/// whole `current()` .. `save()` span (`update_system_config` in
+/// `bunyip-api/src/handlers/system_config.rs`), so a second concurrent save
+/// observes the first save's on-disk result before merging its own changes.
+/// Sufficient for a single-process deployment only: a settings directory shared
+/// across multiple API replicas would need an `flock` on the directory instead,
+/// which this does not provide.
+pub static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 impl SystemSettings {
     /// The effective values, resolved through the provider stack: the file
     /// layer, then the environment, then the built-in default. The admin screen
@@ -761,6 +775,71 @@ mod tests {
         };
         cleared.save().expect("save");
         assert!(!dir.join("COUNTRY_ALLOW").exists());
+
+        std::env::remove_var(crate::config_providers::CONFIG_DIR_ENV);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// BUNYIP-831 AC2: two overlapping saves that change different fields
+    /// (`login_approval_enabled` for A, `country_deny` for B) interleave as
+    /// `A reads, B reads, A saves, B saves`. Without a lock spanning
+    /// `current()` .. `save()`, B's read is the pre-A snapshot, so B's save
+    /// rewrites all four files from that stale snapshot and silently reverts
+    /// A's change (today's bug). `SAVE_LOCK` held across the whole span forces
+    /// B's read to wait until A's save has completed and released it, so B
+    /// observes A's change in its own starting snapshot; asserting that,
+    /// combined with A's change surviving B's write, is the fix.
+    #[test]
+    fn overlapping_saves_do_not_drop_each_others_change() {
+        // The env-var guard must not be held across an `.await` (clippy
+        // await_holding_lock), so the async interleaving runs inside one
+        // `block_on` call, a synchronous call from this guard's point of view.
+        let _env = crate::test_support::env_lock();
+        let dir = unique_temp_dir("race");
+        std::env::set_var(crate::config_providers::CONFIG_DIR_ENV, &dir);
+
+        let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+        rt.block_on(async {
+            let a = tokio::spawn(async move {
+                let _guard = SAVE_LOCK.lock().await;
+                // A reads the starting snapshot.
+                let mut settings = SystemSettings::current();
+                assert!(!settings.login_approval_enabled);
+                // Widen the window so a B that did not wait for this lock would
+                // read the same stale pre-A snapshot here.
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                settings.login_approval_enabled = true;
+                settings.save().expect("A save");
+            });
+            // Give A a head start acquiring the lock before B tries.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            let b = tokio::spawn(async move {
+                let _guard = SAVE_LOCK.lock().await;
+                // B's read only runs once it holds the lock, i.e. after A
+                // released it having already saved: B's starting snapshot
+                // already carries A's change, so B's merge cannot revert it.
+                let mut settings = SystemSettings::current();
+                assert!(
+                    settings.login_approval_enabled,
+                    "B must read A's already-saved change, not the stale pre-A snapshot"
+                );
+                settings.country_deny = vec!["CN".to_string()];
+                settings.save().expect("B save");
+            });
+            a.await.expect("A task");
+            b.await.expect("B task");
+        });
+
+        let result = SystemSettings::current();
+        assert!(
+            result.login_approval_enabled,
+            "A's change must survive B's overlapping save"
+        );
+        assert_eq!(
+            result.country_deny,
+            vec!["CN"],
+            "B's own change must also persist"
+        );
 
         std::env::remove_var(crate::config_providers::CONFIG_DIR_ENV);
         let _ = std::fs::remove_dir_all(&dir);
