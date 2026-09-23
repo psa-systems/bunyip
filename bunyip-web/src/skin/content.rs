@@ -12,7 +12,7 @@ use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::util::format_stripe_amount;
 use crate::views::form_errors::{aria_invalid, field_error_slot, field_invalid_class};
-use crate::views::ui::{back_link, button_class, empty_state, error_box, icon};
+use crate::views::ui::{back_link, button_class, disabled_button, empty_state, error_box, icon};
 use crate::web::AppState;
 
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
@@ -112,13 +112,13 @@ fn pricing_card(
                 // sign-up link that cannot be honoured.
                 @if !available {
                     div class="mt-8" {
-                        button type="button" disabled title="This tier is sold out" class=(button_class("default", "lg", "w-full")) { "Sold out" }
+                        (disabled_button("default", "lg", "w-full", "Sold out"))
                     }
                 } @else if stripe {
                     a href=(cta_href) class=(button_class("default", "lg", "mt-8 w-full")) { (cta_label) }
                 } @else {
                     div class="mt-8" {
-                        button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "w-full")) { (cta_label) }
+                        (disabled_button("default", "lg", "w-full", "Payment is not configured"))
                     }
                 }
                 // BUNYIP-526: honest scarcity for a limited tier with slots left.
