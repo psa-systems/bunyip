@@ -20,8 +20,8 @@ use crate::util::{format_stripe_amount, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
-    back_link, badge, button_class, empty_state, error_box, error_box_detailed, icon, success_box,
-    toggle_switch_field,
+    back_link, badge, button_class, disabled_button, empty_state, error_box, error_box_detailed,
+    icon, success_box, toggle_switch_field,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -188,7 +188,7 @@ fn archive_blocked_by_members(member_count: i64) -> Markup {
     html! {
         div class="flex items-center gap-2 shrink-0" {
             span class="text-xs text-muted-foreground" { (label) }
-            button type="button" disabled title="Move members to another plan before archiving" class=(button_class("outline", "sm", "opacity-50 cursor-not-allowed")) { "Archive" }
+            (disabled_button("outline", "sm", "opacity-50 cursor-not-allowed", "Move members to another plan before archiving"))
         }
     }
 }
