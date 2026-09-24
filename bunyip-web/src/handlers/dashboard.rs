@@ -27,7 +27,8 @@ use crate::util::{
 use crate::views::layout::community_enabled;
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
-    back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
+    back_link, badge, button_class, disabled_button, empty_state, error_box, icon, pager,
+    success_box,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -107,10 +108,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                                     "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5"))
                                 }
                             } @else {
-                                button type="button" disabled title="Payment is not configured"
-                                    class=(button_class("default", "sm", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20")) {
-                                    "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5"))
-                                }
+                                (disabled_button("default", "sm", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20", "Payment is not configured"))
                             }
                         }
                     }
@@ -173,6 +171,8 @@ fn dashboard_apps_grid(
                                             "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                         }
                                     }
+                                } @else {
+                                    (disabled_button("default", "default", "w-full", "Not configured"))
                                 }
                             } @else {
                                 button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -376,6 +376,8 @@ fn app_card(
                         a href=(href) target="_blank" rel="noopener noreferrer" {
                             span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                         }
+                    } @else {
+                        (disabled_button("default", "default", "w-full", "Not configured"))
                     }
                 } @else {
                     button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -496,7 +498,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                         @if stripe {
                             a href="/membership" class=(button_class("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20")) { "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5")) }
                         } @else {
-                            button type="button" disabled title="Payment is not configured" class=(button_class("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5")) }
+                            (disabled_button("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0", "Payment is not configured"))
                         }
                     }
                 }
@@ -1226,7 +1228,7 @@ pub async fn membership(
                                 @if stripe {
                                     form method="post" action="/membership/subscribe" { button type="submit" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe " (icon("arrow-right", "h-4 w-4")) } }
                                 } @else {
-                                    button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe" }
+                                    (disabled_button("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0", "Payment is not configured"))
                                 }
                             }
                         }
@@ -3032,6 +3034,39 @@ mod tests {
         assert_eq!(
             app_tile_link(&other, "a8n.systems").as_deref(),
             Some("https://mokosh.a8n.systems/dashboard")
+        );
+    }
+
+    /// BUNYIP-815 (F18): `app_tile_link` returning `None` for an accessible app
+    /// used to leave the card's action slot empty - no button, no label, no
+    /// explanation. Both call sites must fall back to a disabled button that
+    /// states a reason.
+    #[test]
+    fn dashboard_grid_states_a_reason_when_the_tile_has_no_link() {
+        let mut lets_chat = app_with_release_notes(None);
+        lets_chat.slug = "lets-chat".into();
+        lets_chat.subdomain = Some("chat".into());
+        assert!(!community_enabled());
+        let html = dashboard_apps_grid(&[lets_chat], true, "a8n.systems", true).into_string();
+        assert!(
+            html.contains("disabled") && html.contains("Not configured"),
+            "an accessible app with no tile link must render a disabled button \
+             stating a reason, not an empty action slot: {html}"
+        );
+    }
+
+    /// Same regression as above, for the `/applications` page's `app_card`.
+    #[test]
+    fn app_card_states_a_reason_when_the_tile_has_no_link() {
+        let mut lets_chat = app_with_release_notes(None);
+        lets_chat.slug = "lets-chat".into();
+        lets_chat.subdomain = Some("chat".into());
+        assert!(!community_enabled());
+        let html = app_card(&lets_chat, "a8n.systems", true, None).into_string();
+        assert!(
+            html.contains("disabled") && html.contains("Not configured"),
+            "an accessible app with no tile link must render a disabled button \
+             stating a reason, not an empty action slot: {html}"
         );
     }
 
