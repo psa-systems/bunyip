@@ -81,10 +81,31 @@ pub async fn list_application_groups(
     Ok(success(serde_json::json!({ "groups": groups }), request_id))
 }
 
+/// The per-caller visibility gate for the catalog list. An open product is
+/// always visible, an admin always sees everything, and a signed-in caller
+/// sees a restricted product only when their entitlement id set carries it.
+/// Extracted as a pure function so it can be unit-tested without seeding a
+/// database.
+fn catalog_visible(
+    app: &crate::models::Application,
+    is_admin: bool,
+    entitled_ids: &[uuid::Uuid],
+) -> bool {
+    !app.requires_entitlement || is_admin || entitled_ids.contains(&app.id)
+}
+
 /// GET /v1/applications
 /// List active HOSTED applications (hub launch tiles). Catalog-only
 /// distribution products are excluded; they surface via /v1/downloads and
 /// the OCI registry instead.
+///
+/// A restricted product is dropped from the response for a caller who is
+/// not entitled, so the list does not leak the existence of products a
+/// standard user cannot reach and cannot see the metadata of.
+/// `get_application` (singular) already refuses them; the list route did
+/// not, so an anonymous or non-entitled caller received their names, icons
+/// and subdomains alongside `is_accessible: false`. Admins and the
+/// entitled see the same set they did before.
 pub async fn list_applications(
     req: HttpRequest,
     user: OptionalUser,
@@ -98,8 +119,27 @@ pub async fn list_applications(
 
     let apps = ApplicationRepository::list_active_hosted(&pool).await?;
 
+    // A caller's identity for the per-product gate. Anonymous callers use
+    // the nil uuid: `is_allowed` short-circuits open products anyway, and
+    // `active_application_ids` for a signed-out visitor returns an empty
+    // set with one query rather than one per restricted row.
+    let (user_id, is_admin) = user
+        .0
+        .as_ref()
+        .map(|claims| (claims.sub, claims.role == "admin"))
+        .unwrap_or((uuid::Uuid::nil(), false));
+
+    // Batch the entitlement lookup so a tenant with a hundred restricted
+    // products does not pay a hundred round trips per list render.
+    let entitled_ids = if is_admin || user.0.is_none() {
+        Vec::new()
+    } else {
+        EntitlementRepository::active_application_ids(pool.as_ref(), user_id).await?
+    };
+
     let apps_response: Vec<ApplicationResponse> = apps
         .into_iter()
+        .filter(|app| catalog_visible(app, is_admin, &entitled_ids))
         .map(|app| ApplicationResponse::from_application(app, has_access))
         .collect();
 
@@ -317,5 +357,92 @@ mod tests {
         let pool = unreachable_pool();
         assert!(!resolve_has_member_access(&req, &pool, &OptionalUser(None)).await);
         pool.close().await;
+    }
+
+    /// The catalog-visibility gate: pure filter logic, tested without a pool.
+    /// Every arm the handler branches on lives here so a change to the rule
+    /// is a change to this test.
+    mod catalog_visible {
+        use super::super::catalog_visible;
+        use crate::models::Application;
+        use chrono::Utc;
+        use uuid::Uuid;
+
+        fn app(id: Uuid, requires_entitlement: bool) -> Application {
+            Application {
+                id,
+                name: "test".to_string(),
+                slug: "test".to_string(),
+                display_name: "Test".to_string(),
+                description: None,
+                icon_url: None,
+                is_active: true,
+                is_hosted: true,
+                requires_entitlement,
+                maintenance_mode: false,
+                maintenance_message: None,
+                subdomain: None,
+                container_name: "test".to_string(),
+                health_check_url: None,
+                webhook_url: None,
+                version: None,
+                source_code_url: None,
+                release_notes_url: None,
+                forgejo_owner: None,
+                forgejo_repo: None,
+                pinned_release_tag: None,
+                artifact_source: "release".to_string(),
+                forgejo_package: None,
+                oci_image_owner: None,
+                oci_image_name: None,
+                pinned_image_tag: None,
+                sort_order: 0,
+                group_id: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            }
+        }
+
+        #[test]
+        fn an_open_product_is_always_visible() {
+            let open = app(Uuid::from_u128(1), false);
+            for (is_admin, entitled) in [
+                (false, &[][..]),
+                (true, &[][..]),
+                (false, &[Uuid::from_u128(2)][..]),
+            ] {
+                assert!(
+                    catalog_visible(&open, is_admin, entitled),
+                    "open product must be visible whatever the caller shape"
+                );
+            }
+        }
+
+        #[test]
+        fn a_restricted_product_hides_from_a_standard_caller() {
+            let restricted = app(Uuid::from_u128(3), true);
+            assert!(
+                !catalog_visible(&restricted, false, &[]),
+                "an anonymous or non-entitled caller must not see restricted product metadata"
+            );
+            assert!(
+                !catalog_visible(&restricted, false, &[Uuid::from_u128(999)]),
+                "a caller entitled to a different product must not see this restricted one"
+            );
+        }
+
+        #[test]
+        fn a_restricted_product_shows_for_an_admin_or_an_entitled_caller() {
+            let id = Uuid::from_u128(5);
+            let restricted = app(id, true);
+            assert!(
+                catalog_visible(&restricted, true, &[]),
+                "an admin sees restricted products even without an entitlement"
+            );
+            assert!(
+                catalog_visible(&restricted, false, &[id]),
+                "an entitled caller sees the restricted product"
+            );
+        }
     }
 }
