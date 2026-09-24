@@ -29,12 +29,36 @@ pub fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String 
     }
 }
 
+/// "year" when the tier's own `recurring_interval` says so, else "month" -
+/// the admin catalog form offers only Monthly and Yearly per price
+/// (BUNYIP-828), so any other value (including absent, e.g. a one-time
+/// Lifetime price) is treated as monthly.
+pub fn price_period(interval: Option<&str>) -> &'static str {
+    if interval == Some("year") {
+        "year"
+    } else {
+        "month"
+    }
+}
+
+/// The formatted amount plus the period it actually bills for, e.g.
+/// "$99.00/year" - never an assumed "/month" (BUNYIP-828).
+pub fn price_with_period(amount: i64, currency: &str, interval: Option<&str>) -> String {
+    format!(
+        "{}/{}",
+        format_stripe_amount(Some(amount), currency),
+        price_period(interval)
+    )
+}
+
 /// BUNYIP-590: the cheapest monthly price a visitor can still sign up for,
-/// formatted, or `None` when nothing is published. Lifetime is skipped (it is
-/// not a monthly price) and so is a sold-out tier, so every number this returns
-/// is one the reader can actually buy. Callers phrase the sentence and render a
-/// non-numeric line on `None`: the marketing copy used to carry a hardcoded
-/// `$3/month` that no configuration backed.
+/// formatted with its period, or `None` when nothing is published. Restricted
+/// to tiers whose `recurring_interval` is `"month"` (BUNYIP-828), which also
+/// excludes Lifetime (a one-time price, not a monthly one) and so is a
+/// sold-out tier, so every number this returns is one the reader can actually
+/// buy at that cadence. Callers phrase the sentence and render a non-numeric
+/// line on `None`: the marketing copy used to carry a hardcoded `$3/month`
+/// that no configuration backed.
 pub fn entry_price(pricing: &PricingResponse) -> Option<String> {
     if !pricing.published() {
         return None;
@@ -42,14 +66,15 @@ pub fn entry_price(pricing: &PricingResponse) -> Option<String> {
     pricing
         .tiers
         .iter()
-        .filter(|t| t.available && !matches!(t.tier, MembershipTier::Lifetime))
+        .filter(|t| t.available && t.interval.as_deref() == Some("month"))
         .min_by_key(|t| t.amount)
-        .map(|t| format_stripe_amount(Some(t.amount), &t.currency))
+        .map(|t| price_with_period(t.amount, &t.currency, t.interval.as_deref()))
 }
 
-/// BUNYIP-590: the published price of ONE tier, formatted, or `None` when that
-/// tier is not published. Availability is ignored on purpose: a sold-out tier
-/// still prices the members already on it.
+/// BUNYIP-590: the published price of ONE tier, formatted with its actual
+/// period (BUNYIP-828), or `None` when that tier is not published.
+/// Availability is ignored on purpose: a sold-out tier still prices the
+/// members already on it.
 pub fn tier_price(pricing: &PricingResponse, tier: &MembershipTier) -> Option<String> {
     // `Unknown` is every tier this build cannot name, so matching it to an
     // `Unknown` on the wire would price one unrecognised tier from another.
@@ -60,7 +85,7 @@ pub fn tier_price(pricing: &PricingResponse, tier: &MembershipTier) -> Option<St
         .tiers
         .iter()
         .find(|t| t.tier == *tier)
-        .map(|t| format_stripe_amount(Some(t.amount), &t.currency))
+        .map(|t| price_with_period(t.amount, &t.currency, t.interval.as_deref()))
 }
 
 /// BUNYIP-590: the currency the published tiers are priced in, for the amounts
@@ -410,6 +435,23 @@ mod tests {
             }
         }
 
+        /// Lifetime is a one-time price, not a recurring one, so its wire
+        /// interval is absent - unlike the `tier()` helper above, which
+        /// always builds a monthly recurring tier.
+        fn lifetime_tier(amount: i64, available: bool) -> PricingTier {
+            PricingTier {
+                interval: None,
+                ..tier(MembershipTier::Lifetime, amount, available)
+            }
+        }
+
+        fn yearly_tier(t: MembershipTier, amount: i64, available: bool) -> PricingTier {
+            PricingTier {
+                interval: Some("year".into()),
+                ..tier(t, amount, available)
+            }
+        }
+
         fn published(tiers: Vec<PricingTier>) -> PricingResponse {
             PricingResponse {
                 enabled: true,
@@ -424,22 +466,33 @@ mod tests {
         #[test]
         fn entry_price_is_the_cheapest_purchasable_monthly_tier() {
             let p = published(vec![
-                tier(MembershipTier::Lifetime, 9_900, true),
+                lifetime_tier(9_900, true),
                 tier(MembershipTier::EarlyAdopter, 500, true),
                 tier(MembershipTier::Standard, 900, true),
             ]);
-            assert_eq!(entry_price(&p).as_deref(), Some("$5.00"));
+            assert_eq!(entry_price(&p).as_deref(), Some("$5.00/month")); // price-literal-ok: asserts the computed price+period, not copy
 
             // Early adopter sold out -> the honest entry price is Standard.
             let p = published(vec![
                 tier(MembershipTier::EarlyAdopter, 500, false),
                 tier(MembershipTier::Standard, 900, true),
             ]);
-            assert_eq!(entry_price(&p).as_deref(), Some("$9.00"));
+            assert_eq!(entry_price(&p).as_deref(), Some("$9.00/month")); // price-literal-ok: asserts the computed price+period, not copy
 
             // Lifetime alone publishes no monthly price at all.
-            let p = published(vec![tier(MembershipTier::Lifetime, 9_900, true)]);
+            let p = published(vec![lifetime_tier(9_900, true)]);
             assert_eq!(entry_price(&p), None);
+        }
+
+        /// BUNYIP-828: a yearly-priced tier is never a monthly entry price,
+        /// even when it is the cheapest number on the page.
+        #[test]
+        fn entry_price_excludes_a_cheaper_yearly_tier() {
+            let p = published(vec![
+                yearly_tier(MembershipTier::EarlyAdopter, 100, true),
+                tier(MembershipTier::Standard, 900, true),
+            ]);
+            assert_eq!(entry_price(&p).as_deref(), Some("$9.00/month")); // price-literal-ok: asserts the computed price+period, not copy
         }
 
         /// Nothing published means no number: the copy that used to hardcode
@@ -466,13 +519,24 @@ mod tests {
             ]);
             assert_eq!(
                 tier_price(&p, &MembershipTier::EarlyAdopter).as_deref(),
-                Some("$5.00")
+                Some("$5.00/month") // price-literal-ok: asserts the computed price+period, not copy
             );
             assert_eq!(tier_price(&p, &MembershipTier::Free), None);
             // `Unknown` is every tier this build cannot name, so it never
             // borrows the price of another unrecognised one.
             let unknown = published(vec![tier(MembershipTier::Unknown, 100, true)]);
             assert_eq!(tier_price(&unknown, &MembershipTier::Unknown), None);
+        }
+
+        /// BUNYIP-828: a tier mapped to a yearly Stripe price renders "/year",
+        /// not the previously-hardcoded "/month".
+        #[test]
+        fn tier_price_states_a_yearly_tiers_real_period() {
+            let p = published(vec![yearly_tier(MembershipTier::Standard, 9_900, true)]);
+            assert_eq!(
+                tier_price(&p, &MembershipTier::Standard).as_deref(),
+                Some("$99.00/year") // price-literal-ok: asserts the computed price+period, not copy
+            );
         }
 
         /// The per-user locked amount arrives as bare cents, so it is formatted
