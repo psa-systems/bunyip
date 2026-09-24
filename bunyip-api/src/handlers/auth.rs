@@ -1076,10 +1076,16 @@ pub async fn logout_redirect(
     if let Some(user) = &optional_user.0 {
         if let Some(refresh_token) = req.cookie("refresh_token").map(|c| c.value().to_string()) {
             let ip_address = extract_client_ip(&req);
-            auth_service
+            if let Err(e) = auth_service
                 .logout(refresh_token, user.sub, ip_address)
                 .await
-                .ok();
+            {
+                tracing::warn!(
+                    error = %e,
+                    user_id = %user.sub,
+                    "logout_redirect: refresh-token revoke failed; still clearing cookies"
+                );
+            }
         }
         revoke_op_sessions(&oidc_provider, user.sub).await;
     }
