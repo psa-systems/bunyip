@@ -169,3 +169,56 @@ async fn concurrent_submission_of_one_code_has_exactly_one_winner() {
         "exactly one concurrent submission of a code may succeed"
     );
 }
+
+/// BUNYIP-826 regression: two concurrent redemptions of the same recovery
+/// code must have exactly one winner. Before the fix, `mark_recovery_code_used`
+/// was an unguarded `UPDATE ... WHERE id = $1` with no `used_at IS NULL`
+/// check, so both racing verifies (each having already matched the code
+/// against the unused-codes read) succeeded unconditionally.
+#[tokio::test]
+async fn concurrent_redemption_of_one_recovery_code_has_exactly_one_winner() {
+    let Some(pool) = connect().await else {
+        eprintln!("RLS_TEST_DATABASE_URL unset; skipping recovery code concurrency test");
+        return;
+    };
+
+    let user_id = seed_user(&pool).await;
+    let service = Arc::new(TotpService::new(
+        key_set(),
+        "bunyip-test".to_string(),
+        pool.clone(),
+    ));
+    service
+        .enroll_preset(user_id, SECRET_BASE32)
+        .await
+        .expect("enroll preset secret");
+
+    let codes = service
+        .regenerate_recovery_codes(user_id)
+        .await
+        .expect("generate recovery codes");
+    let code = codes.first().cloned().expect("at least one recovery code");
+
+    let mut handles = Vec::new();
+    for _ in 0..8 {
+        let service = Arc::clone(&service);
+        let code = code.clone();
+        handles.push(tokio::spawn(async move {
+            service
+                .verify_recovery_code(user_id, &code)
+                .await
+                .expect("verify must not error under contention")
+        }));
+    }
+
+    let mut accepted = 0;
+    for handle in handles {
+        if handle.await.expect("join") {
+            accepted += 1;
+        }
+    }
+    assert_eq!(
+        accepted, 1,
+        "exactly one concurrent redemption of a recovery code may succeed"
+    );
+}
