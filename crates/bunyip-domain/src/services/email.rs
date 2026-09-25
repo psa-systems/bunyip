@@ -916,6 +916,17 @@ impl EmailService {
         in_reply_to: Option<String>,
         references: Option<String>,
     ) -> Result<String, AppError> {
+        let config = self.config();
+        // BUNYIP-825: a disabled or unbuilt transport is an ERROR here, not
+        // the silent dev-mode no-op the template senders take (mirrors
+        // `send_relay`): the admin needs to know the reply did not go out,
+        // so the caller must never record a phantom sent message.
+        let Some(transport) = self.transport().filter(|_| config.enabled) else {
+            return Err(AppError::internal(
+                "email is disabled; support replies cannot be sent",
+            ));
+        };
+
         // BUNYIP-762: this sender does not route through `send_email`, so it
         // carries its own check. An admin reply is not best-effort like the
         // template sends above: the admin needs to know the reply did not go
@@ -929,7 +940,6 @@ impl EmailService {
             ));
         }
 
-        let config = self.config();
         let mut context = self.base_context(&config);
         context.insert("response_message", &message);
         let (html, text) = self.render_template("support_reply", &context)?;
@@ -942,13 +952,9 @@ impl EmailService {
             in_reply_to.as_deref(),
             references.as_deref(),
         )?;
-        if let Some(transport) = self.transport() {
-            tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
-            transport.send(&config, email).await?;
-            tracing::info!(to = %to, subject = %subject, "Support reply sent");
-        } else {
-            tracing::info!(to = %to, subject = %subject, "Support reply not sent (dev mode)");
-        }
+        tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
+        transport.send(&config, email).await?;
+        tracing::info!(to = %to, subject = %subject, "Support reply sent");
         Ok(message_id)
     }
 
@@ -1613,6 +1619,31 @@ mod tests {
         assert!(
             stub.messages().await.is_empty(),
             "a suppressed recipient must never reach the transport"
+        );
+    }
+
+    /// BUNYIP-825: with `config.enabled = false`, `send_support_reply` must
+    /// error before any template renders or Message-ID is generated, rather
+    /// than the sibling template senders' silent dev-mode no-op, because the
+    /// caller treats `Ok` as proof the reply was actually sent.
+    #[tokio::test]
+    async fn send_support_reply_errors_when_email_is_disabled() {
+        let mut config = config_with_smtp("smtp.example.test", 587, SmtpTls::Starttls);
+        config.enabled = false;
+        let (service, stub) = EmailService::new_capturing(config);
+
+        let err = service
+            .send_support_reply("user@example.com", "Re: ticket", "body", None, None)
+            .await
+            .expect_err("a disabled transport must be refused, not silently accepted");
+
+        assert!(
+            err.to_string().contains("disabled"),
+            "expected a disabled-email error, got: {err}"
+        );
+        assert!(
+            stub.messages().await.is_empty(),
+            "no message may reach the transport when email is disabled"
         );
     }
 

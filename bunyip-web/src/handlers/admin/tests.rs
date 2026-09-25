@@ -2919,3 +2919,66 @@ mod rate_limit_management_tests {
         assert_eq!(fmt_window_secs(3600), "1h");
     }
 }
+
+#[cfg(test)]
+mod tier_settings_partial_failure_tests {
+    //! BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
+    //! separate backend writes; a failure of the second after the first
+    //! already committed must not read as "nothing was saved".
+    use super::*;
+    use crate::api::ApiError;
+
+    fn cfg() -> TierConfigResponse {
+        serde_json::from_value(json!({})).expect("defaulted TierConfigResponse")
+    }
+
+    fn form_values() -> TierFormValues {
+        TierFormValues {
+            lifetime_slots: "10".into(),
+            early_adopter_slots: "5".into(),
+            early_adopter_trial_days: "14".into(),
+            standard_trial_days: "7".into(),
+            trial_period_days: "30".into(),
+            orgs_enabled: true,
+        }
+    }
+
+    #[test]
+    fn stripe_step_failure_says_tier_settings_were_saved() {
+        // Simulates `update_tier_config` returning `Ok` and `update_stripe_config`
+        // returning `Err`: the handler builds its error message from
+        // `stripe_step_error_message`, which must distinguish "tier settings
+        // saved, checkout trial not saved" from a generic failure.
+        let stripe_err = ApiError {
+            status: 500,
+            code: "INTERNAL".into(),
+            message: "boom".into(),
+            retry_after: None,
+            request_id: None,
+        };
+        let msg = stripe_step_error_message(&stripe_err);
+        let cfg = cfg();
+        let values = form_values();
+        let html = tier_settings_content(
+            Some(&cfg),
+            None,
+            Err("unavailable"),
+            &values,
+            Some(&msg),
+            None,
+        )
+        .into_string();
+
+        assert!(
+            html.contains("Tier settings")
+                && html.contains("were saved")
+                && html.contains("checkout trial period was not"),
+            "the rendered page must say the tier settings saved and the checkout trial did not: {html}"
+        );
+        assert_ne!(
+            msg,
+            stripe_err.user_message(),
+            "the message must distinguish the partial-failure outcome from the bare backend error"
+        );
+    }
+}

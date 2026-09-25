@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
 use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
@@ -273,6 +274,19 @@ pub struct TierForm {
     // always renders and submits the control.
     #[serde(default)]
     pub orgs_enabled: Option<String>,
+}
+
+/// BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
+/// separate backend writes that cannot be wrapped in one database transaction
+/// from this BFF. When the first succeeds and the second fails, the tier
+/// settings (slots, trial days, organizations toggle) are already committed,
+/// so the error must say so rather than reading as a single undifferentiated
+/// failure that implies nothing was saved.
+pub(super) fn stripe_step_error_message(e: &ApiError) -> String {
+    format!(
+        "Tier settings (slots, trial days, organizations toggle) were saved, but the checkout trial period was not: {}",
+        e.user_message()
+    )
 }
 
 pub async fn tier_settings_save(

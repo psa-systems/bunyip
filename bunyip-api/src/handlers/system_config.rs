@@ -231,7 +231,12 @@ pub async fn update_system_config(
     // Apply the submitted values onto the current effective ones, then write one
     // file per key. BUNYIP-622: only application-level keys are writable here;
     // the system-level origins have no field on the request and no field on
-    // `SystemSettings`.
+    // `SystemSettings`. BUNYIP-831: the read-merge-write span is held under
+    // `SAVE_LOCK` for its whole duration, so a second overlapping save observes
+    // this one's on-disk result before merging its own changes, rather than
+    // both reading the same stale snapshot and the later write silently
+    // reverting whichever field the earlier one changed.
+    let _save_guard = bunyip_domain::sys_config::SAVE_LOCK.lock().await;
     let previous = SystemSettings::current();
     let mut settings = previous.clone();
     if let Some(v) = body.login_approval_enabled {
@@ -253,6 +258,7 @@ pub async fn update_system_config(
             SystemSettings::directory().display()
         ))
     })?;
+    drop(_save_guard);
 
     record_changes(&pool, &admin, &previous, &settings).await?;
 

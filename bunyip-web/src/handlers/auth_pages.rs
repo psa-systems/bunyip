@@ -497,6 +497,7 @@ fn password_reentry_hint() -> Markup {
 /// (`util::entry_price`), not a compile-time figure. The subtitle used to quote
 /// a hardcoded `$3/month` that no configuration backed; with nothing published
 /// it now states the offer without a number rather than a wrong one.
+/// BUNYIP-828: the price already carries its period, so none is appended here.
 fn register_card(
     errors: &RegisterErrors,
     email: &str,
@@ -504,7 +505,7 @@ fn register_card(
     entry_price: Option<&str>,
 ) -> Markup {
     let subtitle = match entry_price {
-        Some(p) => format!("Get access to all tools from {p}/month"),
+        Some(p) => format!("Get access to all tools from {p}"),
         None => "Get access to all tools".to_string(),
     };
     auth_card(
@@ -1575,10 +1576,15 @@ mod register_card_tests {
     /// hardcoded `$3/month`, a figure no configuration backed.
     #[test]
     fn signup_subtitle_quotes_the_configured_price() {
-        let priced = register_card(&RegisterErrors::default(), "", "", Some("$9.00")).into_string();
+        let priced =
+            register_card(&RegisterErrors::default(), "", "", Some("$9.00/month")).into_string(); // price-literal-ok: `entry_price` output shape
         assert!(
             priced.contains("Get access to all tools from $9.00/month"), // price-literal-ok: asserts the configured price reaches the copy
             "the subtitle must carry the configured price: {priced}"
+        );
+        assert!(
+            !priced.contains("/month/month"),
+            "the price already carries its period; the subtitle must not repeat it: {priced}"
         );
 
         let unpriced = register_card(&RegisterErrors::default(), "", "", None).into_string();
