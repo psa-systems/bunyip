@@ -197,8 +197,11 @@ impl TotpService {
             return Ok(false);
         };
 
-        TotpRepository::mark_recovery_code_used(&self.pool, code_id).await?;
-        Ok(true)
+        // BUNYIP-826: the read above only found the code unused; a concurrent
+        // redemption may have claimed it in the meantime. The guarded update's
+        // `rows_affected` is the actual race arbiter, so treat a lost race as
+        // redemption failure rather than a successful login.
+        TotpRepository::mark_recovery_code_used(&self.pool, code_id).await
     }
 
     /// Regenerate recovery codes (requires 2FA to be enabled)

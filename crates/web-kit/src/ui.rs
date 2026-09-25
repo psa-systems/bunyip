@@ -231,6 +231,18 @@ pub fn button_class(variant: &str, size: &str, extra: &str) -> String {
     )
 }
 
+/// A disabled/unlaunchable action, its reason stated in the visible label
+/// rather than a `title` attribute or an empty slot (BUNYIP-815). `BTN_BASE`'s
+/// `disabled:pointer-events-none` takes a disabled button out of hit-testing
+/// and keyboard focus, so a `title` tooltip on it never fires; putting the
+/// reason in the label is the shape every other disabled action in the app
+/// already used.
+pub fn disabled_button(variant: &str, size: &str, extra: &str, reason: &str) -> Markup {
+    html! {
+        button type="button" disabled class=(button_class(variant, size, extra)) { (reason) }
+    }
+}
+
 /// The one "return to the parent surface" affordance (BUNYIP-550 F6). Every
 /// surface with a parent renders this, so back navigation is one treatment
 /// instead of the four it had grown (muted text link with a literal arrow,
