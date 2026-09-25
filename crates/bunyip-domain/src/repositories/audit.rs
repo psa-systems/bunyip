@@ -43,8 +43,20 @@ fn push_audit_filters<'a>(
 }
 
 impl AuditLogRepository {
-    /// Create a new audit log entry
+    /// Create a new audit log entry.
     pub async fn create(pool: &PgPool, data: CreateAuditLog) -> Result<AuditLog, AppError> {
+        Self::create_in_tx(pool, data).await
+    }
+
+    /// Same write, generic over the executor so a caller can pass a
+    /// pool, a connection, or a live transaction. Used from endpoints
+    /// that must commit the audit row alongside their own writes so a
+    /// rolled-back save cannot leave a "config changed" trail without
+    /// the change.
+    pub async fn create_in_tx<'e, E>(exec: E, data: CreateAuditLog) -> Result<AuditLog, AppError>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
         let log = sqlx::query_as::<_, AuditLog>(
             r#"
             INSERT INTO audit_logs (
@@ -68,7 +80,7 @@ impl AuditLogRepository {
         .bind(&data.metadata)
         .bind(data.action.is_admin_action())
         .bind(data.severity.as_str())
-        .fetch_one(pool)
+        .fetch_one(exec)
         .await?;
 
         Ok(log)
