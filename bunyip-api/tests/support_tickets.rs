@@ -325,3 +325,56 @@ async fn a_reply_with_email_disabled_leaves_the_ticket_unchanged() {
         "the ticket must not move to pending when the reply was never sent"
     );
 }
+
+/// BUNYIP-824: a re-polled first-contact message (identical `message_id`, the
+/// shape an IMAP poller re-ingesting after a restart, a dropped connection, or
+/// a failed `mark_seen` produces) must not orphan a second, empty ticket.
+/// `ingest_inbound` called twice with the same `message_id` creates exactly
+/// one ticket and one message, and returns that same ticket both times.
+#[tokio::test]
+async fn a_repolled_message_never_orphans_a_second_ticket() {
+    let Some(pool) = test_pool("the support ingest re-poll idempotency test").await else {
+        return;
+    };
+
+    let message_id = format!("repoll-{}@ext.example", Uuid::new_v4());
+    let requester_email = format!("{}@ext.example", Uuid::new_v4());
+    let new_message = || NewInboundMessage {
+        subject: "Need help".to_string(),
+        from_email: requester_email.clone(),
+        from_name: None,
+        to_email: None,
+        body_text: "please help".to_string(),
+        body_html: None,
+        message_id: Some(message_id.clone()),
+        in_reply_to: None,
+        references: Vec::new(),
+    };
+
+    let first = SupportRepository::ingest_inbound(&pool, &new_message())
+        .await
+        .expect("first ingest");
+    let second = SupportRepository::ingest_inbound(&pool, &new_message())
+        .await
+        .expect("re-polled ingest must not error");
+
+    assert_eq!(
+        first.id, second.id,
+        "a re-polled message must resolve to the same ticket, not a new one"
+    );
+
+    let messages = SupportRepository::list_messages(&pool, first.id)
+        .await
+        .expect("list messages");
+    assert_eq!(
+        messages.len(),
+        1,
+        "the re-poll must not insert a second message"
+    );
+
+    let listed = SupportRepository::list_tickets(&pool, 100, 0)
+        .await
+        .expect("list tickets");
+    let matching = listed.iter().filter(|t| t.id == first.id).count();
+    assert_eq!(matching, 1, "the re-poll must not create an orphan ticket");
+}

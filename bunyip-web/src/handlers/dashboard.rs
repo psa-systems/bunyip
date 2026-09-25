@@ -21,13 +21,14 @@ use crate::handlers::{
     password_ok, rotating_index,
 };
 use crate::util::{
-    app_gradient, app_host, app_launch_link, days_until, entry_price, format_stripe_amount,
-    has_active_membership, pricing_currency, rel_time, tier_price, urlenc,
+    app_gradient, app_host, app_launch_link, days_until, entry_price, has_active_membership,
+    price_with_period, pricing_currency, rel_time, tier_price, urlenc,
 };
 use crate::views::layout::community_enabled;
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
-    back_link, badge, button_class, empty_state, error_box, icon, pager, success_box,
+    back_link, badge, button_class, disabled_button, empty_state, error_box, icon, pager,
+    success_box,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -93,7 +94,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                 div class="p-6 pt-0" {
                     @if is_member {
                         div class="flex items-center justify-between" {
-                            div { (membership_status(&user, &pricing_currency(&pricing))) }
+                            div { (membership_status(&user, &pricing)) }
                             // `outline` names its own border colour, which an `extra` cannot
                             // override (BUNYIP-656), so this spells the outline out:
                             // `ghost` plus the border and surface it would have given.
@@ -107,10 +108,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                                     "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5"))
                                 }
                             } @else {
-                                button type="button" disabled title="Payment is not configured"
-                                    class=(button_class("default", "sm", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20")) {
-                                    "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5"))
-                                }
+                                (disabled_button("default", "sm", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20", "Payment is not configured"))
                             }
                         }
                     }
@@ -173,6 +171,8 @@ fn dashboard_apps_grid(
                                             "Open " (app.display_name) (icon("external-link", "ml-2 h-4 w-4"))
                                         }
                                     }
+                                } @else {
+                                    (disabled_button("default", "default", "w-full", "Not configured"))
                                 }
                             } @else {
                                 button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -271,12 +271,13 @@ fn membership_prompt(user: &User) -> Markup {
     }
 }
 
-/// BUNYIP-590: `currency` is the one the published tiers are priced in
-/// (`util::pricing_currency`), because the per-user locked amount arrives as
-/// bare cents. A locked price whose amount is absent says only "Price locked":
-/// the number it used to print (`$3/month`) was a compile-time literal, and a
-/// locked price is exactly the one a current tier price may not equal.
-fn membership_status(user: &User, currency: &str) -> Markup {
+/// BUNYIP-590: the currency and period come from the published tiers
+/// (`util::pricing_currency` and the member's own tier's `interval`,
+/// BUNYIP-828), because the per-user locked amount arrives as bare cents. A
+/// locked price whose amount is absent says only "Price locked": the number
+/// it used to print (`$3/month`) was a compile-time literal, and a locked
+/// price is exactly the one a current tier price may not equal.
+fn membership_status(user: &User, pricing: &PricingResponse) -> Markup {
     if user.lifetime_member {
         return html! { p class="text-sm font-medium text-teal-600 dark:text-teal-400" { "Lifetime member 🎉" } };
     }
@@ -285,16 +286,21 @@ fn membership_status(user: &User, currency: &str) -> Markup {
         return html! { p class="text-sm text-muted-foreground" { "Trial ends in " (days) " day" (plural) } };
     }
     if user.membership_status == MembershipStatus::Active {
+        let interval = pricing
+            .tiers
+            .iter()
+            .find(|t| t.tier == user.membership_tier)
+            .and_then(|t| t.interval.as_deref());
         let locked = user
             .locked_price_amount
-            .map(|a| format_stripe_amount(Some(a), currency));
+            .map(|a| price_with_period(a, &pricing_currency(pricing), interval));
         return html! {
             p class="text-sm text-muted-foreground" {
                 "You have access to all applications."
                 @if user.price_locked {
                     span class="ml-2 text-teal-600 dark:text-teal-400 font-medium" {
                         "Price locked"
-                        @if let Some(p) = &locked { " at " (p) "/month" }
+                        @if let Some(p) = &locked { " at " (p) }
                     }
                 }
             }
@@ -370,6 +376,8 @@ fn app_card(
                         a href=(href) target="_blank" rel="noopener noreferrer" {
                             span class=(button_class("default", "default", &format!("w-full bg-gradient-to-r {gradient} text-white border-0 shadow-md"))) { "Launch" (icon("external-link", "ml-2 h-4 w-4")) }
                         }
+                    } @else {
+                        (disabled_button("default", "default", "w-full", "Not configured"))
                     }
                 } @else {
                     button type="button" disabled class=(button_class("default", "default", "w-full")) {
@@ -490,7 +498,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
                         @if stripe {
                             a href="/membership" class=(button_class("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0 shadow-md shadow-primary/20")) { "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5")) }
                         } @else {
-                            button type="button" disabled title="Payment is not configured" class=(button_class("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe Now " (icon("arrow-right", "h-3.5 w-3.5")) }
+                            (disabled_button("default", "default", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0", "Payment is not configured"))
                         }
                     }
                 }
@@ -963,7 +971,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
                 div class="p-6 pt-0 space-y-4" {
                     p class="text-center text-muted-foreground" {
                         "Subscribe to get access to all applications"
-                        @if let Some(p) = &price { " from " (p) "/month" }
+                        @if let Some(p) = &price { " from " (p) }
                         "."
                     }
                     div class="flex flex-col gap-4" {
@@ -1032,9 +1040,15 @@ fn plan_price(
     tier: &MembershipTier,
 ) -> Option<String> {
     match current {
-        Some(m) if m.price_locked => m
-            .locked_price_amount
-            .map(|a| format_stripe_amount(Some(a), &pricing_currency(pricing))),
+        Some(m) if m.price_locked => {
+            let interval = pricing
+                .tiers
+                .iter()
+                .find(|t| t.tier == *tier)
+                .and_then(|t| t.interval.as_deref());
+            m.locked_price_amount
+                .map(|a| price_with_period(a, &pricing_currency(pricing), interval))
+        }
         _ => tier_price(pricing, tier),
     }
 }
@@ -1157,7 +1171,7 @@ pub async fn membership(
                         @if let Some(m) = current.clone() {
                             div class="grid gap-4 md:grid-cols-2" {
                                 div { p class="text-sm text-muted-foreground" { "Plan" } p class="font-medium" { (tier_name(&tier)) } }
-                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if let Some(p) = &price { (p) "/month" } @else { "See pricing" } } }
+                                div { p class="text-sm text-muted-foreground" { "Price" } p class="font-medium" { @if let Some(p) = &price { (p) } @else { "See pricing" } } }
                                 div { p class="text-sm text-muted-foreground" { "Status" } p class="font-medium" { (status_label(&m.status)) } }
                                 div { p class="text-sm text-muted-foreground" { "Next Billing" } p class="font-medium" {
                                     // BUNYIP-330: current_period_end is None until the
@@ -1214,7 +1228,7 @@ pub async fn membership(
                                 @if stripe {
                                     form method="post" action="/membership/subscribe" { button type="submit" class=(button_class("default", "lg", "gap-2 bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe " (icon("arrow-right", "h-4 w-4")) } }
                                 } @else {
-                                    button type="button" disabled title="Payment is not configured" class=(button_class("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0")) { "Subscribe" }
+                                    (disabled_button("default", "lg", "bg-gradient-to-r from-primary to-indigo-500 text-white border-0", "Payment is not configured"))
                                 }
                             }
                         }
@@ -3023,6 +3037,39 @@ mod tests {
         );
     }
 
+    /// BUNYIP-815 (F18): `app_tile_link` returning `None` for an accessible app
+    /// used to leave the card's action slot empty - no button, no label, no
+    /// explanation. Both call sites must fall back to a disabled button that
+    /// states a reason.
+    #[test]
+    fn dashboard_grid_states_a_reason_when_the_tile_has_no_link() {
+        let mut lets_chat = app_with_release_notes(None);
+        lets_chat.slug = "lets-chat".into();
+        lets_chat.subdomain = Some("chat".into());
+        assert!(!community_enabled());
+        let html = dashboard_apps_grid(&[lets_chat], true, "a8n.systems", true).into_string();
+        assert!(
+            html.contains("disabled") && html.contains("Not configured"),
+            "an accessible app with no tile link must render a disabled button \
+             stating a reason, not an empty action slot: {html}"
+        );
+    }
+
+    /// Same regression as above, for the `/applications` page's `app_card`.
+    #[test]
+    fn app_card_states_a_reason_when_the_tile_has_no_link() {
+        let mut lets_chat = app_with_release_notes(None);
+        lets_chat.slug = "lets-chat".into();
+        lets_chat.subdomain = Some("chat".into());
+        assert!(!community_enabled());
+        let html = app_card(&lets_chat, "a8n.systems", true, None).into_string();
+        assert!(
+            html.contains("disabled") && html.contains("Not configured"),
+            "an accessible app with no tile link must render a disabled button \
+             stating a reason, not an empty action slot: {html}"
+        );
+    }
+
     fn membership_row(price_locked: bool, locked_price_amount: Option<i64>) -> Membership {
         Membership {
             status: MembershipStatus::Active,
@@ -3090,12 +3137,32 @@ mod tests {
         let locked = membership_row(true, Some(500));
         assert_eq!(
             plan_price(Some(&locked), &pricing, &MembershipTier::Standard).as_deref(),
-            Some("$5.00")
+            Some("$5.00/month") // price-literal-ok: asserts the computed price+period, not copy
         );
         let unlocked = membership_row(false, None);
         assert_eq!(
             plan_price(Some(&unlocked), &pricing, &MembershipTier::Standard).as_deref(),
-            Some("$9.00")
+            Some("$9.00/month") // price-literal-ok: asserts the computed price+period, not copy
+        );
+    }
+
+    /// BUNYIP-828: a tier mapped to a yearly Stripe price prices the plan card
+    /// as "/year", whether the member's price is locked or current.
+    #[test]
+    fn plan_price_states_a_yearly_tiers_real_period() {
+        let mut pricing = standard_pricing(9_900);
+        pricing.tiers[0].interval = Some("year".into());
+
+        let locked = membership_row(true, Some(9_900));
+        assert_eq!(
+            plan_price(Some(&locked), &pricing, &MembershipTier::Standard).as_deref(),
+            Some("$99.00/year") // price-literal-ok: asserts the computed price+period, not copy
+        );
+
+        let unlocked = membership_row(false, None);
+        assert_eq!(
+            plan_price(Some(&unlocked), &pricing, &MembershipTier::Standard).as_deref(),
+            Some("$99.00/year") // price-literal-ok: asserts the computed price+period, not copy
         );
     }
 
@@ -3133,15 +3200,31 @@ mod tests {
     #[test]
     fn membership_panel_renders_the_locked_amount() {
         let mut u = user(UserRole::Subscriber, MembershipStatus::Active);
+        u.membership_tier = MembershipTier::Standard;
         u.price_locked = true;
         u.locked_price_amount = Some(500);
-        let html = membership_status(&u, "usd").into_string();
+        let html = membership_status(&u, &standard_pricing(900)).into_string();
         assert!(html.contains("Price locked at $5.00/month"), "{html}"); // price-literal-ok: asserts the locked amount reaches the copy
 
         u.locked_price_amount = None;
-        let html = membership_status(&u, "usd").into_string();
+        let html = membership_status(&u, &standard_pricing(900)).into_string();
         assert!(html.contains("Price locked"), "{html}");
         assert!(!html.contains("/month"), "no invented price: {html}");
+    }
+
+    /// BUNYIP-828: a member locked into a yearly tier sees the real period,
+    /// not the previously hardcoded "/month".
+    #[test]
+    fn membership_panel_states_a_yearly_lock_period() {
+        let mut u = user(UserRole::Subscriber, MembershipStatus::Active);
+        u.membership_tier = MembershipTier::Standard;
+        u.price_locked = true;
+        u.locked_price_amount = Some(9_900);
+        let mut pricing = standard_pricing(9_900);
+        pricing.tiers[0].interval = Some("year".into());
+        let html = membership_status(&u, &pricing).into_string();
+        assert!(html.contains("Price locked at $99.00/year"), "{html}"); // price-literal-ok: asserts the locked amount reaches the copy
+        assert!(!html.contains("/month"), "{html}");
     }
 
     #[test]
