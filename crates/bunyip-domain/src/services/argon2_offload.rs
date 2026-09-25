@@ -22,7 +22,7 @@
 //! `ARGON2_PERMIT_TIMEOUT_SECS` (default 5) fails closed through the same
 //! `internal` error path as a panicked task, never `Ok(false)`.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use tokio::sync::Semaphore;
@@ -43,15 +43,15 @@ fn service() -> &'static PasswordService {
 
 /// The semaphore bounding concurrent in-flight Argon2 operations, sized once
 /// from `ARGON2_MAX_CONCURRENT` (default `DEFAULT_MAX_CONCURRENT`).
-fn permits() -> &'static Semaphore {
-    static PERMITS: OnceLock<Semaphore> = OnceLock::new();
+fn permits() -> &'static Arc<Semaphore> {
+    static PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
     PERMITS.get_or_init(|| {
         let max = std::env::var("ARGON2_MAX_CONCURRENT")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|v| *v > 0)
             .unwrap_or(DEFAULT_MAX_CONCURRENT);
-        Semaphore::new(max)
+        Arc::new(Semaphore::new(max))
     })
 }
 
@@ -81,7 +81,7 @@ fn permit_timeout() -> Duration {
 /// as a wrong password.
 async fn offload_bounded<T, F>(
     operation: &'static str,
-    semaphore: &Semaphore,
+    semaphore: &Arc<Semaphore>,
     timeout: Duration,
     work: F,
 ) -> Result<T, AppError>
@@ -89,7 +89,7 @@ where
     F: FnOnce() -> Result<T, AppError> + Send + 'static,
     T: Send + 'static,
 {
-    let _permit = match tokio::time::timeout(timeout, semaphore.acquire()).await {
+    let permit = match tokio::time::timeout(timeout, semaphore.clone().acquire_owned()).await {
         Ok(Ok(permit)) => permit,
         Ok(Err(_)) => unreachable!("the semaphore is never closed"),
         Err(_) => {
@@ -101,7 +101,14 @@ where
         }
     };
 
-    match tokio::task::spawn_blocking(work).await {
+    // The permit moves into the blocking task, so a cancelled caller cannot free
+    // it while the hash still runs.
+    match tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    {
         Ok(result) => result,
         Err(e) => {
             tracing::error!(error = %e, operation, "Argon2 task failed to join");
@@ -208,7 +215,7 @@ mod tests {
     /// result.
     #[tokio::test]
     async fn a_request_that_times_out_waiting_for_a_permit_fails_closed() {
-        let semaphore = Semaphore::new(1);
+        let semaphore = Arc::new(Semaphore::new(1));
         let held = semaphore.acquire().await.unwrap();
 
         let result: Result<bool, AppError> = offload_bounded(
@@ -221,6 +228,39 @@ mod tests {
 
         assert!(matches!(result, Err(AppError::InternalError { .. })));
         drop(held);
+    }
+
+    /// A caller cancelled mid-hash must not release its permit early: the
+    /// blocking work keeps running, so the permit stays held until it ends.
+    #[tokio::test]
+    async fn a_cancelled_caller_keeps_its_permit_until_the_work_ends() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+
+        let sem = semaphore.clone();
+        let caller = tokio::spawn(async move {
+            offload_bounded("cancel", &sem, Duration::from_secs(5), move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.recv();
+                Ok::<(), AppError>(())
+            })
+            .await
+        });
+        started_rx.await.unwrap();
+        caller.abort();
+        let _ = caller.await;
+
+        assert_eq!(
+            semaphore.available_permits(),
+            0,
+            "the permit must stay held while the blocking work still runs"
+        );
+        release_tx.send(()).unwrap();
+        let _permit = tokio::time::timeout(Duration::from_secs(5), semaphore.acquire())
+            .await
+            .expect("the permit is returned once the work ends")
+            .unwrap();
     }
 
     /// The property BUNYIP-553 is about, on the runtime shape that makes it
