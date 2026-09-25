@@ -145,6 +145,8 @@ pub struct SystemSettings {
 /// whole `current()` .. `save()` span (`update_system_config` in
 /// `bunyip-api/src/handlers/system_config.rs`), so a second concurrent save
 /// observes the first save's on-disk result before merging its own changes.
+/// Every other writer (the settings-archive restore in
+/// `bunyip-api/src/settings_archive.rs`) holds it around its `save()` too.
 /// Sufficient for a single-process deployment only: a settings directory shared
 /// across multiple API replicas would need an `flock` on the directory instead,
 /// which this does not provide.
