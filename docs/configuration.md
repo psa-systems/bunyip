@@ -431,6 +431,10 @@ Every variable below has a working default; set it only to tune the deployment.
   it (30 is a sensible value) while investigating database contention. The acquire-timeout counter is collected either
   way; only the periodic line is gated. See
   [`api-performance-measurements.md`](api-performance-measurements.md).
+- **Argon2 concurrency** (BUNYIP-827): `ARGON2_MAX_CONCURRENT` - maximum concurrent in-flight Argon2 hash/verify
+  operations, bounded independently of tokio's default blocking-thread pool; default 32. `ARGON2_PERMIT_TIMEOUT_SECS` -
+  seconds a caller waits for a permit before failing closed with an internal error, never a wrong-password result;
+  default 5. See `crates/bunyip-domain/src/services/argon2_offload.rs`.
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage

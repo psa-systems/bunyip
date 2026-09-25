@@ -1298,7 +1298,13 @@ pub async fn revoke(
     authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
     // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
-    let _ = do_revoke(provider, client.client_id, &form.token).await;
+    if let Err(e) = do_revoke(provider, client.client_id, &form.token).await {
+        tracing::warn!(
+            error = %e,
+            client_id = %client.client_id,
+            "revoke: token revocation failed; still returning 200 per RFC 7009 §2.2"
+        );
+    }
     Ok(HttpResponse::Ok().finish())
 }
 

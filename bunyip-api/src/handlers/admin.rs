@@ -3567,6 +3567,183 @@ pub async fn update_tier_config(
 }
 
 // =============================================================================
+// Combined tier-settings write
+// =============================================================================
+
+/// Body for the atomic tier-settings write. Six fields: the five that
+/// belong to `tier_config` (slots, trials, orgs) plus the checkout trial
+/// on `stripe_config`. Every field is required; the shape mirrors the
+/// admin form so an empty submission is a form defect, not a partial
+/// update.
+#[derive(Debug, Deserialize)]
+pub struct UpdateTierSettingsRequest {
+    pub lifetime_slots: i64,
+    pub early_adopter_slots: i64,
+    pub early_adopter_trial_days: i64,
+    pub standard_trial_days: i64,
+    pub orgs_enabled: bool,
+    pub trial_period_days: i32,
+}
+
+/// PUT /v1/admin/tier-settings
+///
+/// The two writes the admin's "Tiers & Slots" form used to make in
+/// sequence (tier_config slots/trials/orgs + stripe_config trial) here
+/// commit in one database transaction, so a failure on either side
+/// rolls the whole save back. The admin never sees a state where the
+/// slot count moved and the trial length did not.
+pub async fn update_tier_settings(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    auth_service: web::Data<Arc<AuthService>>,
+    pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
+    body: web::Json<UpdateTierSettingsRequest>,
+) -> Result<HttpResponse, AppError> {
+    use crate::config::TierConfig;
+    use crate::models::stripe::StripeConfig;
+    use crate::models::tier::{TierConfigResponse, TierConfigRow, TierConfigWithPricing};
+
+    let request_id = get_request_id(&req);
+
+    // Validate ranges up front so an error means neither side wrote.
+    if body.lifetime_slots < 0 {
+        return Err(AppError::validation(
+            "lifetime_slots",
+            "Must be non-negative",
+        ));
+    }
+    if body.early_adopter_slots < 0 {
+        return Err(AppError::validation(
+            "early_adopter_slots",
+            "Must be non-negative",
+        ));
+    }
+    if body.early_adopter_trial_days < 0 {
+        return Err(AppError::validation(
+            "early_adopter_trial_days",
+            "Must be non-negative",
+        ));
+    }
+    if body.standard_trial_days < 0 {
+        return Err(AppError::validation(
+            "standard_trial_days",
+            "Must be non-negative",
+        ));
+    }
+    if !(0..=365).contains(&body.trial_period_days) {
+        return Err(AppError::validation(
+            "trial_period_days",
+            "Must be between 0 and 365",
+        ));
+    }
+
+    // Both writes go in one transaction. A failure on either side rolls
+    // the whole save back, which is the reason this endpoint exists.
+    let mut tx = pool.begin().await?;
+
+    let tier_row: TierConfigRow = sqlx::query_as(
+        r#"
+        UPDATE tier_config
+        SET
+            lifetime_slots           = $1,
+            early_adopter_slots      = $2,
+            early_adopter_trial_days = $3,
+            standard_trial_days      = $4,
+            orgs_enabled             = $5,
+            updated_at               = NOW(),
+            updated_by               = $6
+        WHERE id = 1
+        RETURNING *
+        "#,
+    )
+    .bind(body.lifetime_slots)
+    .bind(body.early_adopter_slots)
+    .bind(body.early_adopter_trial_days)
+    .bind(body.standard_trial_days)
+    .bind(body.orgs_enabled)
+    .bind(admin.0.sub)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let stripe_row: StripeConfig = sqlx::query_as(
+        r#"
+        UPDATE stripe_config
+        SET
+            trial_period_days = $1,
+            updated_at        = NOW(),
+            updated_by        = $2
+        WHERE id = 1
+        RETURNING *
+        "#,
+    )
+    .bind(body.trial_period_days)
+    .bind(admin.0.sub)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let audit_log = CreateAuditLog::new(AuditAction::AdminTierConfigUpdated)
+        .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
+        .with_metadata(serde_json::json!({
+            "endpoint": "tier-settings",
+            "lifetime_slots": body.lifetime_slots,
+            "early_adopter_slots": body.early_adopter_slots,
+            "early_adopter_trial_days": body.early_adopter_trial_days,
+            "standard_trial_days": body.standard_trial_days,
+            "orgs_enabled": body.orgs_enabled,
+            "trial_period_days": body.trial_period_days,
+        }));
+    AuditLogRepository::create_in_tx(&mut *tx, audit_log).await?;
+
+    tx.commit().await?;
+
+    // Post-commit cache refreshes: the admin's next request must see
+    // the new orgs flag and the pricing page must render the fresh
+    // trial length without waiting out its TTL.
+    let (stack, _source) = section_stack(
+        TierConfig::database_provider(&tier_row),
+        crate::config_providers::TIER_KEYS,
+    )?;
+    let resolved = TierConfig::resolve(&stack, Some(&tier_row));
+    auth_service.reload_tier_config(resolved.clone());
+    pricing_cache.invalidate();
+
+    let (lifetime_used, early_adopter_used) =
+        UserRepository::count_tier_assignments(pool.get_ref()).await?;
+
+    Ok(success(
+        serde_json::json!({
+            "tier_config": TierConfigWithPricing {
+                pricing_enabled: resolved.pricing_enabled,
+                lifetime_visible: resolved.lifetime_visible,
+                early_adopter_visible: resolved.early_adopter_visible,
+                standard_visible: resolved.standard_visible,
+                orgs_enabled: resolved.orgs_enabled,
+                config: TierConfigResponse {
+                    lifetime_slots: resolved.lifetime_slots,
+                    early_adopter_slots: resolved.early_adopter_slots,
+                    early_adopter_trial_days: resolved.early_adopter_trial_days,
+                    standard_trial_days: resolved.standard_trial_days,
+                    free_price_id: resolved.free_price_id,
+                    early_adopter_price_id: resolved.early_adopter_price_id,
+                    standard_price_id: resolved.standard_price_id,
+                    lifetime_product_id: resolved.lifetime_product_id,
+                    early_adopter_product_id: resolved.early_adopter_product_id,
+                    standard_product_id: resolved.standard_product_id,
+                    source: "database",
+                    lifetime_slots_used: lifetime_used,
+                    early_adopter_slots_used: early_adopter_used,
+                    updated_at: tier_row.updated_at,
+                    updated_by: tier_row.updated_by,
+                },
+            },
+            "trial_period_days": stripe_row.trial_period_days,
+        }),
+        request_id,
+    ))
+}
+
+// =============================================================================
 // Auto-ban Configuration (BUNYIP-351)
 // =============================================================================
 
