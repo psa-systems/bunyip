@@ -220,6 +220,15 @@ pub fn routes() -> Router<AppState> {
             post(admin::branding_asset_clear),
         )
         .route("/admin/email", get(admin::email).post(admin::email_save))
+        // BUNYIP-834: mailer suppression list (view / remove).
+        .route(
+            "/admin/mailer-suppressions",
+            get(admin::mailer_suppressions),
+        )
+        .route(
+            "/admin/mailer-suppressions/:address/delete",
+            post(admin::mailer_suppression_delete),
+        )
         .route(
             "/admin/system-config",
             get(admin::system_config).post(admin::system_config_save),
