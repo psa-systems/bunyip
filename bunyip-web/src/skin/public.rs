@@ -60,18 +60,22 @@ fn try_phrase(brand_name: &str) -> String {
     }
 }
 
-/// BUNYIP-561: the feature cards name the product from the admin-managed brand
-/// record, so they are built per render rather than being a `const` of
-/// `&'static str`.
-fn features(brand_name: &str) -> Vec<Feature> {
-    let brand = brand_or_platform(brand_name);
+/// BUNYIP-809: the six feature cards describe the CAPABILITY without naming
+/// the brand. The hero subhead and the features intro already name the brand
+/// once each on this page, so a repeated name in every card body added no
+/// information; it just turned "single sign-on" into "Acme is the OIDC entry
+/// point, everywhere Acme signs you in, wraps around Acme's Mokosh...". The
+/// cards are still built per render rather than as `const &'static str` so
+/// future copy that legitimately needs the brand can splice it in without
+/// bringing the signature back.
+fn features(_brand_name: &str) -> Vec<Feature> {
     vec![
-        Feature { icon: "key", title: "Single sign-on", desc: format!("{brand} is the OIDC entry point. Your team logs in once and lands in Mokosh.") },
+        Feature { icon: "key", title: "Single sign-on", desc: "One OIDC entry point. Your team logs in once and lands in Mokosh.".to_string() },
         Feature { icon: "credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit.".to_string() },
         // BUNYIP-487: replaced the "Orgs and members" card. The product has no
         // orgs table, no invitations, and no role switching, so the old copy
         // advertised three features that do not exist.
-        Feature { icon: "users", title: "Membership and entitlements", desc: format!("Tier, trial, and per-application entitlements resolved in one place and honored everywhere {brand} signs you in.") },
+        Feature { icon: "users", title: "Membership and entitlements", desc: "Tier, trial, and per-application entitlements resolved in one place and honored on every sign-in.".to_string() },
         Feature { icon: "shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links.".to_string() },
         Feature { icon: "trending-up", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need.".to_string() },
         Feature { icon: "message-square-quote", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo.".to_string() },
@@ -126,13 +130,16 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
 }
 
 /// The landing page's application cards. Absent with no applications.
-fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup {
+///
+/// BUNYIP-809: the subtitle no longer repeats the brand. The section heading
+/// says the same thing ("Wired into your stack") without needing to name it.
+fn wired_apps_section(apps: &[Application], domain: &str) -> Markup {
     html! {
         @if !apps.is_empty() {
             section class="relative py-20" {
                 div class="container relative scroll-fade-up in-view" {
                     h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
-                    p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { (format!("{brand} is the front door to the products your team already runs.")) }
+                    p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { "The front door to the products your team already runs." }
                     div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
                         @for app in apps {
                             div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col transition-all hover:shadow-lg border-border/50" {
@@ -236,7 +243,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     div class="max-w-2xl" {
                         p class="text-sm uppercase tracking-wide font-semibold text-brand-primary-600 dark:text-brand-primary-300" { "What you get" }
                         h2 class="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-brand-primary-900 dark:text-brand-primary-50" { "Everything around the product. Nothing in it." }
-                        p class="mt-4 text-muted-foreground" { (format!("{brand} is the business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA.")) }
+                        p class="mt-4 text-muted-foreground" { "The business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA." }
                     }
                     div class="mt-12 grid gap-6 md:grid-cols-3 auto-rows-fr scroll-fade-up-child in-view" {
                         @for f in &features {
@@ -260,7 +267,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             // decision: the CTA below reads better without a section
             // that offers per-app links they cannot follow yet.
             @if app_links_allowed {
-                (wired_apps_section(&apps, &st.cfg.app_domain, brand))
+                (wired_apps_section(&apps, &st.cfg.app_domain))
             }
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
@@ -423,20 +430,28 @@ mod copy_tests {
         assert_eq!(trial_chip(0), "Free trial");
     }
 
-    /// BUNYIP-561: the landing copy names the admin-managed brand, and names no
-    /// product at all when the record is empty. The old codename literals were
-    /// the whole reason the codename leaked into every shared link.
+    /// BUNYIP-561: no feature card names the retired codename, whatever the
+    /// admin has branded the deployment as. BUNYIP-809: the six feature-card
+    /// bodies also no longer name the CURRENT brand: the hero subhead and
+    /// the features intro name it once each, so a repeated brand in every
+    /// card body was noise. The helpers this test still covers (`brand_or_platform`,
+    /// `try_phrase`) do name the brand where they still run, at their two
+    /// remaining call sites (the features-intro subhead and the CTA button).
     #[test]
-    fn marketing_copy_follows_the_brand_and_never_falls_back_to_a_product_name() {
+    fn feature_cards_never_name_the_codename_or_the_current_brand() {
         for f in features("Acme") {
             assert!(
                 !f.desc.contains("Bunyip"), // brand-literal-ok: the assertion that the codename is gone
                 "feature card {:?} still names the codename",
                 f.title
             );
+            assert!(
+                !f.desc.contains("Acme"),
+                "feature card {:?} names the brand (BUNYIP-809 pruned that): {}",
+                f.title,
+                f.desc,
+            );
         }
-        assert!(features("Acme")[0].desc.starts_with("Acme is the OIDC"));
-        assert!(features("")[0].desc.starts_with("The platform is the OIDC"));
 
         assert_eq!(brand_or_platform("Acme"), "Acme");
         assert_eq!(brand_or_platform(""), "The platform");
@@ -762,14 +777,14 @@ mod wired_apps_tests {
             app("lets-chat", Some("chat"), "Let's Chat"),
             app("backup", None, "Backup"),
         ];
-        let html = wired_apps_section(&apps, "a8n.systems", "Brand").into_string();
+        let html = wired_apps_section(&apps, "a8n.systems").into_string();
         assert!(html.contains("Chat") && html.contains("Backup"));
         assert_eq!(html.matches("Learn more").count(), 1);
         assert!(html.contains(r#"href="https://chat.a8n.systems""#));
         assert!(!html.contains("backup.a8n.systems"));
         assert!(!html.contains(r##"href="#""##));
 
-        let no_domain = wired_apps_section(&apps, "", "Brand").into_string();
+        let no_domain = wired_apps_section(&apps, "").into_string();
         assert!(!no_domain.contains("Learn more"));
         assert!(!no_domain.contains("href="));
     }
