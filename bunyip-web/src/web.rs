@@ -59,18 +59,20 @@ impl AppState {
             .unwrap_or_else(unpublished_pricing)
     }
 
-    /// The application list the PUBLIC chrome renders: the footer's Product
-    /// column for every visitor, and the header's launch links for a signed-in
-    /// one (BUNYIP-638). Coalesced per TTL.
+    /// The application list an ANONYMOUS visitor sees: the footer's Product
+    /// column, and (BUNYIP-638) the landing page's cards for a cookie-less
+    /// caller. Coalesced per TTL.
     ///
-    /// Deliberately fetched WITHOUT the visitor's cookie: `/v1/applications`
-    /// lists the same active hosted applications for every caller and varies
-    /// only in the per-user `is_accessible` bit, which neither public surface
-    /// reads. Fetching it anonymously is what makes ONE shared cache slot
-    /// correct - a per-user payload in a process-wide cache would be served to
-    /// the next visitor. The authenticated pages that DO read `is_accessible`
-    /// (`/dashboard`, `/applications`) keep their own per-request, cookie-bearing
-    /// fetch.
+    /// Deliberately fetched WITHOUT a cookie, and safe to share across every
+    /// anonymous visitor in ONE cache slot for exactly that reason: as of
+    /// BUNYIP-794 `/v1/applications` omits a `requires_entitlement`
+    /// application entirely for an anonymous caller, so this list can never
+    /// contain one and there is no per-visitor bit left for a shared slot to
+    /// get wrong. It is NOT visitor-invariant in general - an entitled,
+    /// signed-in caller sees more - which is why every surface that can reach
+    /// a signed-in visitor (`/dashboard`, `/applications`, and the landing
+    /// page via `skin::public::landing_applications`) keeps its own
+    /// per-request, cookie-bearing fetch instead of reading this cache.
     pub async fn public_applications(&self) -> Arc<Vec<Application>> {
         self.applications_cache
             .get_or_fetch(|| calls::applications(&self.api, None))
@@ -211,8 +213,12 @@ mod chrome_fetch_guards {
     /// The one exception is deliberate and narrow: `/dashboard` and
     /// `/applications` read the per-user `is_accessible` bit, so they keep a
     /// cookie-bearing fetch that must NOT be shared across visitors.
+    /// BUNYIP-833: `skin/public.rs` joins them - a signed-in landing-page
+    /// visitor's list must include an entitled `requires_entitlement`
+    /// application the shared anonymous cache can never contain (BUNYIP-794).
     #[test]
     fn every_chrome_payload_read_goes_through_the_cache() {
+        const APPLICATIONS_CACHE_EXEMPT: &[&str] = &["handlers/dashboard.rs", "skin/public.rs"];
         for (name, src) in SOURCES {
             for needle in [
                 "auth_api::setup_status(",
@@ -224,7 +230,7 @@ mod chrome_fetch_guards {
                     "{name} fetches {needle} directly; use the AppState TTL cache"
                 );
             }
-            if *name != "handlers/dashboard.rs" {
+            if !APPLICATIONS_CACHE_EXEMPT.contains(name) {
                 assert!(
                     hits(src, "calls::applications(").is_empty(),
                     "{name} fetches the application list per render; use st.public_applications()"
