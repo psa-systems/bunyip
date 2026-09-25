@@ -8,9 +8,10 @@ use axum::middleware::Next;
 use axum::response::Response;
 use maud::{html, Markup};
 
+use crate::api::calls;
 use crate::api::types::Application;
 use crate::config::Config;
-use crate::handlers::public_ctx;
+use crate::handlers::{cookie_of, public_ctx};
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{asset, brand_mark, brand_name, branding, document, public_shell};
 use crate::views::ui::{button_class, icon};
@@ -164,13 +165,34 @@ fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup
     }
 }
 
+/// The application list backing the landing page's cards (BUNYIP-833).
+/// `GET /v1/applications` omits a `requires_entitlement` application entirely
+/// for an anonymous caller (BUNYIP-794's security fix), so the shared,
+/// cookie-free `AppState::public_applications` cache can never contain one - an
+/// entitled, signed-in visitor reading it would still lose the card. A visitor
+/// carrying a session cookie therefore gets a fresh, cookie-bearing,
+/// per-request fetch instead (the same pattern `/dashboard` and
+/// `/applications` already use), and only a cookie-less visitor reads the
+/// shared cache.
+async fn landing_applications(st: &AppState, cookie: Option<&str>) -> Vec<Application> {
+    match cookie {
+        Some(cookie) => calls::applications(&st.api, Some(cookie))
+            .await
+            .unwrap_or_default(),
+        None => (*st.public_applications().await).clone(),
+    }
+}
+
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // the application list feeds only the landing cards now, so
     // it is fetched here rather than in `public_ctx` (which every public
     // render paid for). `join!` keeps the miss cost the slower of the two,
     // not their sum.
-    let ((c, pricing, app_links_allowed), apps) =
-        tokio::join!(public_ctx(&st, &headers), st.public_applications(),);
+    let fwd = cookie_of(&headers);
+    let ((c, pricing, app_links_allowed), apps) = tokio::join!(
+        public_ctx(&st, &headers),
+        landing_applications(&st, fwd.as_deref()),
+    );
     let signed_in = c.is_signed_in();
     // BUNYIP-487: the advertised trial length comes from
     // `tier_config.standard_trial_days`, never a literal.
@@ -772,5 +794,157 @@ mod wired_apps_tests {
         let no_domain = wired_apps_section(&apps, "", "Brand").into_string();
         assert!(!no_domain.contains("Learn more"));
         assert!(!no_domain.contains("href="));
+    }
+}
+
+#[cfg(test)]
+mod landing_entitlement_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::{HeaderMap, Request, StatusCode};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    use super::landing;
+    use crate::ttl_cache::TtlCache;
+    use crate::web::AppState;
+
+    /// A minimal stand-in for bunyip-api, answering the three calls a
+    /// landing-page render makes. `/v1/applications` mirrors BUNYIP-794's
+    /// entitlement filter: the restricted row is present only when the
+    /// request carries a `Cookie` header, exactly as an anonymous caller gets
+    /// it omitted outright while an entitled, signed-in caller gets it back.
+    async fn mock_bunyip_api() -> String {
+        async fn me() -> Json<Value> {
+            Json(json!({
+                "data": {
+                    "id": "u1",
+                    "email": "member@example.com",
+                    "role": "subscriber",
+                    "email_verified": true,
+                    "two_factor_enabled": false,
+                    "first_name": "Ada",
+                    "last_name": "Lovelace"
+                }
+            }))
+        }
+        async fn pricing() -> Json<Value> {
+            Json(json!({"enabled": false, "trial_days": 0, "tiers": []}))
+        }
+        async fn applications(headers: HeaderMap) -> Json<Value> {
+            let unrestricted = json!({
+                "id": "a1", "slug": "open-app", "display_name": "Open App", "is_accessible": true
+            });
+            let restricted = json!({
+                "id": "a2", "slug": "restricted-app", "display_name": "Restricted App", "is_accessible": true
+            });
+            let apps = if headers.contains_key(axum::http::header::COOKIE) {
+                vec![unrestricted, restricted]
+            } else {
+                vec![unrestricted]
+            };
+            Json(json!({"data": {"applications": apps}}))
+        }
+
+        let router = Router::new()
+            .route("/v1/users/me", get(me))
+            .route("/v1/pricing", get(pricing))
+            .route("/v1/applications", get(applications));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener
+            .local_addr()
+            .expect("the mock API has a local address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
+    fn state(api_url: &str) -> AppState {
+        AppState {
+            api: crate::api::Api::new(api_url),
+            cfg: Arc::new(crate::config::Config::from_env()),
+            pricing_cache: Arc::new(TtlCache::new(
+                "/v1/pricing",
+                "PricingResponse",
+                "test",
+                Duration::from_millis(1),
+            )),
+            applications_cache: Arc::new(TtlCache::new(
+                "/v1/applications",
+                "Vec<Application>",
+                "test",
+                Duration::from_millis(1),
+            )),
+            setup_status_cache: Arc::new(TtlCache::new(
+                "/v1/auth/setup/status",
+                "SetupStatus",
+                "test",
+                Duration::from_millis(1),
+            )),
+            documented_apps_cache: Arc::new(TtlCache::new(
+                "/v1/application-docs",
+                "Vec<DocumentedApp>",
+                "test",
+                Duration::from_millis(1),
+            )),
+        }
+    }
+
+    async fn body_of(res: axum::response::Response) -> String {
+        let bytes = to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("the body reads");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// BUNYIP-833: an entitled, signed-in visitor's landing-page render shows
+    /// the restricted application's card; an anonymous visitor's render never
+    /// does, because the anonymous, cookie-free list bunyip-web fetches for
+    /// them never carries the restricted app's name/icon/subdomain at all.
+    #[tokio::test]
+    async fn a_signed_in_entitled_visitor_sees_a_restricted_app_an_anonymous_one_never_does() {
+        let api_url = mock_bunyip_api().await;
+        let app = Router::new()
+            .route("/", get(landing))
+            .with_state(state(&api_url));
+
+        let signed_in = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(axum::http::header::COOKIE, "session=abc")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(signed_in.status(), StatusCode::OK);
+        let body = body_of(signed_in).await;
+        assert!(body.contains("Restricted App"), "{body}");
+        assert!(body.contains("Open App"), "{body}");
+
+        let anonymous = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(anonymous.status(), StatusCode::OK);
+        let body = body_of(anonymous).await;
+        assert!(!body.contains("Restricted App"), "{body}");
+        assert!(!body.contains("Open App"), "{body}");
     }
 }
