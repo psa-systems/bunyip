@@ -329,6 +329,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))
+            // Atomic write of the six fields the admin's "Tiers & Slots"
+            // form owns: the four tier_config numbers plus the orgs
+            // toggle plus the checkout trial length on stripe_config.
+            // Combines what used to be two sequential PUTs.
+            .route(
+                "/tier-settings",
+                web::put().to(handlers::update_tier_settings),
+            )
             // Branding (BUNYIP-561): the product name, tagline, meta
             // description and Open Graph image, admin-managed rather than
             // compiled in. A PUT refreshes the api-side cache in the same

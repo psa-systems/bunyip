@@ -1214,6 +1214,18 @@ pub async fn update_tier_config(
     ok_data(&r).map(|_| ())
 }
 
+/// Combined write of the six fields the admin's "Tiers & Slots" form
+/// owns. Replaces the sequential `update_tier_config` + `update_stripe_config`
+/// pair; either write failing rolls the whole save back on the api side.
+pub async fn update_tier_settings(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/tier-settings", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
 pub async fn auto_ban_config(
     api: &Api,
     cookie: Option<&str>,
