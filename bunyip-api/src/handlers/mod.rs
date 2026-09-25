@@ -244,8 +244,8 @@ pub use admin::{
     reset_user_two_factor, revoke_admin_invite, revoke_lifetime_membership, revoke_membership,
     send_test_email_message, set_application_group, set_user_tier, test_email_config,
     update_application, update_application_group, update_auto_ban_config, update_email_config,
-    update_stripe_config, update_tier_config, update_user_email, update_user_role,
-    update_user_status, verify_user_email,
+    update_stripe_config, update_tier_config, update_tier_settings, update_user_email,
+    update_user_role, update_user_status, verify_user_email,
 };
 pub use admin_branding::{
     delete_branding_asset, get_branding, update_branding, upload_branding_asset,

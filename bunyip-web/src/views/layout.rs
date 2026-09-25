@@ -673,6 +673,12 @@ fn admin_items() -> Vec<NavItem> {
             external: false,
         },
         NavItem {
+            title: "Mailer Suppressions",
+            href: "/admin/mailer-suppressions",
+            icon: "shield-off",
+            external: false,
+        },
+        NavItem {
             title: "System",
             href: "/admin/system-config",
             icon: "settings",

@@ -8,10 +8,10 @@ use super::types::{
     AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse, RestoreReport,
-    SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice,
-    StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult,
-    TierConfigResponse, UserEntitlement,
+    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
+    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
+    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
+    TestEmailResult, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -682,6 +682,43 @@ pub async fn revoke_admin_invite(
     ok_data(&r).map(|_| ())
 }
 
+// --- mailer suppressions (BUNYIP-762) ---------------------------------------
+
+/// List suppressed addresses, newest first. Wraps
+/// `GET /v1/admin/mailer-suppressions`, paginated.
+pub async fn list_mailer_suppressions(
+    api: &Api,
+    cookie: Option<&str>,
+    page: u32,
+    per_page: u32,
+) -> Result<PaginatedResponse<MailerSuppression>, ApiError> {
+    parse(
+        api.get(
+            &format!("/admin/mailer-suppressions?page={page}&per_page={per_page}"),
+            cookie,
+        )
+        .await?,
+    )
+}
+
+/// Lift a suppression so `address` can be mailed again. Wraps
+/// `DELETE /v1/admin/mailer-suppressions/{address}`, which 404s when the
+/// address was not suppressed.
+pub async fn delete_mailer_suppression(
+    api: &Api,
+    cookie: Option<&str>,
+    address: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/mailer-suppressions/{}", urlenc(address)),
+            cookie,
+            None,
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
 // --- rate limits (BUNYIP-317) -----------------------------------------------
 
 /// List the currently-active throttles (user/IP, action, count/cap, window
@@ -1174,6 +1211,18 @@ pub async fn update_tier_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/tier-config", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Combined write of the six fields the admin's "Tiers & Slots" form
+/// owns. Replaces the sequential `update_tier_config` + `update_stripe_config`
+/// pair; either write failing rolls the whole save back on the api side.
+pub async fn update_tier_settings(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/tier-settings", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 

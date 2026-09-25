@@ -767,6 +767,22 @@ pub struct AdminInvite {
     pub created_at: String,
 }
 
+/// One suppressed address as returned by `GET /v1/admin/mailer-suppressions`
+/// (BUNYIP-762). Mirrors `bunyip_domain::repositories::mailer_suppression::MailerSuppression`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MailerSuppression {
+    #[serde(default)]
+    pub address: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub detail: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
 /// Advisory ASN / VPN enrichment for one address as returned by
 /// `GET /v1/admin/ip-enrichment?ip=<addr>` (BUNYIP-437). Mirrors
 /// `bunyip_api::handlers::admin_ip_enrichment::IpEnrichmentResponse`: `category`
