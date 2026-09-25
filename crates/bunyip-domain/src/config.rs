@@ -2164,6 +2164,17 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "DB_POOL_METRICS_INTERVAL_SECS",
         "seconds between database pool size/idle samples; unset or 0 means no sampling",
     ),
+    // BUNYIP-827: bounds concurrent Argon2 work independently of tokio's
+    // default blocking-thread pool, so a distributed burst of otherwise
+    // rate-limit-compliant requests cannot exhaust it.
+    EnvVarSpec::defaulted(
+        "ARGON2_MAX_CONCURRENT",
+        "maximum concurrent in-flight Argon2 hash/verify operations; default 32",
+    ),
+    EnvVarSpec::defaulted(
+        "ARGON2_PERMIT_TIMEOUT_SECS",
+        "seconds a caller waits for an Argon2 concurrency permit before failing closed; default 5",
+    ),
     EnvVarSpec::defaulted("HOST_IP", "bind address"),
     EnvVarSpec::defaulted("APP_PORT", "listen port"),
     EnvVarSpec::defaulted("RUST_LOG", "log filter"),

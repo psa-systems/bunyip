@@ -2,7 +2,7 @@
 //! tickets and their threaded messages; the inbound poller (slice 3) and the
 //! app-composed reply (slice 4) are the callers.
 
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use uuid::Uuid;
 
 use crate::errors::AppError;
@@ -20,6 +20,19 @@ impl SupportRepository {
         requester_email: &str,
         requester_name: Option<&str>,
     ) -> Result<SupportTicket, AppError> {
+        let mut tx = pool.begin().await?;
+        let ticket =
+            Self::create_ticket_tx(&mut tx, subject, requester_email, requester_name).await?;
+        tx.commit().await?;
+        Ok(ticket)
+    }
+
+    async fn create_ticket_tx(
+        conn: &mut PgConnection,
+        subject: &str,
+        requester_email: &str,
+        requester_name: Option<&str>,
+    ) -> Result<SupportTicket, AppError> {
         let ticket = sqlx::query_as::<_, SupportTicket>(
             r#"
             INSERT INTO support_tickets (subject, requester_email, requester_name, status)
@@ -31,7 +44,7 @@ impl SupportRepository {
         .bind(requester_email)
         .bind(requester_name)
         .bind(TicketStatus::Open.as_str())
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?;
         Ok(ticket)
     }
@@ -44,6 +57,16 @@ impl SupportRepository {
         msg: &NewMessage,
     ) -> Result<SupportMessage, AppError> {
         let mut tx = pool.begin().await?;
+        let message = Self::add_message_tx(&mut tx, ticket_id, msg).await?;
+        tx.commit().await?;
+        Ok(message)
+    }
+
+    async fn add_message_tx(
+        conn: &mut PgConnection,
+        ticket_id: Uuid,
+        msg: &NewMessage,
+    ) -> Result<SupportMessage, AppError> {
         let message = sqlx::query_as::<_, SupportMessage>(
             r#"
             INSERT INTO support_messages
@@ -62,7 +85,7 @@ impl SupportRepository {
         .bind(msg.message_id.as_deref())
         .bind(msg.in_reply_to.as_deref())
         .bind(msg.mail_references.as_deref())
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *conn)
         .await?;
 
         sqlx::query(
@@ -73,10 +96,27 @@ impl SupportRepository {
             "#,
         )
         .bind(ticket_id)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
 
-        tx.commit().await?;
+        Ok(message)
+    }
+
+    /// Find a stored message by its mail Message-ID, keyed on the same partial
+    /// unique index (`message_id IS NOT NULL`) that dedupes re-polled mail.
+    pub async fn find_message_by_id(
+        pool: &PgPool,
+        message_id: &str,
+    ) -> Result<Option<SupportMessage>, AppError> {
+        let message = sqlx::query_as::<_, SupportMessage>(
+            r#"
+            SELECT * FROM support_messages
+            WHERE message_id = $1
+            "#,
+        )
+        .bind(message_id)
+        .fetch_optional(pool)
+        .await?;
         Ok(message)
     }
 
@@ -109,10 +149,26 @@ impl SupportRepository {
     /// Ingest a parsed inbound message: thread it onto the ticket its headers
     /// point at, or open a new ticket when nothing matches. Returns the ticket
     /// the message landed on.
+    ///
+    /// A message whose `message_id` was already ingested (a re-poll after a
+    /// restart, a dropped connection, or a failed `mark_seen`) short-circuits
+    /// to that message's existing ticket before any ticket lookup or creation
+    /// runs, so it never creates a second ticket. Otherwise `create_ticket`
+    /// and `add_message` commit as one transaction, so a message-insert
+    /// failure (for instance a `message_id` collision this check missed under
+    /// a race) rolls back the ticket creation instead of leaving an orphan.
     pub async fn ingest_inbound(
         pool: &PgPool,
         msg: &NewInboundMessage,
     ) -> Result<SupportTicket, AppError> {
+        if let Some(message_id) = &msg.message_id {
+            if let Some(existing) = Self::find_message_by_id(pool, message_id).await? {
+                return Self::get_ticket(pool, existing.ticket_id)
+                    .await?
+                    .ok_or_else(|| AppError::internal("matched support ticket vanished"));
+            }
+        }
+
         // In-Reply-To (the direct parent) first, then the References chain.
         let mut candidates: Vec<String> = Vec::new();
         if let Some(irt) = &msg.in_reply_to {
@@ -120,13 +176,26 @@ impl SupportRepository {
         }
         candidates.extend(msg.references.iter().cloned());
 
-        let ticket = match Self::find_ticket_by_message_ids(pool, &candidates).await? {
-            Some(ticket_id) => Self::get_ticket(pool, ticket_id)
-                .await?
-                .ok_or_else(|| AppError::internal("matched support ticket vanished"))?,
+        let matched_ticket_id = Self::find_ticket_by_message_ids(pool, &candidates).await?;
+
+        let mail_references = if msg.references.is_empty() {
+            None
+        } else {
+            Some(msg.references.join(" "))
+        };
+
+        let mut tx = pool.begin().await?;
+        let ticket = match matched_ticket_id {
+            Some(ticket_id) => {
+                sqlx::query_as::<_, SupportTicket>("SELECT * FROM support_tickets WHERE id = $1")
+                    .bind(ticket_id)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| AppError::internal("matched support ticket vanished"))?
+            }
             None => {
-                Self::create_ticket(
-                    pool,
+                Self::create_ticket_tx(
+                    &mut tx,
                     &msg.subject,
                     &msg.from_email,
                     msg.from_name.as_deref(),
@@ -135,13 +204,8 @@ impl SupportRepository {
             }
         };
 
-        let mail_references = if msg.references.is_empty() {
-            None
-        } else {
-            Some(msg.references.join(" "))
-        };
-        Self::add_message(
-            pool,
+        Self::add_message_tx(
+            &mut tx,
             ticket.id,
             &NewMessage {
                 direction: MessageDirection::Inbound,
@@ -156,6 +220,7 @@ impl SupportRepository {
         )
         .await?;
 
+        tx.commit().await?;
         Ok(ticket)
     }
 

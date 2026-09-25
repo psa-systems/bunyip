@@ -1641,7 +1641,11 @@ pub async fn apply(
         },
     });
 
-    let settings_result = SystemSettings::from(&snapshot.sections.system_settings).save();
+    // BUNYIP-831: hold `SAVE_LOCK` so a concurrent `update_system_config` merge cannot interleave.
+    let settings_result = {
+        let _save_guard = bunyip_domain::sys_config::SAVE_LOCK.lock().await;
+        SystemSettings::from(&snapshot.sections.system_settings).save()
+    };
     steps.push(match &settings_result {
         Ok(()) => StepOutcome {
             step: "system settings (file layer)".to_string(),
