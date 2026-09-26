@@ -6,6 +6,7 @@
 /bunyip-api/src/handlers/user.rs
 /bunyip-api/src/seed.rs
 /bunyip-api/tests/country_gate.rs
+/bunyip-api/tests/hub_refresh_op_session.rs
 /bunyip-api/tests/login_approval.rs
 /bunyip-api/tests/mailer_relay.rs
 /bunyip-api/tests/pms709_repro.rs
