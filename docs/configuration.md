@@ -424,6 +424,27 @@ Every variable below has a working default; set it only to tune the deployment.
   `OCI_TOKEN_TTL_SECS`.
 - **OIDC**: `OIDC_JWT_PUBLIC_KEYS_DIR`, `OIDC_ACCESS_TOKEN_TTL_SECONDS`, `OIDC_REFRESH_TOKEN_TTL_SECONDS`,
   `OIDC_REFRESH_IDLE_TTL_SECONDS`, `OIDC_CODE_TTL_SECONDS`, `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE`.
+- **OP session lifetime** (BUNYIP-636): `SESSION_IDLE_TTL_SECONDS` - the OP session's sliding-idle deadline for
+  an ordinary sign-in, in seconds; default 28800 (8 h). `SESSION_IDLE_TTL_REMEMBER_SECONDS` - the same, when the
+  user opted into "remember me"; default 1209600 (14 d). The absolute deadline pair (1 d / 30 d) is set from
+  `remember` at `create_op_session` and matches the refresh-token cookie's max-age. These control the OP session
+  (`op_sessions.expires_at` + `op_sessions.idle_expires_at`) and, from BUNYIP-636 onward, they are the ONLY
+  session clock: every hub refresh and every OIDC refresh grant consults the same `op_sessions` row, refuses
+  when it is revoked or past either deadline, and slides the idle deadline forward by
+  `SESSION_IDLE_TTL_SECONDS` on any successful rotation. `OIDC_REFRESH_TOKEN_TTL_SECONDS` and
+  `OIDC_REFRESH_IDLE_TTL_SECONDS` are therefore UPPER BOUNDS on a rotated RP refresh token's own row, not an
+  independent clock: a rotated refresh's idle deadline is `min(now + OIDC_REFRESH_IDLE_TTL_SECONDS, session's
+  slid idle)`, and its absolute deadline is `min(family's original absolute, now + OIDC_REFRESH_TOKEN_TTL_SECONDS,
+  session's absolute)`.
+
+  **Behaviour change to know about** when upgrading past BUNYIP-636: an ordinary (non-remember-me) sign-in now
+  ends after 8 h idle where an RP refresh token used to renew on its own 14-day idle clock. A user actively
+  clicking around the product will not notice, because activity anywhere under the session (hub or any RP)
+  slides the same deadline forward; a tab left idle overnight will hit the shorter deadline and sign the user
+  out in every application on the next interaction. Remember-me sign-ins retain the 14-day idle / 30-day
+  absolute pair. The idle deadline uses the value the session was created with, not the current setting, so
+  changing `SESSION_IDLE_TTL_*_SECONDS` in the environment affects only NEW sign-ins; live sessions keep
+  whatever they were minted with until the user signs in again.
 - **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` (read verbatim; must match the environment slug
   configured under Infisical > Secrets > Project > Settings > Environments exactly, e.g. `prod`).
 - **Diagnostics**: `DB_POOL_METRICS_INTERVAL_SECS` - seconds between database pool samples (`size` / `idle` / `in_use` /
@@ -431,6 +452,10 @@ Every variable below has a working default; set it only to tune the deployment.
   it (30 is a sensible value) while investigating database contention. The acquire-timeout counter is collected either
   way; only the periodic line is gated. See
   [`api-performance-measurements.md`](api-performance-measurements.md).
+- **Argon2 concurrency** (BUNYIP-827): `ARGON2_MAX_CONCURRENT` - maximum concurrent in-flight Argon2 hash/verify
+  operations, bounded independently of tokio's default blocking-thread pool; default 32. `ARGON2_PERMIT_TIMEOUT_SECS` -
+  seconds a caller waits for a permit before failing closed with an internal error, never a wrong-password result;
+  default 5. See `crates/bunyip-domain/src/services/argon2_offload.rs`.
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage

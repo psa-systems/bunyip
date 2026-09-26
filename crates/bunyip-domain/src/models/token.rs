@@ -19,6 +19,15 @@ pub struct RefreshToken {
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// BUNYIP-636 PR 3b: the OP session that authorised this hub refresh
+    /// token. `Some` for tokens minted after PR 3b when an op-session
+    /// provider is configured; `None` on pre-PR-3b rows and on mints
+    /// where no op-session exists. The hub refresh path reads this to
+    /// gate + slide the session and to cap the rotated token's deadline
+    /// at the session's absolute expiry; a `None` value falls back to
+    /// the legacy `refresh_absolute_ttl` behaviour.
+    #[serde(skip_serializing)]
+    pub op_session_id: Option<Uuid>,
 }
 
 impl RefreshToken {
@@ -444,6 +453,7 @@ mod tests {
             created_at: Utc::now(),
             last_used_at: None,
             revoked_at,
+            op_session_id: None,
         }
     }
 

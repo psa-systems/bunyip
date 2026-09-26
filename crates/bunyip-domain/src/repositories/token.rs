@@ -55,6 +55,36 @@ impl TokenRepository {
         Ok(token)
     }
 
+    /// BUNYIP-636 PR 3b: bind a just-minted hub refresh token to the OP
+    /// session that authorised its login, so the hub refresh path can gate
+    /// and slide the session on rotation. Called by every login handler
+    /// AFTER `establish_op_session` succeeds; a failure here is warned but
+    /// non-fatal (the token still works, it just falls back to the legacy
+    /// refresh_absolute_ttl deadline on rotation until it is re-issued).
+    ///
+    /// The lookup keys on `token_hash + user_id` rather than the newly
+    /// minted row's id so the caller does not have to thread that id back
+    /// out of `create_tokens` for a change that already knows the raw
+    /// refresh token.
+    pub async fn link_refresh_to_op_session(
+        pool: &PgPool,
+        token_hash: &str,
+        user_id: Uuid,
+        op_session_id: Uuid,
+    ) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE refresh_tokens \
+             SET op_session_id = $1 \
+             WHERE token_hash = $2 AND user_id = $3 AND op_session_id IS NULL",
+        )
+        .bind(op_session_id)
+        .bind(token_hash)
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
     /// Find refresh token by hash
     pub async fn find_refresh_token_by_hash(
         pool: &PgPool,

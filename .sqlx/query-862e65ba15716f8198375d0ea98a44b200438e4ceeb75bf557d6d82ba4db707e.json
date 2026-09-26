@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE op_sessions SET last_active_at = NOW(), idle_expires_at = $1 WHERE id = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Timestamptz",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "862e65ba15716f8198375d0ea98a44b200438e4ceeb75bf557d6d82ba4db707e"
+}

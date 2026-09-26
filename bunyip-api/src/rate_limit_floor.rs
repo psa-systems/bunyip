@@ -173,9 +173,20 @@ where
                         path = %path,
                         "request cap floor exceeded"
                     );
+                    // BUNYIP-804: name the bucket in the response, not only in
+                    // the tracing log. A 429 with no body forced every incident
+                    // to be diagnosed from server logs; a caller (E2E, an admin
+                    // reading a browser network tab) can now identify the
+                    // tripped bucket from the response alone.
                     let res = HttpResponse::TooManyRequests()
                         .insert_header(("Retry-After", retry_after.to_string()))
-                        .finish();
+                        .insert_header(("X-RateLimit-Bucket", config.action))
+                        .json(serde_json::json!({
+                            "error": "rate limit exceeded",
+                            "code": "RATE_LIMITED",
+                            "bucket": config.action,
+                            "retry_after": retry_after,
+                        }));
                     Ok(req.into_response(res).map_into_right_body())
                 }
                 Ok((_count, false)) => service.call(req).await.map(|res| res.map_into_left_body()),
@@ -234,6 +245,27 @@ mod tests {
         assert!(!is_exempt("/v1/auth/setup/status/extra", &Method::GET));
         assert!(!is_exempt("/v1/mailer/send/extra", &Method::POST));
         assert!(!is_exempt("/v1/mailer", &Method::POST));
+    }
+
+    /// BUNYIP-804: the 429 response names the bucket in its own body
+    /// and headers, not only in the tracing log, so an incident can be
+    /// diagnosed from the wire without pulling server logs.
+    #[test]
+    fn the_429_response_carries_the_bucket_name() {
+        let src = include_str!("rate_limit_floor.rs");
+        let body = src.split("\n#[cfg(test)]").next().unwrap();
+        assert!(
+            body.contains("X-RateLimit-Bucket"),
+            "the 429 must carry the bucket in a header for programmatic consumers"
+        );
+        assert!(
+            body.contains("\"bucket\": config.action"),
+            "the 429 body must carry the bucket name for human diagnostics"
+        );
+        assert!(
+            body.contains("\"retry_after\": retry_after"),
+            "the 429 body must carry retry_after for a caller that reads JSON"
+        );
     }
 
     /// Regression guard: this middleware must never hold a cloned

@@ -78,6 +78,10 @@ impl MokoshHttpBackupAdapter {
             BACKUP_TOKEN_ACR,
             &[],
             None,
+            // BUNYIP-636 PR 4: this internal-only mint has no OP session
+            // context (it authenticates the backup pipeline as the admin
+            // user, not a browser flow), so the `sid` claim is absent.
+            None,
         )?;
         Ok(token)
     }

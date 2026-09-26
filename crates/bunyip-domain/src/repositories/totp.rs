@@ -284,13 +284,18 @@ impl TotpRepository {
         Ok(code)
     }
 
-    /// Mark a recovery code as used
-    pub async fn mark_recovery_code_used(pool: &PgPool, code_id: Uuid) -> Result<(), AppError> {
-        sqlx::query("UPDATE recovery_codes SET used_at = NOW() WHERE id = $1")
-            .bind(code_id)
-            .execute(pool)
-            .await?;
-        Ok(())
+    /// Atomically claim a recovery code as used (BUNYIP-826). The `used_at IS
+    /// NULL` guard makes `rows_affected` the race arbiter, the same shape as
+    /// [`crate::repositories::TokenRepository::mark_magic_link_token_used`]:
+    /// exactly one of N concurrent redemptions of the same code gets `true`.
+    pub async fn mark_recovery_code_used(pool: &PgPool, code_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            "UPDATE recovery_codes SET used_at = NOW() WHERE id = $1 AND used_at IS NULL",
+        )
+        .bind(code_id)
+        .execute(pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     /// Count unused recovery codes for a user

@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
 use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
@@ -275,6 +276,19 @@ pub struct TierForm {
     pub orgs_enabled: Option<String>,
 }
 
+/// BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
+/// separate backend writes that cannot be wrapped in one database transaction
+/// from this BFF. When the first succeeds and the second fails, the tier
+/// settings (slots, trial days, organizations toggle) are already committed,
+/// so the error must say so rather than reading as a single undifferentiated
+/// failure that implies nothing was saved.
+pub(super) fn stripe_step_error_message(e: &ApiError) -> String {
+    format!(
+        "Tier settings (slots, trial days, organizations toggle) were saved, but the checkout trial period was not: {}",
+        e.user_message()
+    )
+}
+
 pub async fn tier_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -287,67 +301,47 @@ pub async fn tier_settings_save(
     let fwd = c.forward.as_deref();
 
     // Validate everything up front so a bad field names itself and nothing is
-    // persisted on a partial failure. The two backends (tier config + the single
-    // stripe-config trial) are only called once every field parses.
+    // persisted on a partial failure. The single backend call below is
+    // reached only once every field parses.
     let outcome = (|| {
-        let mut tier_body = serde_json::Map::new();
-        tier_body.insert(
-            "lifetime_slots".into(),
-            json!(parse_tier_field(
-                &f.lifetime_slots,
-                "Lifetime slots",
-                MAX_TIER_SLOTS
-            )?),
-        );
-        tier_body.insert(
-            "early_adopter_slots".into(),
-            json!(parse_tier_field(
-                &f.early_adopter_slots,
-                "Early-adopter slots",
-                MAX_TIER_SLOTS
-            )?),
-        );
-        tier_body.insert(
-            "early_adopter_trial_days".into(),
-            json!(parse_tier_field(
-                &f.early_adopter_trial_days,
-                "Early-adopter trial days",
-                MAX_TRIAL_DAYS
-            )?),
-        );
-        tier_body.insert(
-            "standard_trial_days".into(),
-            json!(parse_tier_field(
-                &f.standard_trial_days,
-                "Standard trial days",
-                MAX_TRIAL_DAYS
-            )?),
-        );
-        // BUNYIP-493: a checkbox needs no parsing, but it does need sending on
-        // every save: omitting it would leave the stored value in place and make
-        // unticking the box a silent no-op.
-        tier_body.insert("orgs_enabled".into(), json!(f.orgs_enabled.is_some()));
-        // BUNYIP-527: the checkout trial is a stripe_config value, bounded [0,365].
+        let lifetime = parse_tier_field(&f.lifetime_slots, "Lifetime slots", MAX_TIER_SLOTS)?;
+        let early_adopter = parse_tier_field(
+            &f.early_adopter_slots,
+            "Early-adopter slots",
+            MAX_TIER_SLOTS,
+        )?;
+        let early_trial = parse_tier_field(
+            &f.early_adopter_trial_days,
+            "Early-adopter trial days",
+            MAX_TRIAL_DAYS,
+        )?;
+        let standard_trial = parse_tier_field(
+            &f.standard_trial_days,
+            "Standard trial days",
+            MAX_TRIAL_DAYS,
+        )?;
+        // The unchecked checkbox is absent from the form submission, so
+        // read presence rather than parse; unticking must be a real change.
+        let orgs_enabled = f.orgs_enabled.is_some();
         let checkout_trial = parse_tier_field(&f.trial_period_days, "Checkout trial (days)", 365)?;
-        Ok::<_, String>((serde_json::Value::Object(tier_body), checkout_trial))
+        Ok::<_, String>(json!({
+            "lifetime_slots": lifetime,
+            "early_adopter_slots": early_adopter,
+            "early_adopter_trial_days": early_trial,
+            "standard_trial_days": standard_trial,
+            "orgs_enabled": orgs_enabled,
+            "trial_period_days": checkout_trial,
+        }))
     })();
 
     let error = match outcome {
-        Ok((tier_body, checkout_trial)) => {
-            // Persist the tier config, then the stripe-config trial. Either error
-            // surfaces inline; the tier body is slots/trials only, so it never
-            // touches the price mapping the catalog form owns.
-            match admin_api::update_tier_config(&st.api, fwd, tier_body).await {
-                Ok(()) => match admin_api::update_stripe_config(
-                    &st.api,
-                    fwd,
-                    json!({ "trial_period_days": checkout_trial }),
-                )
-                .await
-                {
-                    Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
-                    Err(e) => e.user_message(),
-                },
+        Ok(body) => {
+            // One backend call, one transaction. A rejected save on
+            // either column rolls the whole thing back, so the admin
+            // never sees a state where the slot count moved and the
+            // trial length did not.
+            match admin_api::update_tier_settings(&st.api, fwd, body).await {
+                Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
                 Err(e) => e.user_message(),
             }
         }

@@ -1160,6 +1160,16 @@ pub struct OidcConfig {
     pub refresh_idle_ttl_secs: u32,
     /// Authorization code TTL in seconds (default 60, max 120).
     pub code_ttl_secs: u32,
+    /// BUNYIP-636: OP session sliding-idle deadline for a regular sign-in,
+    /// in seconds (default 8 h = 28_800). Applied at `create_op_session` and
+    /// rolled forward by every refresh rotation (PR 2 onwards). The absolute
+    /// deadline is `refresh_token_ttl_secs` and stays the hard ceiling: the
+    /// idle deadline is what makes an unattended session end within a day.
+    pub session_idle_ttl_secs: u32,
+    /// BUNYIP-636: OP session sliding-idle deadline when the user opted into
+    /// "remember me", in seconds (default 14 d = 1_209_600). The absolute
+    /// deadline in that mode is unchanged (30 d, i.e. `refresh_token_ttl_secs`).
+    pub session_idle_ttl_remember_secs: u32,
     /// Event-type URI used as the key for the lifecycle-event claim in minted
     /// lifecycle JWTs. This is part of the event contract consumed by relying
     /// parties, so deployments that already publish a specific URI must pin it
@@ -1204,6 +1214,14 @@ impl OidcConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(60)
                 .min(120),
+            session_idle_ttl_secs: env::var("SESSION_IDLE_TTL_SECONDS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(28_800),
+            session_idle_ttl_remember_secs: env::var("SESSION_IDLE_TTL_REMEMBER_SECONDS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(1_209_600),
             lifecycle_event_key: env::var("OIDC_LIFECYCLE_EVENT_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -2164,6 +2182,17 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "DB_POOL_METRICS_INTERVAL_SECS",
         "seconds between database pool size/idle samples; unset or 0 means no sampling",
     ),
+    // BUNYIP-827: bounds concurrent Argon2 work independently of tokio's
+    // default blocking-thread pool, so a distributed burst of otherwise
+    // rate-limit-compliant requests cannot exhaust it.
+    EnvVarSpec::defaulted(
+        "ARGON2_MAX_CONCURRENT",
+        "maximum concurrent in-flight Argon2 hash/verify operations; default 32",
+    ),
+    EnvVarSpec::defaulted(
+        "ARGON2_PERMIT_TIMEOUT_SECS",
+        "seconds a caller waits for an Argon2 concurrency permit before failing closed; default 5",
+    ),
     EnvVarSpec::defaulted("HOST_IP", "bind address"),
     EnvVarSpec::defaulted("APP_PORT", "listen port"),
     EnvVarSpec::defaulted("RUST_LOG", "log filter"),
@@ -2288,6 +2317,14 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted("OIDC_REFRESH_TOKEN_TTL_SECONDS", "OIDC refresh token TTL"),
     EnvVarSpec::defaulted("OIDC_REFRESH_IDLE_TTL_SECONDS", "OIDC refresh idle TTL"),
     EnvVarSpec::defaulted("OIDC_CODE_TTL_SECONDS", "authorization code TTL"),
+    EnvVarSpec::defaulted(
+        "SESSION_IDLE_TTL_SECONDS",
+        "OP session sliding-idle deadline for a regular sign-in (BUNYIP-636)",
+    ),
+    EnvVarSpec::defaulted(
+        "SESSION_IDLE_TTL_REMEMBER_SECONDS",
+        "OP session sliding-idle deadline for a remember-me sign-in (BUNYIP-636)",
+    ),
     EnvVarSpec::defaulted(
         "OIDC_LIFECYCLE_EVENT_KEY",
         "back-channel lifecycle event key",

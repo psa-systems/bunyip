@@ -241,7 +241,9 @@ pub async fn verify_2fa(
     // Complete login. BUNYIP-382: device-trust is now driven by the sign-in's
     // "remember me" (carried in the challenge), so `trusted_token` is Some only
     // when the user chose remember-me AND is a subscriber (BUNYIP-138).
-    let (tokens, user_response, trusted_token) = auth_service
+    // BUNYIP-636 adds a fourth tuple element: `remember` from the challenge,
+    // so the OP session below can be set from the same signal.
+    let (tokens, user_response, trusted_token, remember) = auth_service
         .complete_2fa_login(&body.challenge_token, device_info, ip_address)
         .await?;
 
@@ -250,7 +252,9 @@ pub async fn verify_2fa(
 
     // BUNYIP-257: TOTP-verified login. The second factor satisfies the
     // MFA assurance; amr reflects both factors that participated.
-    let op_cookie = crate::handlers::auth::establish_op_session(
+    // BUNYIP-636: the OP session takes the sign-in's `remember` so its
+    // idle window matches the refresh-token cookie's max-age.
+    let established = crate::handlers::auth::establish_op_session(
         &oidc_provider,
         &req,
         user_response.id,
@@ -258,6 +262,14 @@ pub async fn verify_2fa(
         config.op_session_cookie_domain(),
         crate::handlers::auth::ACR_MFA,
         &["pwd".to_string(), "mfa".to_string()],
+        remember,
+    )
+    .await;
+    crate::handlers::auth::link_hub_refresh_to_op_session(
+        &auth_service,
+        &established,
+        &tokens.refresh_token,
+        user_response.id,
     )
     .await;
 
@@ -284,8 +296,8 @@ pub async fn verify_2fa(
     if let Some(token) = trusted_token {
         resp.cookie(AuthCookies::trusted_device(&token, secure, cookie_domain));
     }
-    if let Some(op) = op_cookie {
-        resp.cookie(op);
+    if let Some(session) = established {
+        resp.cookie(session.cookie);
     }
     Ok(resp.json(crate::responses::ApiResponse {
         success: true,

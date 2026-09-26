@@ -8,9 +8,10 @@ use axum::middleware::Next;
 use axum::response::Response;
 use maud::{html, Markup};
 
+use crate::api::calls;
 use crate::api::types::Application;
 use crate::config::Config;
-use crate::handlers::public_ctx;
+use crate::handlers::{cookie_of, public_ctx};
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{asset, brand_mark, brand_name, branding, document, public_shell};
 use crate::views::ui::{button_class, icon};
@@ -60,18 +61,22 @@ fn try_phrase(brand_name: &str) -> String {
     }
 }
 
-/// BUNYIP-561: the feature cards name the product from the admin-managed brand
-/// record, so they are built per render rather than being a `const` of
-/// `&'static str`.
-fn features(brand_name: &str) -> Vec<Feature> {
-    let brand = brand_or_platform(brand_name);
+/// BUNYIP-809: the six feature cards describe the CAPABILITY without naming
+/// the brand. The hero subhead and the features intro already name the brand
+/// once each on this page, so a repeated name in every card body added no
+/// information; it just turned "single sign-on" into "Acme is the OIDC entry
+/// point, everywhere Acme signs you in, wraps around Acme's Mokosh...". The
+/// cards are still built per render rather than as `const &'static str` so
+/// future copy that legitimately needs the brand can splice it in without
+/// bringing the signature back.
+fn features(_brand_name: &str) -> Vec<Feature> {
     vec![
-        Feature { icon: "key", title: "Single sign-on", desc: format!("{brand} is the OIDC entry point. Your team logs in once and lands in Mokosh.") },
+        Feature { icon: "key", title: "Single sign-on", desc: "One OIDC entry point. Your team logs in once and lands in Mokosh.".to_string() },
         Feature { icon: "credit-card", title: "Stripe-ready billing", desc: "Multi-tier memberships, trials, dunning, and an admin override for the cases that don't fit.".to_string() },
         // BUNYIP-487: replaced the "Orgs and members" card. The product has no
         // orgs table, no invitations, and no role switching, so the old copy
         // advertised three features that do not exist.
-        Feature { icon: "users", title: "Membership and entitlements", desc: format!("Tier, trial, and per-application entitlements resolved in one place and honored everywhere {brand} signs you in.") },
+        Feature { icon: "users", title: "Membership and entitlements", desc: "Tier, trial, and per-application entitlements resolved in one place and honored on every sign-in.".to_string() },
         Feature { icon: "shield", title: "MFA, magic links, trusted devices", desc: "All the SSO niceties out of the box - TOTP, recovery codes, password reset, magic links.".to_string() },
         Feature { icon: "trending-up", title: "Admin console", desc: "Audit logs, rate limits, tier config, manual membership overrides. The bits you only need but really need.".to_string() },
         Feature { icon: "message-square-quote", title: "In-app feedback", desc: "A floating widget lets your team report bugs and ideas without leaving the app. Optionally pipes to Forgejo.".to_string() },
@@ -126,13 +131,16 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
 }
 
 /// The landing page's application cards. Absent with no applications.
-fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup {
+///
+/// BUNYIP-809: the subtitle no longer repeats the brand. The section heading
+/// says the same thing ("Wired into your stack") without needing to name it.
+fn wired_apps_section(apps: &[Application], domain: &str) -> Markup {
     html! {
         @if !apps.is_empty() {
             section class="relative py-20" {
                 div class="container relative scroll-fade-up in-view" {
                     h2 class="text-center text-3xl font-bold text-brand-primary-900 dark:text-brand-primary-50" { "Wired into your stack" }
-                    p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { (format!("{brand} is the front door to the products your team already runs.")) }
+                    p class="mx-auto mt-4 max-w-2xl text-center text-muted-foreground" { "The front door to the products your team already runs." }
                     div class="mt-12 grid gap-8 md:grid-cols-2 max-w-3xl mx-auto scroll-fade-up-child in-view" {
                         @for app in apps {
                             div class="rounded-lg border bg-card text-card-foreground shadow-sm flex h-full flex-col transition-all hover:shadow-lg border-border/50" {
@@ -164,13 +172,34 @@ fn wired_apps_section(apps: &[Application], domain: &str, brand: &str) -> Markup
     }
 }
 
+/// The application list backing the landing page's cards (BUNYIP-833).
+/// `GET /v1/applications` omits a `requires_entitlement` application entirely
+/// for an anonymous caller (BUNYIP-794's security fix), so the shared,
+/// cookie-free `AppState::public_applications` cache can never contain one - an
+/// entitled, signed-in visitor reading it would still lose the card. A visitor
+/// carrying a session cookie therefore gets a fresh, cookie-bearing,
+/// per-request fetch instead (the same pattern `/dashboard` and
+/// `/applications` already use), and only a cookie-less visitor reads the
+/// shared cache.
+async fn landing_applications(st: &AppState, cookie: Option<&str>) -> Vec<Application> {
+    match cookie {
+        Some(cookie) => calls::applications(&st.api, Some(cookie))
+            .await
+            .unwrap_or_default(),
+        None => (*st.public_applications().await).clone(),
+    }
+}
+
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // the application list feeds only the landing cards now, so
     // it is fetched here rather than in `public_ctx` (which every public
     // render paid for). `join!` keeps the miss cost the slower of the two,
     // not their sum.
-    let ((c, pricing, app_links_allowed), apps) =
-        tokio::join!(public_ctx(&st, &headers), st.public_applications(),);
+    let fwd = cookie_of(&headers);
+    let ((c, pricing, app_links_allowed), apps) = tokio::join!(
+        public_ctx(&st, &headers),
+        landing_applications(&st, fwd.as_deref()),
+    );
     let signed_in = c.is_signed_in();
     // BUNYIP-487: the advertised trial length comes from
     // `tier_config.standard_trial_days`, never a literal.
@@ -236,7 +265,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     div class="max-w-2xl" {
                         p class="text-sm uppercase tracking-wide font-semibold text-brand-primary-600 dark:text-brand-primary-300" { "What you get" }
                         h2 class="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-brand-primary-900 dark:text-brand-primary-50" { "Everything around the product. Nothing in it." }
-                        p class="mt-4 text-muted-foreground" { (format!("{brand} is the business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA.")) }
+                        p class="mt-4 text-muted-foreground" { "The business shell that wraps Mokosh. We do the boring infrastructure so you can ship the PSA." }
                     }
                     div class="mt-12 grid gap-6 md:grid-cols-3 auto-rows-fr scroll-fade-up-child in-view" {
                         @for f in &features {
@@ -260,7 +289,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             // decision: the CTA below reads better without a section
             // that offers per-app links they cannot follow yet.
             @if app_links_allowed {
-                (wired_apps_section(&apps, &st.cfg.app_domain, brand))
+                (wired_apps_section(&apps, &st.cfg.app_domain))
             }
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
@@ -423,20 +452,28 @@ mod copy_tests {
         assert_eq!(trial_chip(0), "Free trial");
     }
 
-    /// BUNYIP-561: the landing copy names the admin-managed brand, and names no
-    /// product at all when the record is empty. The old codename literals were
-    /// the whole reason the codename leaked into every shared link.
+    /// BUNYIP-561: no feature card names the retired codename, whatever the
+    /// admin has branded the deployment as. BUNYIP-809: the six feature-card
+    /// bodies also no longer name the CURRENT brand: the hero subhead and
+    /// the features intro name it once each, so a repeated brand in every
+    /// card body was noise. The helpers this test still covers (`brand_or_platform`,
+    /// `try_phrase`) do name the brand where they still run, at their two
+    /// remaining call sites (the features-intro subhead and the CTA button).
     #[test]
-    fn marketing_copy_follows_the_brand_and_never_falls_back_to_a_product_name() {
+    fn feature_cards_never_name_the_codename_or_the_current_brand() {
         for f in features("Acme") {
             assert!(
                 !f.desc.contains("Bunyip"), // brand-literal-ok: the assertion that the codename is gone
                 "feature card {:?} still names the codename",
                 f.title
             );
+            assert!(
+                !f.desc.contains("Acme"),
+                "feature card {:?} names the brand (BUNYIP-809 pruned that): {}",
+                f.title,
+                f.desc,
+            );
         }
-        assert!(features("Acme")[0].desc.starts_with("Acme is the OIDC"));
-        assert!(features("")[0].desc.starts_with("The platform is the OIDC"));
 
         assert_eq!(brand_or_platform("Acme"), "Acme");
         assert_eq!(brand_or_platform(""), "The platform");
@@ -762,15 +799,167 @@ mod wired_apps_tests {
             app("lets-chat", Some("chat"), "Let's Chat"),
             app("backup", None, "Backup"),
         ];
-        let html = wired_apps_section(&apps, "a8n.systems", "Brand").into_string();
+        let html = wired_apps_section(&apps, "a8n.systems").into_string();
         assert!(html.contains("Chat") && html.contains("Backup"));
         assert_eq!(html.matches("Learn more").count(), 1);
         assert!(html.contains(r#"href="https://chat.a8n.systems""#));
         assert!(!html.contains("backup.a8n.systems"));
         assert!(!html.contains(r##"href="#""##));
 
-        let no_domain = wired_apps_section(&apps, "", "Brand").into_string();
+        let no_domain = wired_apps_section(&apps, "").into_string();
         assert!(!no_domain.contains("Learn more"));
         assert!(!no_domain.contains("href="));
+    }
+}
+
+#[cfg(test)]
+mod landing_entitlement_tests {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use axum::body::{to_bytes, Body};
+    use axum::http::{HeaderMap, Request, StatusCode};
+    use axum::routing::get;
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    use super::landing;
+    use crate::ttl_cache::TtlCache;
+    use crate::web::AppState;
+
+    /// A minimal stand-in for bunyip-api, answering the three calls a
+    /// landing-page render makes. `/v1/applications` mirrors BUNYIP-794's
+    /// entitlement filter: the restricted row is present only when the
+    /// request carries a `Cookie` header, exactly as an anonymous caller gets
+    /// it omitted outright while an entitled, signed-in caller gets it back.
+    async fn mock_bunyip_api() -> String {
+        async fn me() -> Json<Value> {
+            Json(json!({
+                "data": {
+                    "id": "u1",
+                    "email": "member@example.com",
+                    "role": "subscriber",
+                    "email_verified": true,
+                    "two_factor_enabled": false,
+                    "first_name": "Ada",
+                    "last_name": "Lovelace"
+                }
+            }))
+        }
+        async fn pricing() -> Json<Value> {
+            Json(json!({"enabled": false, "trial_days": 0, "tiers": []}))
+        }
+        async fn applications(headers: HeaderMap) -> Json<Value> {
+            let unrestricted = json!({
+                "id": "a1", "slug": "open-app", "display_name": "Open App", "is_accessible": true
+            });
+            let restricted = json!({
+                "id": "a2", "slug": "restricted-app", "display_name": "Restricted App", "is_accessible": true
+            });
+            let apps = if headers.contains_key(axum::http::header::COOKIE) {
+                vec![unrestricted, restricted]
+            } else {
+                vec![unrestricted]
+            };
+            Json(json!({"data": {"applications": apps}}))
+        }
+
+        let router = Router::new()
+            .route("/v1/users/me", get(me))
+            .route("/v1/pricing", get(pricing))
+            .route("/v1/applications", get(applications));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener
+            .local_addr()
+            .expect("the mock API has a local address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
+    fn state(api_url: &str) -> AppState {
+        AppState {
+            api: crate::api::Api::new(api_url),
+            cfg: Arc::new(crate::config::Config::from_env()),
+            pricing_cache: Arc::new(TtlCache::new(
+                "/v1/pricing",
+                "PricingResponse",
+                "test",
+                Duration::from_millis(1),
+            )),
+            applications_cache: Arc::new(TtlCache::new(
+                "/v1/applications",
+                "Vec<Application>",
+                "test",
+                Duration::from_millis(1),
+            )),
+            setup_status_cache: Arc::new(TtlCache::new(
+                "/v1/auth/setup/status",
+                "SetupStatus",
+                "test",
+                Duration::from_millis(1),
+            )),
+            documented_apps_cache: Arc::new(TtlCache::new(
+                "/v1/application-docs",
+                "Vec<DocumentedApp>",
+                "test",
+                Duration::from_millis(1),
+            )),
+        }
+    }
+
+    async fn body_of(res: axum::response::Response) -> String {
+        let bytes = to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("the body reads");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// BUNYIP-833: an entitled, signed-in visitor's landing-page render shows
+    /// the restricted application's card; an anonymous visitor's render never
+    /// does, because the anonymous, cookie-free list bunyip-web fetches for
+    /// them never carries the restricted app's name/icon/subdomain at all.
+    #[tokio::test]
+    async fn a_signed_in_entitled_visitor_sees_a_restricted_app_an_anonymous_one_never_does() {
+        let api_url = mock_bunyip_api().await;
+        let app = Router::new()
+            .route("/", get(landing))
+            .with_state(state(&api_url));
+
+        let signed_in = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(axum::http::header::COOKIE, "session=abc")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(signed_in.status(), StatusCode::OK);
+        let body = body_of(signed_in).await;
+        assert!(body.contains("Restricted App"), "{body}");
+        assert!(body.contains("Open App"), "{body}");
+
+        let anonymous = app
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .expect("the request builds"),
+            )
+            .await
+            .expect("the router answers");
+        assert_eq!(anonymous.status(), StatusCode::OK);
+        let body = body_of(anonymous).await;
+        assert!(!body.contains("Restricted App"), "{body}");
+        assert!(!body.contains("Open App"), "{body}");
     }
 }

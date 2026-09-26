@@ -1120,25 +1120,108 @@ impl AuthService {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
-        // BUNYIP-381: no idle-timeout revocation. A refresh token lives for its
-        // absolute deadline (1 day, or 30 days for "remember me"), carried across
-        // rotation below rather than rolling forward.
+        // BUNYIP-636 PR 3b: if this hub refresh token was linked to an OP
+        // session at login, refuse the rotation when the session is dead
+        // by any of its three arms (revoked, past absolute deadline, past
+        // idle deadline), then slide `last_active_at` + `idle_expires_at`
+        // forward by the same idle window the session was minted with, and
+        // cap the new hub token's absolute expiry at the session's
+        // absolute ceiling so the two clocks stay in step. A token without
+        // an `op_session_id` (pre-PR-3b row, or a mint where no op-session
+        // was configured) falls back to the legacy behaviour further down.
+        //
+        // BUNYIP-381: no idle-timeout revocation on the legacy path. A
+        // refresh token lives for its absolute deadline (1 day, or 30 days
+        // for "remember me"), carried across rotation below rather than
+        // rolling forward.
+        let mut refresh_expires_at = stored_token.expires_at;
+        if let Some(op_session_id) = stored_token.op_session_id {
+            let now = Utc::now();
+            let session = sqlx::query!(
+                "SELECT expires_at, idle_expires_at, revoked_at, idle_ttl_seconds \
+                 FROM op_sessions WHERE id = $1 FOR UPDATE",
+                op_session_id,
+            )
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| AppError::internal(format!("DB error loading op_session: {e}")))?;
+            let session = match session {
+                Some(row) => row,
+                None => {
+                    // Token references a session row that was deleted (e.g. by
+                    // the ON DELETE CASCADE of the users FK). Treat as revoked.
+                    return Err(AppError::InvalidCredentials);
+                }
+            };
+            if session.revoked_at.is_some()
+                || now > session.expires_at
+                || now > session.idle_expires_at
+            {
+                return Err(AppError::InvalidCredentials);
+            }
+            let slid_idle =
+                (now + Duration::seconds(session.idle_ttl_seconds as i64)).min(session.expires_at);
+            sqlx::query!(
+                "UPDATE op_sessions \
+                 SET last_active_at = NOW(), idle_expires_at = $1 \
+                 WHERE id = $2",
+                slid_idle,
+                op_session_id,
+            )
+            .execute(&self.pool)
+            .await
+            .map_err(|e| AppError::internal(format!("Failed to slide op_session: {e}")))?;
+            refresh_expires_at = refresh_expires_at.min(session.expires_at);
+        }
 
         // Revoke old token
         TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
 
         // Create new tokens, carrying the rotated-out token's absolute deadline
-        // so the session ceiling (set at login) does not reset on every refresh.
+        // (capped at the op-session's absolute ceiling if one was linked, so
+        // the two clocks stay in step) so the session ceiling set at login
+        // does not reset on every refresh.
         let tokens = self
-            .create_tokens(
-                &user,
-                device_info,
-                ip_address,
-                Some(stored_token.expires_at),
-            )
+            .create_tokens(&user, device_info, ip_address, Some(refresh_expires_at))
             .await?;
 
+        // Preserve the hub token's op_session_id link across rotation so the
+        // NEXT rotation runs through the same gate. A link failure here is
+        // warned and non-fatal, matching the login-path link behaviour.
+        if let Some(op_session_id) = stored_token.op_session_id {
+            self.link_refresh_token_to_op_session(&tokens.refresh_token, user.id, op_session_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        user_id = %user.id,
+                        session_id = %op_session_id,
+                        "Failed to relink rotated hub refresh token to op-session (BUNYIP-636); next rotation falls back to legacy deadline",
+                    );
+                });
+        }
+
         Ok(tokens)
+    }
+
+    /// BUNYIP-636 PR 3b: bind a just-minted hub refresh token to the OP
+    /// session that authorised its login, so the hub refresh path
+    /// (`refresh_tokens` above) can gate and slide the session on
+    /// rotation. Called by each login handler AFTER `establish_op_session`
+    /// succeeds; a failure here is warned and non-fatal (the token still
+    /// works, it just falls back to the legacy `refresh_absolute_ttl`
+    /// deadline on rotation until it is re-issued). The service owns the
+    /// hashing so the HTTP handlers do not have to reach for
+    /// `JwtService::hash_token` themselves.
+    pub async fn link_refresh_token_to_op_session(
+        &self,
+        raw_refresh_token: &str,
+        user_id: Uuid,
+        op_session_id: Uuid,
+    ) -> Result<(), AppError> {
+        let token_hash = self.jwt.hash_token(raw_refresh_token);
+        TokenRepository::link_refresh_to_op_session(&self.pool, &token_hash, user_id, op_session_id)
+            .await
     }
 
     /// Logout (revoke refresh token)
@@ -1396,12 +1479,16 @@ impl AuthService {
     /// handler can set the `bunyip_trusted_device` cookie. It is `None` for
     /// admins (who never skip 2FA) and when "remember me" was not chosen. The
     /// same `remember` also selects the 30-day vs 1-day session length.
+    /// BUNYIP-636: the return tuple's fourth element carries the sign-in's
+    /// original `remember` choice so the caller can set the OP session's
+    /// idle window from the same signal that already drives the refresh
+    /// TTL (`refresh_absolute_ttl(remember)`).
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
-    ) -> Result<(AuthTokens, UserResponse, Option<String>), AppError> {
+    ) -> Result<(AuthTokens, UserResponse, Option<String>, bool), AppError> {
         // Verify challenge token
         let claims = self.jwt.verify_2fa_challenge_token(challenge_token)?;
         let user_id = claims.sub;
@@ -1456,7 +1543,7 @@ impl AuthService {
         )
         .await?;
 
-        Ok((tokens, UserResponse::from(user), trusted_token))
+        Ok((tokens, UserResponse::from(user), trusted_token, remember))
     }
 
     /// Create a trusted device for a user and return the opaque cookie secret

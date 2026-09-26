@@ -42,6 +42,16 @@ pub type OidcProviderData =
 /// the explicit `BUNYIP_COOKIE_SHARED_DOMAIN=true` opt-in this resolves to
 /// `None`, so the session cookie is host-scoped and never sent to sibling
 /// subdomains regardless of how `COOKIE_DOMAIN` is set.
+/// BUNYIP-636 PR 3b: the return type carries the newly-minted session's
+/// row id alongside the cookie, so the caller can bind the hub refresh
+/// token to the session (via `AuthService::link_refresh_token_to_op_session`)
+/// on the same login. Old callers that only set the cookie can ignore the
+/// id; new callers that need the link read `session_id` from the struct.
+pub(crate) struct EstablishedOpSession {
+    pub cookie: actix_web::cookie::Cookie<'static>,
+    pub session_id: uuid::Uuid,
+}
+
 pub(crate) async fn establish_op_session(
     provider: &OidcProviderData,
     req: &HttpRequest,
@@ -50,7 +60,8 @@ pub(crate) async fn establish_op_session(
     op_session_cookie_domain: Option<&str>,
     acr: &str,
     amr: &[String],
-) -> Option<actix_web::cookie::Cookie<'static>> {
+    remember: bool,
+) -> Option<EstablishedOpSession> {
     let provider = provider.as_ref().as_ref()?;
     let user_agent = req
         .headers()
@@ -73,18 +84,45 @@ pub(crate) async fn establish_op_session(
     }
 
     match provider
-        .create_op_session(user_id, user_agent, ip, acr, amr)
+        .create_op_session(user_id, user_agent, ip, acr, amr, remember)
         .await
     {
-        Ok(session) => Some(AuthCookies::op_session(
-            &session.sid,
-            secure,
-            op_session_cookie_domain,
-        )),
+        Ok(session) => Some(EstablishedOpSession {
+            cookie: AuthCookies::op_session(&session.sid, secure, op_session_cookie_domain),
+            session_id: session.id,
+        }),
         Err(e) => {
             tracing::warn!(error = %e, "Failed to establish OP session at login");
             None
         }
+    }
+}
+
+/// BUNYIP-636 PR 3b: helper for every login handler - after `establish_op_session`
+/// succeeds, bind the hub refresh token to the session so its rotation
+/// goes through the same check-and-slide gate the RP families use. Best-
+/// effort: a link failure warns and does NOT fail the login, because the
+/// token still works and simply falls back to the legacy
+/// `refresh_absolute_ttl` deadline on rotation.
+pub(crate) async fn link_hub_refresh_to_op_session(
+    auth_service: &AuthService,
+    established: &Option<EstablishedOpSession>,
+    raw_refresh_token: &str,
+    user_id: uuid::Uuid,
+) {
+    let Some(session) = established else {
+        return;
+    };
+    if let Err(e) = auth_service
+        .link_refresh_token_to_op_session(raw_refresh_token, user_id, session.session_id)
+        .await
+    {
+        tracing::warn!(
+            error = %e,
+            user_id = %user_id,
+            session_id = %session.session_id,
+            "Failed to link hub refresh token to op-session (BUNYIP-636); rotation falls back to legacy deadline",
+        );
     }
 }
 
@@ -353,7 +391,10 @@ pub async fn register(
     let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
-    let op_cookie = establish_op_session(
+    // BUNYIP-381 / BUNYIP-636: a fresh registration is not "remember me",
+    // so the OP session takes the shorter idle window in step with the
+    // 1-day refresh-token cookie set below.
+    let established = establish_op_session(
         &oidc_provider,
         &req,
         user.id,
@@ -361,8 +402,11 @@ pub async fn register(
         config.op_session_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
+        false,
     )
     .await;
+    link_hub_refresh_to_op_session(&auth_service, &established, &tokens.refresh_token, user.id)
+        .await;
 
     // BUNYIP-296: await the welcome inline before returning so the
     // /onboarding page's auto-fired POST /v1/users/me/email/verify cannot
@@ -396,8 +440,8 @@ pub async fn register(
         false,
         cookie_domain,
     ));
-    if let Some(op) = op_cookie {
-        resp.cookie(op);
+    if let Some(session) = established {
+        resp.cookie(session.cookie);
     }
     Ok(resp.json(crate::responses::ApiResponse {
         success: true,
@@ -495,7 +539,10 @@ pub async fn login(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie = establish_op_session(
+            // BUNYIP-636: the OP session's idle window matches the refresh
+            // token cookie's max-age (`body.remember`), so both clocks are
+            // driven by the same signal from the same login.
+            let established = establish_op_session(
                 &oidc_provider,
                 &req,
                 user.id,
@@ -503,6 +550,14 @@ pub async fn login(
                 config.op_session_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
+                body.remember,
+            )
+            .await;
+            link_hub_refresh_to_op_session(
+                &auth_service,
+                &established,
+                &tokens.refresh_token,
+                user.id,
             )
             .await;
 
@@ -527,8 +582,8 @@ pub async fn login(
                 body.remember,
                 cookie_domain,
             ));
-            if let Some(op) = op_cookie {
-                resp.cookie(op);
+            if let Some(session) = established {
+                resp.cookie(session.cookie);
             }
             Ok(resp.json(crate::responses::ApiResponse {
                 success: true,
@@ -657,7 +712,10 @@ pub async fn verify_magic_link(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie = establish_op_session(
+            // BUNYIP-636: the magic-link cookie has always been set with
+            // the remember-me (30-day) lifetime; carry the same signal into
+            // the OP session so both clocks match.
+            let established = establish_op_session(
                 &oidc_provider,
                 &req,
                 user.id,
@@ -665,6 +723,14 @@ pub async fn verify_magic_link(
                 config.op_session_cookie_domain(),
                 ACR_OTP,
                 &["otp".to_string()],
+                true,
+            )
+            .await;
+            link_hub_refresh_to_op_session(
+                &auth_service,
+                &established,
+                &tokens.refresh_token,
+                user.id,
             )
             .await;
 
@@ -688,8 +754,8 @@ pub async fn verify_magic_link(
                 true,
                 cookie_domain,
             ));
-            if let Some(op) = op_cookie {
-                resp.cookie(op);
+            if let Some(session) = established {
+                resp.cookie(session.cookie);
             }
             Ok(resp.json(crate::responses::ApiResponse {
                 success: true,
@@ -739,7 +805,12 @@ pub async fn verify_login_approval(
     // factor. v1 gates password + magic-link; report the password ACR as the
     // common single-factor assurance (a follow-up can thread the exact origin
     // through the challenge if the distinction ever matters).
-    let op_cookie = establish_op_session(
+    //
+    // BUNYIP-636: the refresh_token cookie set below has always used the
+    // remember-me (30-day) lifetime for this flow, so the OP session takes
+    // the same signal. Threading the challenge's actual `remember` here is
+    // a follow-up if the copy-paste ever needs to become a real choice.
+    let established = establish_op_session(
         &oidc_provider,
         &req,
         user.id,
@@ -747,8 +818,11 @@ pub async fn verify_login_approval(
         config.op_session_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
+        true,
     )
     .await;
+    link_hub_refresh_to_op_session(&auth_service, &established, &tokens.refresh_token, user.id)
+        .await;
 
     let response = AuthResponse {
         user,
@@ -770,8 +844,8 @@ pub async fn verify_login_approval(
         true,
         cookie_domain,
     ));
-    if let Some(op) = op_cookie {
-        resp.cookie(op);
+    if let Some(session) = established {
+        resp.cookie(session.cookie);
     }
     Ok(resp.json(crate::responses::ApiResponse {
         success: true,
@@ -823,7 +897,9 @@ pub async fn accept_admin_invite(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
-            let op_cookie = establish_op_session(
+            // BUNYIP-636: the invite-accept refresh_token cookie has always
+            // been remember-me, so the OP session matches.
+            let established = establish_op_session(
                 &oidc_provider,
                 &req,
                 user.id,
@@ -831,6 +907,14 @@ pub async fn accept_admin_invite(
                 config.op_session_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
+                true,
+            )
+            .await;
+            link_hub_refresh_to_op_session(
+                &auth_service,
+                &established,
+                &tokens.refresh_token,
+                user.id,
             )
             .await;
 
@@ -854,8 +938,8 @@ pub async fn accept_admin_invite(
                 true,
                 cookie_domain,
             ));
-            if let Some(op) = op_cookie {
-                resp.cookie(op);
+            if let Some(session) = established {
+                resp.cookie(session.cookie);
             }
             Ok(resp.json(crate::responses::ApiResponse {
                 success: true,
@@ -1076,10 +1160,16 @@ pub async fn logout_redirect(
     if let Some(user) = &optional_user.0 {
         if let Some(refresh_token) = req.cookie("refresh_token").map(|c| c.value().to_string()) {
             let ip_address = extract_client_ip(&req);
-            auth_service
+            if let Err(e) = auth_service
                 .logout(refresh_token, user.sub, ip_address)
                 .await
-                .ok();
+            {
+                tracing::warn!(
+                    error = %e,
+                    user_id = %user.sub,
+                    "logout_redirect: refresh-token revoke failed; still clearing cookies"
+                );
+            }
         }
         revoke_op_sessions(&oidc_provider, user.sub).await;
     }

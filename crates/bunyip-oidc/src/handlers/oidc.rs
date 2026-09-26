@@ -719,6 +719,11 @@ async fn try_silent_sso(
     // Path 1: valid access_token cookie.
     if let Some(access_token) = req.cookie("access_token") {
         if let Ok(claims) = jwt_service.verify_access_token(access_token.value()) {
+            // BUNYIP-636: silent SSO does not carry the original login's
+            // remember-me signal, so a re-established session takes the
+            // shorter idle window. A user who explicitly chose remember at
+            // login still has their durable refresh-token family; the OP
+            // session just re-establishes on the next authorize if idle.
             let session = provider
                 .create_op_session(
                     claims.sub,
@@ -726,6 +731,7 @@ async fn try_silent_sso(
                     ip,
                     "urn:bunyip:loa:pwd",
                     &["pwd".to_string()],
+                    false,
                 )
                 .await?;
             tracing::info!(
@@ -775,6 +781,7 @@ async fn try_silent_sso(
             return Ok(None);
         }
     };
+    // BUNYIP-636: silent SSO takes the shorter idle window; see Path 1.
     let session = provider
         .create_op_session(
             refresh_claims.sub,
@@ -782,6 +789,7 @@ async fn try_silent_sso(
             ip,
             "urn:bunyip:loa:pwd",
             &["pwd".to_string()],
+            false,
         )
         .await?;
     tracing::info!(
@@ -983,7 +991,10 @@ async fn handle_authorization_code_grant(
     // Mint tokens. BUNYIP-63: pass `selected_tenant_id` so the at+jwt
     // and id_token carry the per-client tenant claim. The refresh row
     // takes the same value so the next rotation mints the same
-    // tenant.
+    // tenant. BUNYIP-636 PR 4: pass `op_session_sid` so the at+jwt and
+    // id_token carry the `sid` claim (OIDC Front-/Back-Channel Logout
+    // shape); the value was JOINed into `code_row` at redemption so no
+    // second query is needed here.
     let (access_token, at_exp) = provider.mint_access_token(
         &user,
         client,
@@ -992,6 +1003,7 @@ async fn handle_authorization_code_grant(
         code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
         &code_row.amr.clone().unwrap_or_default(),
         code_row.selected_tenant_id,
+        Some(&code_row.op_session_sid),
     )?;
 
     let id_token = provider.mint_id_token(
@@ -1002,6 +1014,7 @@ async fn handle_authorization_code_grant(
         code_row.auth_time,
         &access_token,
         code_row.selected_tenant_id,
+        Some(&code_row.op_session_sid),
     )?;
 
     let (raw_refresh, _) = provider
@@ -1125,6 +1138,9 @@ async fn handle_refresh_grant(
         &rotated.acr,
         &rotated.amr,
         rotated.selected_tenant_id,
+        // BUNYIP-636 PR 4: carry the op-session's sid through so the
+        // rotated at+jwt stays tied to the authorising session.
+        Some(&rotated.op_session_sid),
     )?;
 
     let expires_in = (at_exp - chrono::Utc::now()).num_seconds();
@@ -1298,7 +1314,13 @@ pub async fn revoke(
     authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
     // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
-    let _ = do_revoke(provider, client.client_id, &form.token).await;
+    if let Err(e) = do_revoke(provider, client.client_id, &form.token).await {
+        tracing::warn!(
+            error = %e,
+            client_id = %client.client_id,
+            "revoke: token revocation failed; still returning 200 per RFC 7009 §2.2"
+        );
+    }
     Ok(HttpResponse::Ok().finish())
 }
 

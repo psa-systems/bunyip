@@ -52,6 +52,16 @@ pub struct AtClaims {
     /// rolling deploy; mint always populates it, so emission is unaffected.
     #[serde(default)]
     pub bunyip_role: String,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` this at+jwt belongs
+    /// to, so a Resource Server can name the session in an audit trail
+    /// and the OIDC Back-Channel Logout receiver (PMS-998) can correlate
+    /// a logout_token's `sid` back to any at+jwt it minted. `#[serde(default)]`
+    /// and `skip_serializing_if = "Option::is_none"` together keep the
+    /// wire shape byte-identical to a pre-PR-4 mint when the caller
+    /// passes `None` (an unknown-shape verifier that ignores the claim
+    /// stays happy either way).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     /// BUNYIP-63: per-client extension claims. Today this carries the
     /// tenant claim emitted under the name configured on
     /// `oauth_clients.tenant_claim_name` (e.g. `mokosh_tenant_id`).
@@ -89,6 +99,7 @@ impl AtClaims {
         acr: &str,
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Self {
         let mut extra = BTreeMap::new();
         if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
@@ -110,6 +121,7 @@ impl AtClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column (already constrained to UserRole::as_str() values).
             bunyip_role: user.role.clone(),
+            sid: sid.map(str::to_string),
             extra,
         }
     }
@@ -145,6 +157,14 @@ pub struct IdTokenClaims {
     /// extra userinfo call. Emitted on every mint regardless of scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bunyip_role: Option<String>,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` this id_token belongs
+    /// to, mirroring the at+jwt's `sid`. OIDC Front- and Back-Channel Logout
+    /// spec the same claim shape on id_tokens, so a Front-Channel-Logout
+    /// client can correlate the identity token to the session that authorised
+    /// it. `#[serde(default)]` + `skip_serializing_if` keep the wire shape
+    /// byte-identical to a pre-PR-4 mint when the caller passes `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     /// BUNYIP-63: per-client extension claims (e.g. `mokosh_tenant_id`).
     /// Mirrored from the access token so an SPA reading only the id_token
     /// can display "you're in tenant X" without an extra `at+jwt`
@@ -176,6 +196,7 @@ impl IdTokenClaims {
         auth_time: DateTime<Utc>,
         at_hash: String,
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Self {
         let include_profile = scope.iter().any(|s| s == "email");
         let mut extra = BTreeMap::new();
@@ -216,6 +237,7 @@ impl IdTokenClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column, mirroring the access token's `bunyip_role`.
             bunyip_role: Some(user.role.clone()),
+            sid: sid.map(str::to_string),
             extra,
         }
     }
@@ -324,6 +346,14 @@ impl OidcProvider {
     // ── Op-session ────────────────────────────────────────────────────────────
 
     /// Create a new IdP session for a user (after successful authentication).
+    ///
+    /// BUNYIP-636: both deadlines are set from `remember`. `expires_at` is the
+    /// ABSOLUTE ceiling and does not move; `idle_expires_at` is the SLIDING
+    /// deadline the refresh grant (PR 2) rolls forward on every rotation.
+    /// Ordinary sign-in is `remember = false` (8 h idle / 1 d absolute);
+    /// remember-me is `remember = true` (14 d idle / 30 d absolute). The
+    /// absolute pair matches the existing `refresh_absolute_ttl` policy so
+    /// the OP session and the hub refresh token die together.
     pub async fn create_op_session(
         &self,
         user_id: Uuid,
@@ -331,29 +361,50 @@ impl OidcProvider {
         ip: Option<std::net::IpAddr>,
         acr: &str,
         amr: &[String],
+        remember: bool,
     ) -> Result<OpSession, AppError> {
         let sid = generate_opaque_token(32);
         let now = Utc::now();
-        let expires_at = now + Duration::days(7);
+        let idle_ttl_secs = if remember {
+            self.config.session_idle_ttl_remember_secs
+        } else {
+            self.config.session_idle_ttl_secs
+        };
+        let idle_ttl = Duration::seconds(idle_ttl_secs as i64);
+        let absolute_ttl = if remember {
+            Duration::days(30)
+        } else {
+            Duration::days(1)
+        };
+        let idle_expires_at = now + idle_ttl;
+        let expires_at = now + absolute_ttl;
         let ip_str: Option<String> = ip.map(|a| a.to_string());
 
+        // BUNYIP-636 PR 2: `idle_ttl_seconds` is written alongside the initial
+        // deadlines so `rotate_refresh_token` slides the row by the SAME
+        // window it was minted with, rather than guessing from the absolute
+        // deadline's width. The row keeps its original policy until the next
+        // login re-creates it, so changing the operator env after the fact
+        // does not silently reclassify a session in flight.
         let row = sqlx::query_as!(
             OpSession,
             r#"
             INSERT INTO op_sessions
                 (id, sid, user_id, created_at, last_active_at, expires_at,
-                 user_agent, ip, acr, amr)
+                 idle_expires_at, idle_ttl_seconds, user_agent, ip, acr, amr)
             VALUES
-                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5::inet, $6, $7)
+                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5, $6, $7::inet, $8, $9)
             RETURNING
                 id, sid, user_id, created_at, last_active_at, expires_at,
-                revoked_at, user_agent,
+                idle_expires_at, revoked_at, user_agent,
                 ip::TEXT as "ip: String",
                 acr, amr
             "#,
             sid,
             user_id,
             expires_at,
+            idle_expires_at,
+            idle_ttl_secs as i32,
             user_agent,
             ip_str as Option<String>,
             acr,
@@ -376,10 +427,16 @@ impl OidcProvider {
     /// row was actually revoked; either outcome is acceptable to the
     /// caller. Errors only on a hard DB failure.
     pub async fn revoke_op_session_by_sid(&self, sid: &str) -> Result<bool, AppError> {
+        // BUNYIP-636: the WHERE clause matches the SQL twin of
+        // `OpSession::is_alive` so this revoke keeps returning `false` for a
+        // session that was already dead by either deadline.
         let result = sqlx::query(
             "UPDATE op_sessions \
              SET revoked_at = NOW() \
-             WHERE sid = $1 AND revoked_at IS NULL AND expires_at > NOW()",
+             WHERE sid = $1 \
+               AND revoked_at IS NULL \
+               AND expires_at > NOW() \
+               AND idle_expires_at > NOW()",
         )
         .bind(sid)
         .execute(&self.pool)
@@ -389,18 +446,26 @@ impl OidcProvider {
     }
 
     /// Load an active op-session by its opaque sid value.
+    ///
+    /// BUNYIP-636: the WHERE clause is the SQL twin of [`OpSession::is_alive`]:
+    /// not revoked, and both deadlines in the future. Adding an `AND
+    /// idle_expires_at > NOW()` clause anywhere else in this crate would be a
+    /// second definition of the predicate; the guard test
+    /// `op_session_predicate_has_one_home` in this module fails the build if
+    /// that phrase appears outside these two sites.
     pub async fn load_op_session(&self, sid: &str) -> Result<Option<OpSession>, AppError> {
         sqlx::query_as!(
             OpSession,
             r#"
             SELECT id, sid, user_id, created_at, last_active_at, expires_at,
-                   revoked_at, user_agent,
+                   idle_expires_at, revoked_at, user_agent,
                    ip::TEXT as "ip: String",
                    acr, amr
             FROM op_sessions
             WHERE sid = $1
               AND revoked_at IS NULL
               AND expires_at > NOW()
+              AND idle_expires_at > NOW()
             "#,
             sid
         )
@@ -510,16 +575,25 @@ impl OidcProvider {
 
         // Load the row with a row-level lock. Runtime query so the BUNYIP-62
         // `selected_tenant_id` column does not force a `.sqlx/` cache regen here.
+        // BUNYIP-636 PR 4: also JOIN the owning `op_sessions.sid` so the mint
+        // path emits it as the `sid` claim without a second query. The JOIN
+        // is INNER because `op_session_id` is NOT NULL and the FK cascades
+        // on op_session delete, so a code row without an op-session cannot
+        // exist here.
         let row = sqlx::query_as::<_, AuthCodeRow>(
             r#"
             SELECT
-                code_hash, client_id, user_id, op_session_id, redirect_uri,
-                scope, code_challenge, nonce, auth_time, acr, amr,
-                issued_at, expires_at, consumed_at, revoked_at,
-                selected_tenant_id
-            FROM oauth_authorization_codes
-            WHERE code_hash = $1
-            FOR UPDATE
+                oc.code_hash, oc.client_id, oc.user_id, oc.op_session_id,
+                ops.sid AS op_session_sid,
+                oc.redirect_uri,
+                oc.scope, oc.code_challenge, oc.nonce, oc.auth_time,
+                oc.acr, oc.amr,
+                oc.issued_at, oc.expires_at, oc.consumed_at, oc.revoked_at,
+                oc.selected_tenant_id
+            FROM oauth_authorization_codes oc
+            JOIN op_sessions ops ON ops.id = oc.op_session_id
+            WHERE oc.code_hash = $1
+            FOR UPDATE OF oc
             "#,
         )
         .bind(code_hash.clone())
@@ -635,6 +709,7 @@ impl OidcProvider {
         acr: &str,
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Result<(String, DateTime<Utc>), AppError> {
         let now = Utc::now();
         let ttl = Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -655,6 +730,7 @@ impl OidcProvider {
             acr,
             amr,
             selected_tenant_id,
+            sid,
         );
 
         let token = jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -681,6 +757,7 @@ impl OidcProvider {
         auth_time: DateTime<Utc>,
         access_token: &str,
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Result<String, AppError> {
         let now = Utc::now();
         let exp = now + Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -702,6 +779,7 @@ impl OidcProvider {
             auth_time,
             at_hash,
             selected_tenant_id,
+            sid,
         );
 
         jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -807,16 +885,29 @@ impl OidcProvider {
         // struct local to this rotation; mapped via FromRow below.
         // BUNYIP-262: JOIN the family to read the persisted `auth_time`.
         // BUNYIP-257: also read `acr` / `amr` from the same family row.
+        // BUNYIP-636 PR 2: JOIN `op_sessions` so a rotation refuses (below)
+        // when the OP session is dead by any of its three arms - revoked,
+        // past absolute deadline, past idle deadline - and the same row is
+        // locked with `FOR UPDATE OF rt, ops` so the successful path's slide
+        // of `last_active_at` / `idle_expires_at` cannot race a concurrent
+        // rotation on another family under the same session.
         let old = sqlx::query_as::<_, RefreshTokenRotationRow>(
             r#"
             SELECT rt.id, rt.family_id, rt.client_id, rt.user_id, rt.scope,
                    rt.used_at, rt.revoked_at, rt.idle_expires_at,
                    rt.absolute_expires_at, rt.selected_tenant_id,
-                   fam.auth_time, fam.acr, fam.amr
+                   fam.auth_time, fam.acr, fam.amr,
+                   ops.id AS op_session_id,
+                   ops.expires_at AS op_session_expires_at,
+                   ops.idle_expires_at AS op_session_idle_expires_at,
+                   ops.revoked_at AS op_session_revoked_at,
+                   ops.idle_ttl_seconds AS op_session_idle_ttl_seconds,
+                   ops.sid AS op_session_sid
             FROM refresh_tokens_v2 rt
             JOIN refresh_token_families fam ON fam.id = rt.family_id
+            JOIN op_sessions ops ON ops.id = fam.op_session_id
             WHERE rt.token_hash = $1
-            FOR UPDATE OF rt
+            FOR UPDATE OF rt, ops
             "#,
         )
         .bind(old_hash)
@@ -898,6 +989,23 @@ impl OidcProvider {
             return Err(AppError::OidcInvalidGrant("token family revoked".into()));
         }
 
+        // BUNYIP-636 PR 2: refuse the rotation when the OP session is dead
+        // by any of the three arms `OpSession::is_alive` covers. Reads the
+        // deadlines the JOINed op_sessions row carried in through the
+        // `SELECT ... FOR UPDATE OF rt, ops` above, so the check runs on
+        // the same instant as the slide below and cannot race a concurrent
+        // revoke. The `invalid_grant` here is what BUNYIP-636 promises: an
+        // OP session that has expired stops every RP renewal for that user
+        // rather than only refusing the hub. `check_op_session_alive` is a
+        // pure function of the four inputs so the three refusal arms are
+        // unit-testable without a live database.
+        check_op_session_alive(
+            old.op_session_revoked_at,
+            old.op_session_expires_at,
+            old.op_session_idle_expires_at,
+            now,
+        )?;
+
         // Scope narrowing only.
         let mut effective_scope: Vec<String> = match requested_scope {
             Some(req) if !req.is_empty() => {
@@ -967,13 +1075,28 @@ impl OidcProvider {
         let ip_str: Option<String> = ip.map(|a| a.to_string());
         let idle_ttl = Duration::seconds(client.refresh_idle_ttl_seconds as i64);
         let abs_ttl = Duration::seconds(client.refresh_token_ttl_seconds as i64);
-        let new_idle_exp = now + idle_ttl;
-        // Cap the absolute expiry at the family's original deadline: rotation
-        // refreshes the idle window but must never push the absolute TTL out, or
-        // a token refreshed before each idle expiry would live forever. Take the
-        // earlier of the inherited deadline and a fresh `now + abs_ttl` (the
-        // latter only matters if the client's configured TTL shrank).
-        let new_abs_exp = old.absolute_expires_at.min(now + abs_ttl);
+        // BUNYIP-636 PR 3: `OIDC_REFRESH_*_TTL_SECONDS` become UPPER BOUNDS
+        // rather than an independent clock. Deadlines are capped at the
+        // owning op-session's clock so a rotated token can never live past
+        // either the client's configured TTL, the family's original
+        // deadline, OR the op-session that authorised the family. The
+        // idle cap uses the slid session-idle (what the UPDATE below will
+        // roll `op_sessions.idle_expires_at` to), so the token dies with
+        // the session on the next idle window rather than a full RP
+        // idle-TTL after.
+        let slid_session_idle = (now + Duration::seconds(old.op_session_idle_ttl_seconds as i64))
+            .min(old.op_session_expires_at);
+        let RotatedRefreshDeadlines {
+            idle_expires_at: new_idle_exp,
+            absolute_expires_at: new_abs_exp,
+        } = rotated_refresh_deadlines(
+            now,
+            idle_ttl,
+            abs_ttl,
+            old.absolute_expires_at,
+            old.op_session_expires_at,
+            slid_session_idle,
+        );
 
         // Runtime query: the BUNYIP-63 `selected_tenant_id` column is
         // mirrored from `old` so every row in the family carries the
@@ -1004,6 +1127,30 @@ impl OidcProvider {
         .await
         .map_err(|e| AppError::internal(format!("Failed to insert new refresh token: {e}")))?;
 
+        // BUNYIP-636 PR 2: slide the OP session's `last_active_at` and
+        // `idle_expires_at` forward by the SAME idle window the row was
+        // created with (`idle_ttl_seconds`), capped at the absolute
+        // deadline so the slide can never push a session past its hard
+        // ceiling. In the same transaction as the rotation, so a failed
+        // commit reverts both writes. Activity on any RP under this
+        // session therefore keeps the hub session alive (and vice versa,
+        // once PR 3b makes the hub refresh path go through this same code)
+        // - the whole point of "one session clock". The slid value is the
+        // same one PR 3's `rotated_refresh_deadlines` already read to cap
+        // the new refresh token's idle deadline, so the token and the
+        // session share exactly one idle deadline coming out of this
+        // transaction.
+        sqlx::query!(
+            "UPDATE op_sessions \
+             SET last_active_at = NOW(), idle_expires_at = $1 \
+             WHERE id = $2",
+            slid_session_idle,
+            old.op_session_id,
+        )
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AppError::internal(format!("Failed to slide op_session: {e}")))?;
+
         tx.commit().await.map_err(|e| {
             AppError::internal(format!("Failed to commit rotation transaction: {e}"))
         })?;
@@ -1018,6 +1165,7 @@ impl OidcProvider {
             auth_time: old.auth_time,
             acr: old.acr,
             amr: old.amr,
+            op_session_sid: old.op_session_sid,
         })
     }
 
@@ -1405,6 +1553,12 @@ pub struct OAuthClient {
 }
 
 /// Active IdP session row.
+///
+/// BUNYIP-636: `expires_at` is the ABSOLUTE deadline set once at creation,
+/// `idle_expires_at` is the SLIDING deadline every liveness check reads.
+/// A session is alive when it is not revoked AND both deadlines are in the
+/// future; the predicate for that lives in [`op_session_is_alive`] so no
+/// second copy of it can drift.
 pub struct OpSession {
     pub id: Uuid,
     pub sid: String,
@@ -1412,11 +1566,73 @@ pub struct OpSession {
     pub created_at: DateTime<Utc>,
     pub last_active_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub idle_expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub user_agent: Option<String>,
     pub ip: Option<String>,
     pub acr: Option<String>,
     pub amr: Option<Vec<String>>,
+}
+
+impl OpSession {
+    /// BUNYIP-636: one definition of "this session is alive", used by every
+    /// caller that has an [`OpSession`] in hand. The SQL twin lives beside
+    /// [`OidcProvider::load_op_session`]; `op_session_predicate_has_one_home`
+    /// in this module fails the build if a second copy appears.
+    pub fn is_alive(&self, now: DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.expires_at > now && self.idle_expires_at > now
+    }
+}
+
+/// BUNYIP-636 PR 2: pure predicate that maps the three refusal arms of an
+/// OP session (revoked, past absolute deadline, past idle deadline) to
+/// `invalid_grant`. Extracted from `rotate_refresh_token` so each arm is
+/// unit-testable without a live database. Same semantics as the negation
+/// of [`OpSession::is_alive`].
+fn check_op_session_alive(
+    revoked_at: Option<DateTime<Utc>>,
+    expires_at: DateTime<Utc>,
+    idle_expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<(), AppError> {
+    if revoked_at.is_some() || now > expires_at || now > idle_expires_at {
+        return Err(AppError::OidcInvalidGrant(
+            "op session revoked or expired".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// BUNYIP-636 PR 3: the (idle, absolute) deadlines a rotated refresh token
+/// receives, capped at both the client's configured TTLs and the owning
+/// op-session's clock so the token can never outlive the session.
+///
+/// Extracted from `rotate_refresh_token` so the two cap arms are
+/// unit-testable without a live database. `slid_session_idle` is what the
+/// slide below will roll the session's idle deadline to; the token's
+/// idle deadline is capped at that so it dies together with the session
+/// on the next idle window rather than one full RP idle-TTL after.
+struct RotatedRefreshDeadlines {
+    idle_expires_at: DateTime<Utc>,
+    absolute_expires_at: DateTime<Utc>,
+}
+
+fn rotated_refresh_deadlines(
+    now: DateTime<Utc>,
+    client_idle_ttl: Duration,
+    client_abs_ttl: Duration,
+    old_absolute_expires_at: DateTime<Utc>,
+    op_session_expires_at: DateTime<Utc>,
+    slid_session_idle: DateTime<Utc>,
+) -> RotatedRefreshDeadlines {
+    let idle = (now + client_idle_ttl).min(slid_session_idle);
+    let absolute = old_absolute_expires_at
+        .min(now + client_abs_ttl)
+        .min(op_session_expires_at);
+    RotatedRefreshDeadlines {
+        idle_expires_at: idle,
+        absolute_expires_at: absolute,
+    }
 }
 
 /// Authorization code row (consumed view). `sqlx::FromRow` so
@@ -1430,6 +1646,11 @@ pub struct AuthCodeRow {
     pub client_id: Uuid,
     pub user_id: Uuid,
     pub op_session_id: Uuid,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` value the auth code's
+    /// row belongs to, JOINed on redemption so `handle_authorization_code_grant`
+    /// can emit it as the `sid` claim on the minted at+jwt and id_token
+    /// without a second query.
+    pub op_session_sid: String,
     pub redirect_uri: String,
     pub scope: Vec<String>,
     pub code_challenge: String,
@@ -1471,6 +1692,10 @@ pub struct RotatedTokens {
     /// §3.1.3.7 instead of the hardcoded `pwd` default.
     pub acr: String,
     pub amr: Vec<String>,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` the family was
+    /// authorised by, carried out so `handle_refresh_grant` emits it as
+    /// the `sid` claim on the rotated at+jwt / id_token.
+    pub op_session_sid: String,
 }
 
 /// Ad-hoc row used by the rotation transaction. Only fields the
@@ -1499,6 +1724,20 @@ struct RefreshTokenRotationRow {
     /// original login's acr/amr forward to the next at+jwt mint.
     acr: String,
     amr: Vec<String>,
+    /// BUNYIP-636 PR 2: the op-session this family belongs to, plus its
+    /// live deadlines. The `op_session_alive` predicate below refuses the
+    /// rotation when the session is dead by any of its three arms, and
+    /// the successful path slides `last_active_at` + `idle_expires_at`
+    /// on the same row inside this transaction.
+    op_session_id: Uuid,
+    op_session_expires_at: DateTime<Utc>,
+    op_session_idle_expires_at: DateTime<Utc>,
+    op_session_revoked_at: Option<DateTime<Utc>>,
+    op_session_idle_ttl_seconds: i32,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` string, JOINed in
+    /// beside the deadlines above so the rotation's minted at+jwt and
+    /// id_token carry it as the `sid` claim without a second query.
+    op_session_sid: String,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
@@ -1794,6 +2033,7 @@ mod tests {
             "urn:mace:incommon:iap:silver",
             &["pwd".to_string()],
             None,
+            None,
         )
     }
 
@@ -1822,6 +2062,7 @@ mod tests {
             now,
             "urn:mace:incommon:iap:silver",
             &[],
+            None,
             None,
         );
         assert!(claims.scope.is_empty());
@@ -1856,6 +2097,63 @@ mod tests {
         assert_eq!(claims.bunyip_role, "");
     }
 
+    // BUNYIP-636 PR 4: the `sid` claim is emitted verbatim on the at+jwt
+    // when the caller passes one, and its wire key is exactly `sid` so
+    // the OIDC-shape verifiers (Front- and Back-Channel Logout, PMS-998)
+    // read it without a translation step.
+    #[test]
+    fn at_claims_emit_sid_when_the_caller_passes_one() {
+        let now = Utc::now();
+        let claims = AtClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &["openid".to_string()],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:bunyip:loa:pwd",
+            &["pwd".to_string()],
+            None,
+            Some("op-sid-abc"),
+        );
+        assert_eq!(claims.sid.as_deref(), Some("op-sid-abc"));
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["sid"], "op-sid-abc");
+    }
+
+    // With `None`, the wire body is byte-identical to a pre-PR-4 mint:
+    // no `sid` key on the JSON at all, so a verifier that does not know
+    // the claim reads exactly what it read before.
+    #[test]
+    fn at_claims_omit_sid_when_none() {
+        let claims = build_claims_for("subscriber");
+        assert_eq!(claims.sid, None);
+        let json = serde_json::to_value(&claims).unwrap();
+        assert!(json.get("sid").is_none(), "no `sid` key: {json}");
+    }
+
+    // The other half of the rolling-deploy shape: an at+jwt minted by a
+    // pre-PR-4 build carries no `sid`, and its wire body must still
+    // deserialize into the new struct (defaulting `sid` to `None`).
+    #[test]
+    fn at_claims_deserialize_without_sid() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": "https://api.example.com",
+            "client_id": Uuid::new_v4().to_string(),
+            "scope": "openid",
+            "jti": Uuid::new_v4().to_string(),
+            "iat": 0, "nbf": 0, "exp": 0, "auth_time": 0,
+            "acr": "urn:mace:incommon:iap:silver",
+            "amr": ["pwd"],
+            "bunyip_role": "subscriber",
+        });
+        let claims: AtClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.sid, None);
+    }
+
     fn build_id_claims_for(role: &str, scope: &[String]) -> IdTokenClaims {
         let now = Utc::now();
         IdTokenClaims::build(
@@ -1868,6 +2166,7 @@ mod tests {
             now + Duration::seconds(600),
             now,
             "at_hash_value".to_string(),
+            None,
             None,
         )
     }
@@ -1938,5 +2237,297 @@ mod tests {
         });
         let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
         assert_eq!(claims.bunyip_role, None);
+    }
+
+    // BUNYIP-636 PR 4: id_token mirrors the at+jwt's `sid` shape.
+    #[test]
+    fn id_token_emits_sid_when_the_caller_passes_one() {
+        let now = Utc::now();
+        let claims = IdTokenClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &["openid".to_string()],
+            "nonce-123",
+            now,
+            now + Duration::seconds(600),
+            now,
+            "at_hash_value".to_string(),
+            None,
+            Some("op-sid-abc"),
+        );
+        assert_eq!(claims.sid.as_deref(), Some("op-sid-abc"));
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["sid"], "op-sid-abc");
+    }
+
+    #[test]
+    fn id_token_omits_sid_when_none() {
+        let claims = build_id_claims_for("subscriber", &["openid".to_string()]);
+        assert_eq!(claims.sid, None);
+        let json = serde_json::to_value(&claims).unwrap();
+        assert!(json.get("sid").is_none(), "no `sid` key: {json}");
+    }
+
+    #[test]
+    fn id_token_deserializes_without_sid() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": Uuid::new_v4().to_string(),
+            "exp": 0, "iat": 0, "auth_time": 0,
+            "nonce": "n", "azp": Uuid::new_v4().to_string(),
+            "at_hash": "h",
+            "bunyip_role": "subscriber",
+        });
+        let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.sid, None);
+    }
+
+    // BUNYIP-636: `OpSession::is_alive` is one definition of "this session
+    // is alive" and the WHERE clauses of `load_op_session` /
+    // `revoke_op_session_by_sid` are its SQL twin. This test scans this file
+    // for the load-bearing predicate fragment `AND idle_expires_at > NOW()`
+    // and fails the build if it appears anywhere BUT those two sites, so a
+    // future caller that wants to gate on liveness has to route through the
+    // one place rather than paste the fragment into a fresh query. The
+    // predicate CAN reappear inside a code comment (this one, for example)
+    // without breaking the guard: only real SQL fragments trip the count.
+    #[test]
+    fn op_session_predicate_has_one_home() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/oidc_provider.rs");
+        let src = std::fs::read_to_string(&path).expect("readable source file");
+
+        // Count occurrences OUTSIDE comments and OUTSIDE `#[cfg(test)]` blocks.
+        // The two sanctioned sites both live in the runtime (non-test) half,
+        // so filtering test bodies out is the tighter check.
+        let (prod, _tests) = src
+            .split_once("#[cfg(test)]")
+            .expect("this file has a test module marker");
+
+        // Skip lines whose leading non-whitespace is a comment marker.
+        let mut count = 0usize;
+        for line in prod.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("AND idle_expires_at > NOW()") {
+                count += 1;
+            }
+        }
+
+        assert_eq!(
+            count, 2,
+            "the `AND idle_expires_at > NOW()` liveness fragment must appear \
+             exactly twice in production code (load_op_session + \
+             revoke_op_session_by_sid). A new use routes through \
+             `OpSession::is_alive` (in-Rust) or `load_op_session` (SQL); it \
+             does not copy the fragment. Found {count} occurrences.",
+        );
+    }
+
+    // BUNYIP-636 PR 2: `check_op_session_alive` is the tri-arm gate
+    // `rotate_refresh_token` runs on every rotation. Each arm returns the
+    // `invalid_grant` error the RP receives at `/oauth2/token`; the ok path
+    // proves a live session survives the check.
+    #[test]
+    fn check_op_session_alive_refuses_a_revoked_session() {
+        let now = Utc::now();
+        let err = check_op_session_alive(
+            Some(now - Duration::minutes(5)),
+            now + Duration::hours(1),
+            now + Duration::minutes(30),
+            now,
+        )
+        .expect_err("a revoked session refuses the rotation");
+        match err {
+            AppError::OidcInvalidGrant(msg) => {
+                assert!(
+                    msg.contains("op session"),
+                    "the error names the op session: {msg}",
+                );
+            }
+            other => panic!("expected OidcInvalidGrant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn check_op_session_alive_refuses_past_absolute_deadline() {
+        let now = Utc::now();
+        let err = check_op_session_alive(
+            None,
+            now - Duration::seconds(1),
+            now + Duration::minutes(30),
+            now,
+        )
+        .expect_err("an absolute-expired session refuses the rotation");
+        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+    }
+
+    #[test]
+    fn check_op_session_alive_refuses_past_idle_deadline() {
+        let now = Utc::now();
+        let err = check_op_session_alive(
+            None,
+            now + Duration::hours(1),
+            now - Duration::seconds(1),
+            now,
+        )
+        .expect_err("an idle-expired session refuses the rotation");
+        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+    }
+
+    #[test]
+    fn check_op_session_alive_accepts_a_live_session() {
+        let now = Utc::now();
+        check_op_session_alive(
+            None,
+            now + Duration::hours(1),
+            now + Duration::minutes(30),
+            now,
+        )
+        .expect("a live session passes the gate");
+    }
+
+    // BUNYIP-636 PR 3: the rotated refresh token's deadlines are capped at
+    // both the client's configured TTLs and the owning op-session's clock,
+    // so a rotated token can never live past either. `rotated_refresh_deadlines`
+    // is the pure function that runs those caps; the two tests below pin
+    // one arm each.
+
+    #[test]
+    fn rotated_refresh_idle_is_capped_at_the_op_session_slid_idle() {
+        let now = Utc::now();
+        // Client's configured idle window is 30 days; op-session's slid
+        // idle is 8 hours ahead. The session cap wins.
+        let session_slid_idle = now + Duration::hours(8);
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(30),
+            Duration::days(30),
+            now + Duration::days(30),
+            now + Duration::days(30),
+            session_slid_idle,
+        );
+        assert_eq!(
+            deadlines.idle_expires_at, session_slid_idle,
+            "op-session's slid idle deadline caps the rotated refresh token's idle window",
+        );
+    }
+
+    #[test]
+    fn rotated_refresh_absolute_is_capped_at_the_op_session_absolute() {
+        let now = Utc::now();
+        // Client's configured absolute is 30 days, family carries 30 days,
+        // but op-session dies in 1 day. Op-session cap wins.
+        let session_absolute = now + Duration::days(1);
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(14),
+            Duration::days(30),
+            now + Duration::days(30),
+            session_absolute,
+            now + Duration::hours(8),
+        );
+        assert_eq!(
+            deadlines.absolute_expires_at, session_absolute,
+            "op-session's absolute deadline caps the rotated refresh token's absolute expiry",
+        );
+    }
+
+    #[test]
+    fn rotated_refresh_deadlines_take_the_earliest_of_every_cap() {
+        // With every clock generously in the future, the rotated deadlines
+        // land at the earliest of {client TTL, family absolute, op-session
+        // absolute}. Pins that adding a fifth clock later cannot silently
+        // shift the choice.
+        let now = Utc::now();
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(2),       // client idle
+            Duration::days(3),       // client absolute
+            now + Duration::days(4), // family absolute
+            now + Duration::days(5), // op-session absolute
+            now + Duration::days(6), // session slid idle
+        );
+        // idle = min(now + 2 days, session slid idle) = now + 2 days.
+        assert_eq!(deadlines.idle_expires_at, now + Duration::days(2));
+        // absolute = min(family 4 d, client 3 d, session 5 d) = 3 d.
+        assert_eq!(deadlines.absolute_expires_at, now + Duration::days(3));
+    }
+
+    // BUNYIP-636: `OpSession::is_alive` is a pure function of the row and the
+    // "now" instant. Pins the three arms the SQL twin also refuses: revoked,
+    // past absolute deadline, past idle deadline.
+    #[test]
+    fn op_session_is_alive_matches_the_predicate_arms() {
+        let base_now = Utc::now();
+        let alive = OpSession {
+            id: Uuid::new_v4(),
+            sid: "s".to_string(),
+            user_id: Uuid::new_v4(),
+            created_at: base_now,
+            last_active_at: base_now,
+            expires_at: base_now + Duration::hours(1),
+            idle_expires_at: base_now + Duration::minutes(30),
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(alive.is_alive(base_now));
+
+        let revoked = OpSession {
+            revoked_at: Some(base_now),
+            ..OpSession {
+                id: alive.id,
+                sid: alive.sid.clone(),
+                user_id: alive.user_id,
+                created_at: alive.created_at,
+                last_active_at: alive.last_active_at,
+                expires_at: alive.expires_at,
+                idle_expires_at: alive.idle_expires_at,
+                revoked_at: None,
+                user_agent: None,
+                ip: None,
+                acr: None,
+                amr: None,
+            }
+        };
+        assert!(!revoked.is_alive(base_now));
+
+        let expired_absolute = OpSession {
+            expires_at: base_now - Duration::seconds(1),
+            id: alive.id,
+            sid: alive.sid.clone(),
+            user_id: alive.user_id,
+            created_at: alive.created_at,
+            last_active_at: alive.last_active_at,
+            idle_expires_at: alive.idle_expires_at,
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(!expired_absolute.is_alive(base_now));
+
+        let expired_idle = OpSession {
+            idle_expires_at: base_now - Duration::seconds(1),
+            id: alive.id,
+            sid: alive.sid,
+            user_id: alive.user_id,
+            created_at: alive.created_at,
+            last_active_at: alive.last_active_at,
+            expires_at: alive.expires_at,
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(!expired_idle.is_alive(base_now));
     }
 }
