@@ -34,6 +34,7 @@ const ALLOW_CONSTRUCT = [
     "crates/bunyip-oci/src/handlers/oci_auth.rs"          # both uses sit inside offload closures
     "bunyip-api/src/seed.rs"                              # hashes inside one offload closure
     "bunyip-api/src/main.rs"                              # startup bootstrap admin, before the server binds
+    "bunyip-api/tests/hub_refresh_op_session.rs"          # test fixture, no actix worker involved
     "bunyip-api/tests/login_approval.rs"                  # test fixture, no actix worker involved
 ]
 
