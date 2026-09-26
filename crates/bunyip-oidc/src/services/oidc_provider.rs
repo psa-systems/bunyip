@@ -1039,13 +1039,28 @@ impl OidcProvider {
         let ip_str: Option<String> = ip.map(|a| a.to_string());
         let idle_ttl = Duration::seconds(client.refresh_idle_ttl_seconds as i64);
         let abs_ttl = Duration::seconds(client.refresh_token_ttl_seconds as i64);
-        let new_idle_exp = now + idle_ttl;
-        // Cap the absolute expiry at the family's original deadline: rotation
-        // refreshes the idle window but must never push the absolute TTL out, or
-        // a token refreshed before each idle expiry would live forever. Take the
-        // earlier of the inherited deadline and a fresh `now + abs_ttl` (the
-        // latter only matters if the client's configured TTL shrank).
-        let new_abs_exp = old.absolute_expires_at.min(now + abs_ttl);
+        // BUNYIP-636 PR 3: `OIDC_REFRESH_*_TTL_SECONDS` become UPPER BOUNDS
+        // rather than an independent clock. Deadlines are capped at the
+        // owning op-session's clock so a rotated token can never live past
+        // either the client's configured TTL, the family's original
+        // deadline, OR the op-session that authorised the family. The
+        // idle cap uses the slid session-idle (what the UPDATE below will
+        // roll `op_sessions.idle_expires_at` to), so the token dies with
+        // the session on the next idle window rather than a full RP
+        // idle-TTL after.
+        let slid_session_idle = (now + Duration::seconds(old.op_session_idle_ttl_seconds as i64))
+            .min(old.op_session_expires_at);
+        let RotatedRefreshDeadlines {
+            idle_expires_at: new_idle_exp,
+            absolute_expires_at: new_abs_exp,
+        } = rotated_refresh_deadlines(
+            now,
+            idle_ttl,
+            abs_ttl,
+            old.absolute_expires_at,
+            old.op_session_expires_at,
+            slid_session_idle,
+        );
 
         // Runtime query: the BUNYIP-63 `selected_tenant_id` column is
         // mirrored from `old` so every row in the family carries the
@@ -1083,15 +1098,17 @@ impl OidcProvider {
         // ceiling. In the same transaction as the rotation, so a failed
         // commit reverts both writes. Activity on any RP under this
         // session therefore keeps the hub session alive (and vice versa,
-        // once PR 3 makes the hub refresh path go through this same code)
-        // - the whole point of "one session clock".
-        let slid_idle = (now + Duration::seconds(old.op_session_idle_ttl_seconds as i64))
-            .min(old.op_session_expires_at);
+        // once PR 3b makes the hub refresh path go through this same code)
+        // - the whole point of "one session clock". The slid value is the
+        // same one PR 3's `rotated_refresh_deadlines` already read to cap
+        // the new refresh token's idle deadline, so the token and the
+        // session share exactly one idle deadline coming out of this
+        // transaction.
         sqlx::query!(
             "UPDATE op_sessions \
              SET last_active_at = NOW(), idle_expires_at = $1 \
              WHERE id = $2",
-            slid_idle,
+            slid_session_idle,
             old.op_session_id,
         )
         .execute(&mut *tx)
@@ -1547,6 +1564,38 @@ fn check_op_session_alive(
         ));
     }
     Ok(())
+}
+
+/// BUNYIP-636 PR 3: the (idle, absolute) deadlines a rotated refresh token
+/// receives, capped at both the client's configured TTLs and the owning
+/// op-session's clock so the token can never outlive the session.
+///
+/// Extracted from `rotate_refresh_token` so the two cap arms are
+/// unit-testable without a live database. `slid_session_idle` is what the
+/// slide below will roll the session's idle deadline to; the token's
+/// idle deadline is capped at that so it dies together with the session
+/// on the next idle window rather than one full RP idle-TTL after.
+struct RotatedRefreshDeadlines {
+    idle_expires_at: DateTime<Utc>,
+    absolute_expires_at: DateTime<Utc>,
+}
+
+fn rotated_refresh_deadlines(
+    now: DateTime<Utc>,
+    client_idle_ttl: Duration,
+    client_abs_ttl: Duration,
+    old_absolute_expires_at: DateTime<Utc>,
+    op_session_expires_at: DateTime<Utc>,
+    slid_session_idle: DateTime<Utc>,
+) -> RotatedRefreshDeadlines {
+    let idle = (now + client_idle_ttl).min(slid_session_idle);
+    let absolute = old_absolute_expires_at
+        .min(now + client_abs_ttl)
+        .min(op_session_expires_at);
+    RotatedRefreshDeadlines {
+        idle_expires_at: idle,
+        absolute_expires_at: absolute,
+    }
 }
 
 /// Authorization code row (consumed view). `sqlx::FromRow` so
@@ -2184,6 +2233,73 @@ mod tests {
             now,
         )
         .expect("a live session passes the gate");
+    }
+
+    // BUNYIP-636 PR 3: the rotated refresh token's deadlines are capped at
+    // both the client's configured TTLs and the owning op-session's clock,
+    // so a rotated token can never live past either. `rotated_refresh_deadlines`
+    // is the pure function that runs those caps; the two tests below pin
+    // one arm each.
+
+    #[test]
+    fn rotated_refresh_idle_is_capped_at_the_op_session_slid_idle() {
+        let now = Utc::now();
+        // Client's configured idle window is 30 days; op-session's slid
+        // idle is 8 hours ahead. The session cap wins.
+        let session_slid_idle = now + Duration::hours(8);
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(30),
+            Duration::days(30),
+            now + Duration::days(30),
+            now + Duration::days(30),
+            session_slid_idle,
+        );
+        assert_eq!(
+            deadlines.idle_expires_at, session_slid_idle,
+            "op-session's slid idle deadline caps the rotated refresh token's idle window",
+        );
+    }
+
+    #[test]
+    fn rotated_refresh_absolute_is_capped_at_the_op_session_absolute() {
+        let now = Utc::now();
+        // Client's configured absolute is 30 days, family carries 30 days,
+        // but op-session dies in 1 day. Op-session cap wins.
+        let session_absolute = now + Duration::days(1);
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(14),
+            Duration::days(30),
+            now + Duration::days(30),
+            session_absolute,
+            now + Duration::hours(8),
+        );
+        assert_eq!(
+            deadlines.absolute_expires_at, session_absolute,
+            "op-session's absolute deadline caps the rotated refresh token's absolute expiry",
+        );
+    }
+
+    #[test]
+    fn rotated_refresh_deadlines_take_the_earliest_of_every_cap() {
+        // With every clock generously in the future, the rotated deadlines
+        // land at the earliest of {client TTL, family absolute, op-session
+        // absolute}. Pins that adding a fifth clock later cannot silently
+        // shift the choice.
+        let now = Utc::now();
+        let deadlines = rotated_refresh_deadlines(
+            now,
+            Duration::days(2),       // client idle
+            Duration::days(3),       // client absolute
+            now + Duration::days(4), // family absolute
+            now + Duration::days(5), // op-session absolute
+            now + Duration::days(6), // session slid idle
+        );
+        // idle = min(now + 2 days, session slid idle) = now + 2 days.
+        assert_eq!(deadlines.idle_expires_at, now + Duration::days(2));
+        // absolute = min(family 4 d, client 3 d, session 5 d) = 3 d.
+        assert_eq!(deadlines.absolute_expires_at, now + Duration::days(3));
     }
 
     // BUNYIP-636: `OpSession::is_alive` is a pure function of the row and the
