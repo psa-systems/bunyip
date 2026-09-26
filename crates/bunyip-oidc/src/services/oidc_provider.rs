@@ -52,6 +52,16 @@ pub struct AtClaims {
     /// rolling deploy; mint always populates it, so emission is unaffected.
     #[serde(default)]
     pub bunyip_role: String,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` this at+jwt belongs
+    /// to, so a Resource Server can name the session in an audit trail
+    /// and the OIDC Back-Channel Logout receiver (PMS-998) can correlate
+    /// a logout_token's `sid` back to any at+jwt it minted. `#[serde(default)]`
+    /// and `skip_serializing_if = "Option::is_none"` together keep the
+    /// wire shape byte-identical to a pre-PR-4 mint when the caller
+    /// passes `None` (an unknown-shape verifier that ignores the claim
+    /// stays happy either way).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     /// BUNYIP-63: per-client extension claims. Today this carries the
     /// tenant claim emitted under the name configured on
     /// `oauth_clients.tenant_claim_name` (e.g. `mokosh_tenant_id`).
@@ -89,6 +99,7 @@ impl AtClaims {
         acr: &str,
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Self {
         let mut extra = BTreeMap::new();
         if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
@@ -110,6 +121,7 @@ impl AtClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column (already constrained to UserRole::as_str() values).
             bunyip_role: user.role.clone(),
+            sid: sid.map(str::to_string),
             extra,
         }
     }
@@ -145,6 +157,14 @@ pub struct IdTokenClaims {
     /// extra userinfo call. Emitted on every mint regardless of scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bunyip_role: Option<String>,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` this id_token belongs
+    /// to, mirroring the at+jwt's `sid`. OIDC Front- and Back-Channel Logout
+    /// spec the same claim shape on id_tokens, so a Front-Channel-Logout
+    /// client can correlate the identity token to the session that authorised
+    /// it. `#[serde(default)]` + `skip_serializing_if` keep the wire shape
+    /// byte-identical to a pre-PR-4 mint when the caller passes `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
     /// BUNYIP-63: per-client extension claims (e.g. `mokosh_tenant_id`).
     /// Mirrored from the access token so an SPA reading only the id_token
     /// can display "you're in tenant X" without an extra `at+jwt`
@@ -176,6 +196,7 @@ impl IdTokenClaims {
         auth_time: DateTime<Utc>,
         at_hash: String,
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Self {
         let include_profile = scope.iter().any(|s| s == "email");
         let mut extra = BTreeMap::new();
@@ -216,6 +237,7 @@ impl IdTokenClaims {
             // Identity-level: the user's Bunyip role string straight from the
             // DB column, mirroring the access token's `bunyip_role`.
             bunyip_role: Some(user.role.clone()),
+            sid: sid.map(str::to_string),
             extra,
         }
     }
@@ -553,16 +575,25 @@ impl OidcProvider {
 
         // Load the row with a row-level lock. Runtime query so the BUNYIP-62
         // `selected_tenant_id` column does not force a `.sqlx/` cache regen here.
+        // BUNYIP-636 PR 4: also JOIN the owning `op_sessions.sid` so the mint
+        // path emits it as the `sid` claim without a second query. The JOIN
+        // is INNER because `op_session_id` is NOT NULL and the FK cascades
+        // on op_session delete, so a code row without an op-session cannot
+        // exist here.
         let row = sqlx::query_as::<_, AuthCodeRow>(
             r#"
             SELECT
-                code_hash, client_id, user_id, op_session_id, redirect_uri,
-                scope, code_challenge, nonce, auth_time, acr, amr,
-                issued_at, expires_at, consumed_at, revoked_at,
-                selected_tenant_id
-            FROM oauth_authorization_codes
-            WHERE code_hash = $1
-            FOR UPDATE
+                oc.code_hash, oc.client_id, oc.user_id, oc.op_session_id,
+                ops.sid AS op_session_sid,
+                oc.redirect_uri,
+                oc.scope, oc.code_challenge, oc.nonce, oc.auth_time,
+                oc.acr, oc.amr,
+                oc.issued_at, oc.expires_at, oc.consumed_at, oc.revoked_at,
+                oc.selected_tenant_id
+            FROM oauth_authorization_codes oc
+            JOIN op_sessions ops ON ops.id = oc.op_session_id
+            WHERE oc.code_hash = $1
+            FOR UPDATE OF oc
             "#,
         )
         .bind(code_hash.clone())
@@ -678,6 +709,7 @@ impl OidcProvider {
         acr: &str,
         amr: &[String],
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Result<(String, DateTime<Utc>), AppError> {
         let now = Utc::now();
         let ttl = Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -698,6 +730,7 @@ impl OidcProvider {
             acr,
             amr,
             selected_tenant_id,
+            sid,
         );
 
         let token = jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -724,6 +757,7 @@ impl OidcProvider {
         auth_time: DateTime<Utc>,
         access_token: &str,
         selected_tenant_id: Option<Uuid>,
+        sid: Option<&str>,
     ) -> Result<String, AppError> {
         let now = Utc::now();
         let exp = now + Duration::seconds(client.access_token_ttl_seconds as i64);
@@ -745,6 +779,7 @@ impl OidcProvider {
             auth_time,
             at_hash,
             selected_tenant_id,
+            sid,
         );
 
         jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
@@ -866,7 +901,8 @@ impl OidcProvider {
                    ops.expires_at AS op_session_expires_at,
                    ops.idle_expires_at AS op_session_idle_expires_at,
                    ops.revoked_at AS op_session_revoked_at,
-                   ops.idle_ttl_seconds AS op_session_idle_ttl_seconds
+                   ops.idle_ttl_seconds AS op_session_idle_ttl_seconds,
+                   ops.sid AS op_session_sid
             FROM refresh_tokens_v2 rt
             JOIN refresh_token_families fam ON fam.id = rt.family_id
             JOIN op_sessions ops ON ops.id = fam.op_session_id
@@ -1129,6 +1165,7 @@ impl OidcProvider {
             auth_time: old.auth_time,
             acr: old.acr,
             amr: old.amr,
+            op_session_sid: old.op_session_sid,
         })
     }
 
@@ -1609,6 +1646,11 @@ pub struct AuthCodeRow {
     pub client_id: Uuid,
     pub user_id: Uuid,
     pub op_session_id: Uuid,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` value the auth code's
+    /// row belongs to, JOINed on redemption so `handle_authorization_code_grant`
+    /// can emit it as the `sid` claim on the minted at+jwt and id_token
+    /// without a second query.
+    pub op_session_sid: String,
     pub redirect_uri: String,
     pub scope: Vec<String>,
     pub code_challenge: String,
@@ -1650,6 +1692,10 @@ pub struct RotatedTokens {
     /// §3.1.3.7 instead of the hardcoded `pwd` default.
     pub acr: String,
     pub amr: Vec<String>,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` the family was
+    /// authorised by, carried out so `handle_refresh_grant` emits it as
+    /// the `sid` claim on the rotated at+jwt / id_token.
+    pub op_session_sid: String,
 }
 
 /// Ad-hoc row used by the rotation transaction. Only fields the
@@ -1688,6 +1734,10 @@ struct RefreshTokenRotationRow {
     op_session_idle_expires_at: DateTime<Utc>,
     op_session_revoked_at: Option<DateTime<Utc>>,
     op_session_idle_ttl_seconds: i32,
+    /// BUNYIP-636 PR 4: the opaque `op_sessions.sid` string, JOINed in
+    /// beside the deadlines above so the rotation's minted at+jwt and
+    /// id_token carry it as the `sid` claim without a second query.
+    op_session_sid: String,
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
@@ -1983,6 +2033,7 @@ mod tests {
             "urn:mace:incommon:iap:silver",
             &["pwd".to_string()],
             None,
+            None,
         )
     }
 
@@ -2011,6 +2062,7 @@ mod tests {
             now,
             "urn:mace:incommon:iap:silver",
             &[],
+            None,
             None,
         );
         assert!(claims.scope.is_empty());
@@ -2045,6 +2097,63 @@ mod tests {
         assert_eq!(claims.bunyip_role, "");
     }
 
+    // BUNYIP-636 PR 4: the `sid` claim is emitted verbatim on the at+jwt
+    // when the caller passes one, and its wire key is exactly `sid` so
+    // the OIDC-shape verifiers (Front- and Back-Channel Logout, PMS-998)
+    // read it without a translation step.
+    #[test]
+    fn at_claims_emit_sid_when_the_caller_passes_one() {
+        let now = Utc::now();
+        let claims = AtClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &["openid".to_string()],
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:bunyip:loa:pwd",
+            &["pwd".to_string()],
+            None,
+            Some("op-sid-abc"),
+        );
+        assert_eq!(claims.sid.as_deref(), Some("op-sid-abc"));
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["sid"], "op-sid-abc");
+    }
+
+    // With `None`, the wire body is byte-identical to a pre-PR-4 mint:
+    // no `sid` key on the JSON at all, so a verifier that does not know
+    // the claim reads exactly what it read before.
+    #[test]
+    fn at_claims_omit_sid_when_none() {
+        let claims = build_claims_for("subscriber");
+        assert_eq!(claims.sid, None);
+        let json = serde_json::to_value(&claims).unwrap();
+        assert!(json.get("sid").is_none(), "no `sid` key: {json}");
+    }
+
+    // The other half of the rolling-deploy shape: an at+jwt minted by a
+    // pre-PR-4 build carries no `sid`, and its wire body must still
+    // deserialize into the new struct (defaulting `sid` to `None`).
+    #[test]
+    fn at_claims_deserialize_without_sid() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": "https://api.example.com",
+            "client_id": Uuid::new_v4().to_string(),
+            "scope": "openid",
+            "jti": Uuid::new_v4().to_string(),
+            "iat": 0, "nbf": 0, "exp": 0, "auth_time": 0,
+            "acr": "urn:mace:incommon:iap:silver",
+            "amr": ["pwd"],
+            "bunyip_role": "subscriber",
+        });
+        let claims: AtClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.sid, None);
+    }
+
     fn build_id_claims_for(role: &str, scope: &[String]) -> IdTokenClaims {
         let now = Utc::now();
         IdTokenClaims::build(
@@ -2057,6 +2166,7 @@ mod tests {
             now + Duration::seconds(600),
             now,
             "at_hash_value".to_string(),
+            None,
             None,
         )
     }
@@ -2127,6 +2237,51 @@ mod tests {
         });
         let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
         assert_eq!(claims.bunyip_role, None);
+    }
+
+    // BUNYIP-636 PR 4: id_token mirrors the at+jwt's `sid` shape.
+    #[test]
+    fn id_token_emits_sid_when_the_caller_passes_one() {
+        let now = Utc::now();
+        let claims = IdTokenClaims::build(
+            "https://issuer.example.com",
+            &test_user("subscriber"),
+            &test_client(),
+            &["openid".to_string()],
+            "nonce-123",
+            now,
+            now + Duration::seconds(600),
+            now,
+            "at_hash_value".to_string(),
+            None,
+            Some("op-sid-abc"),
+        );
+        assert_eq!(claims.sid.as_deref(), Some("op-sid-abc"));
+        let json = serde_json::to_value(&claims).unwrap();
+        assert_eq!(json["sid"], "op-sid-abc");
+    }
+
+    #[test]
+    fn id_token_omits_sid_when_none() {
+        let claims = build_id_claims_for("subscriber", &["openid".to_string()]);
+        assert_eq!(claims.sid, None);
+        let json = serde_json::to_value(&claims).unwrap();
+        assert!(json.get("sid").is_none(), "no `sid` key: {json}");
+    }
+
+    #[test]
+    fn id_token_deserializes_without_sid() {
+        let legacy = serde_json::json!({
+            "iss": "https://issuer.example.com",
+            "sub": Uuid::new_v4().to_string(),
+            "aud": Uuid::new_v4().to_string(),
+            "exp": 0, "iat": 0, "auth_time": 0,
+            "nonce": "n", "azp": Uuid::new_v4().to_string(),
+            "at_hash": "h",
+            "bunyip_role": "subscriber",
+        });
+        let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
+        assert_eq!(claims.sid, None);
     }
 
     // BUNYIP-636: `OpSession::is_alive` is one definition of "this session

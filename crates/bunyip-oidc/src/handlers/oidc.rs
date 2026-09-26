@@ -991,7 +991,10 @@ async fn handle_authorization_code_grant(
     // Mint tokens. BUNYIP-63: pass `selected_tenant_id` so the at+jwt
     // and id_token carry the per-client tenant claim. The refresh row
     // takes the same value so the next rotation mints the same
-    // tenant.
+    // tenant. BUNYIP-636 PR 4: pass `op_session_sid` so the at+jwt and
+    // id_token carry the `sid` claim (OIDC Front-/Back-Channel Logout
+    // shape); the value was JOINed into `code_row` at redemption so no
+    // second query is needed here.
     let (access_token, at_exp) = provider.mint_access_token(
         &user,
         client,
@@ -1000,6 +1003,7 @@ async fn handle_authorization_code_grant(
         code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
         &code_row.amr.clone().unwrap_or_default(),
         code_row.selected_tenant_id,
+        Some(&code_row.op_session_sid),
     )?;
 
     let id_token = provider.mint_id_token(
@@ -1010,6 +1014,7 @@ async fn handle_authorization_code_grant(
         code_row.auth_time,
         &access_token,
         code_row.selected_tenant_id,
+        Some(&code_row.op_session_sid),
     )?;
 
     let (raw_refresh, _) = provider
@@ -1133,6 +1138,9 @@ async fn handle_refresh_grant(
         &rotated.acr,
         &rotated.amr,
         rotated.selected_tenant_id,
+        // BUNYIP-636 PR 4: carry the op-session's sid through so the
+        // rotated at+jwt stays tied to the authorising session.
+        Some(&rotated.op_session_sid),
     )?;
 
     let expires_in = (at_exp - chrono::Utc::now()).num_seconds();
