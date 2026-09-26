@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            INSERT INTO op_sessions\n                (id, sid, user_id, created_at, last_active_at, expires_at,\n                 idle_expires_at, user_agent, ip, acr, amr)\n            VALUES\n                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5, $6::inet, $7, $8)\n            RETURNING\n                id, sid, user_id, created_at, last_active_at, expires_at,\n                idle_expires_at, revoked_at, user_agent,\n                ip::TEXT as \"ip: String\",\n                acr, amr\n            ",
+  "query": "\n            INSERT INTO op_sessions\n                (id, sid, user_id, created_at, last_active_at, expires_at,\n                 idle_expires_at, idle_ttl_seconds, user_agent, ip, acr, amr)\n            VALUES\n                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5, $6, $7::inet, $8, $9)\n            RETURNING\n                id, sid, user_id, created_at, last_active_at, expires_at,\n                idle_expires_at, revoked_at, user_agent,\n                ip::TEXT as \"ip: String\",\n                acr, amr\n            ",
   "describe": {
     "columns": [
       {
@@ -70,6 +70,7 @@
         "Uuid",
         "Timestamptz",
         "Timestamptz",
+        "Int4",
         "Text",
         "Inet",
         "Text",
@@ -91,5 +92,5 @@
       true
     ]
   },
-  "hash": "2446c0ee211fa54cf228eda2c9f6b259a84e124340ad7138253d0f0983c0b2f9"
+  "hash": "592b38b28bfcd890bbe10ccf890fde28beaaad8b62d5ef0c136b26619ab07ec1"
 }

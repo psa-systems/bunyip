@@ -254,7 +254,7 @@ pub async fn verify_2fa(
     // MFA assurance; amr reflects both factors that participated.
     // BUNYIP-636: the OP session takes the sign-in's `remember` so its
     // idle window matches the refresh-token cookie's max-age.
-    let op_cookie = crate::handlers::auth::establish_op_session(
+    let established = crate::handlers::auth::establish_op_session(
         &oidc_provider,
         &req,
         user_response.id,
@@ -263,6 +263,13 @@ pub async fn verify_2fa(
         crate::handlers::auth::ACR_MFA,
         &["pwd".to_string(), "mfa".to_string()],
         remember,
+    )
+    .await;
+    crate::handlers::auth::link_hub_refresh_to_op_session(
+        &auth_service,
+        &established,
+        &tokens.refresh_token,
+        user_response.id,
     )
     .await;
 
@@ -289,8 +296,8 @@ pub async fn verify_2fa(
     if let Some(token) = trusted_token {
         resp.cookie(AuthCookies::trusted_device(&token, secure, cookie_domain));
     }
-    if let Some(op) = op_cookie {
-        resp.cookie(op);
+    if let Some(session) = established {
+        resp.cookie(session.cookie);
     }
     Ok(resp.json(crate::responses::ApiResponse {
         success: true,
