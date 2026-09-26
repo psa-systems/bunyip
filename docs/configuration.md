@@ -424,6 +424,13 @@ Every variable below has a working default; set it only to tune the deployment.
   `OCI_TOKEN_TTL_SECS`.
 - **OIDC**: `OIDC_JWT_PUBLIC_KEYS_DIR`, `OIDC_ACCESS_TOKEN_TTL_SECONDS`, `OIDC_REFRESH_TOKEN_TTL_SECONDS`,
   `OIDC_REFRESH_IDLE_TTL_SECONDS`, `OIDC_CODE_TTL_SECONDS`, `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE`.
+- **OP session lifetime** (BUNYIP-636): `SESSION_IDLE_TTL_SECONDS` - the OP session's sliding-idle deadline for
+  an ordinary sign-in, in seconds; default 28800 (8 h). `SESSION_IDLE_TTL_REMEMBER_SECONDS` - the same, when the
+  user opted into "remember me"; default 1209600 (14 d). The absolute deadline pair (1 d / 30 d) is set from
+  `remember` at `create_op_session` and matches the refresh-token cookie's max-age. These control the OP session
+  (`op_sessions.expires_at` + `op_sessions.idle_expires_at`); later PRs in the BUNYIP-636 series make the OIDC
+  refresh grant read the same clock, at which point the `OIDC_REFRESH_*_TTL_SECONDS` values become caps rather
+  than an independent clock.
 - **Infisical**: `INFISICAL_SECRET_PATH`, `INFISICAL_ENVIRONMENT` (read verbatim; must match the environment slug
   configured under Infisical > Secrets > Project > Settings > Environments exactly, e.g. `prod`).
 - **Diagnostics**: `DB_POOL_METRICS_INTERVAL_SECS` - seconds between database pool samples (`size` / `idle` / `in_use` /

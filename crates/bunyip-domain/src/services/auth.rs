@@ -1396,12 +1396,16 @@ impl AuthService {
     /// handler can set the `bunyip_trusted_device` cookie. It is `None` for
     /// admins (who never skip 2FA) and when "remember me" was not chosen. The
     /// same `remember` also selects the 30-day vs 1-day session length.
+    /// BUNYIP-636: the return tuple's fourth element carries the sign-in's
+    /// original `remember` choice so the caller can set the OP session's
+    /// idle window from the same signal that already drives the refresh
+    /// TTL (`refresh_absolute_ttl(remember)`).
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
-    ) -> Result<(AuthTokens, UserResponse, Option<String>), AppError> {
+    ) -> Result<(AuthTokens, UserResponse, Option<String>, bool), AppError> {
         // Verify challenge token
         let claims = self.jwt.verify_2fa_challenge_token(challenge_token)?;
         let user_id = claims.sub;
@@ -1456,7 +1460,7 @@ impl AuthService {
         )
         .await?;
 
-        Ok((tokens, UserResponse::from(user), trusted_token))
+        Ok((tokens, UserResponse::from(user), trusted_token, remember))
     }
 
     /// Create a trusted device for a user and return the opaque cookie secret

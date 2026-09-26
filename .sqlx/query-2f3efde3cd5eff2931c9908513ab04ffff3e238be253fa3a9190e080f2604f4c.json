@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, sid, user_id, created_at, last_active_at, expires_at,\n                   revoked_at, user_agent,\n                   ip::TEXT as \"ip: String\",\n                   acr, amr\n            FROM op_sessions\n            WHERE sid = $1\n              AND revoked_at IS NULL\n              AND expires_at > NOW()\n            ",
+  "query": "\n            SELECT id, sid, user_id, created_at, last_active_at, expires_at,\n                   idle_expires_at, revoked_at, user_agent,\n                   ip::TEXT as \"ip: String\",\n                   acr, amr\n            FROM op_sessions\n            WHERE sid = $1\n              AND revoked_at IS NULL\n              AND expires_at > NOW()\n              AND idle_expires_at > NOW()\n            ",
   "describe": {
     "columns": [
       {
@@ -35,26 +35,31 @@
       },
       {
         "ordinal": 6,
-        "name": "revoked_at",
+        "name": "idle_expires_at",
         "type_info": "Timestamptz"
       },
       {
         "ordinal": 7,
+        "name": "revoked_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
         "name": "user_agent",
         "type_info": "Text"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "ip: String",
         "type_info": "Text"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "acr",
         "type_info": "Text"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "amr",
         "type_info": "TextArray"
       }
@@ -71,6 +76,7 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       null,
@@ -78,5 +84,5 @@
       true
     ]
   },
-  "hash": "fedfe5a3c7336073b758f506d635637b208d26483f0cb88a728dd5f211d1c9c3"
+  "hash": "2f3efde3cd5eff2931c9908513ab04ffff3e238be253fa3a9190e080f2604f4c"
 }
