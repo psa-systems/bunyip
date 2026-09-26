@@ -397,9 +397,3 @@ jobs:
           # Test fixtures and dev defaults only; Nosey Parker's list is .noseyparker-ignore.txt.
           # History findings are reported by git object path, so they need the value regex.
           kingfisher_skip_regex: '^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$'
-          # Nosey Parker's ignore file matches the tree at HEAD, not blob paths
-          # in git history, so a dev-fixture URI in the BUNYIP-636 op-session
-          # test still trips against the historical blob. The finding id is
-          # derived from rule + matched text, so it targets this one benign
-          # `bunyip:devpassword@localhost:5432` docstring wherever it appears.
-          noseyparker_findings_exclude: '7e99709560c3a0656bba97cb21e2533215025ac8'
