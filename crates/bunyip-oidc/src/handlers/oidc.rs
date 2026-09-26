@@ -719,6 +719,11 @@ async fn try_silent_sso(
     // Path 1: valid access_token cookie.
     if let Some(access_token) = req.cookie("access_token") {
         if let Ok(claims) = jwt_service.verify_access_token(access_token.value()) {
+            // BUNYIP-636: silent SSO does not carry the original login's
+            // remember-me signal, so a re-established session takes the
+            // shorter idle window. A user who explicitly chose remember at
+            // login still has their durable refresh-token family; the OP
+            // session just re-establishes on the next authorize if idle.
             let session = provider
                 .create_op_session(
                     claims.sub,
@@ -726,6 +731,7 @@ async fn try_silent_sso(
                     ip,
                     "urn:bunyip:loa:pwd",
                     &["pwd".to_string()],
+                    false,
                 )
                 .await?;
             tracing::info!(
@@ -775,6 +781,7 @@ async fn try_silent_sso(
             return Ok(None);
         }
     };
+    // BUNYIP-636: silent SSO takes the shorter idle window; see Path 1.
     let session = provider
         .create_op_session(
             refresh_claims.sub,
@@ -782,6 +789,7 @@ async fn try_silent_sso(
             ip,
             "urn:bunyip:loa:pwd",
             &["pwd".to_string()],
+            false,
         )
         .await?;
     tracing::info!(

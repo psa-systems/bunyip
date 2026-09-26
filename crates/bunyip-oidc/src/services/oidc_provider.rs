@@ -324,6 +324,14 @@ impl OidcProvider {
     // ── Op-session ────────────────────────────────────────────────────────────
 
     /// Create a new IdP session for a user (after successful authentication).
+    ///
+    /// BUNYIP-636: both deadlines are set from `remember`. `expires_at` is the
+    /// ABSOLUTE ceiling and does not move; `idle_expires_at` is the SLIDING
+    /// deadline the refresh grant (PR 2) rolls forward on every rotation.
+    /// Ordinary sign-in is `remember = false` (8 h idle / 1 d absolute);
+    /// remember-me is `remember = true` (14 d idle / 30 d absolute). The
+    /// absolute pair matches the existing `refresh_absolute_ttl` policy so
+    /// the OP session and the hub refresh token die together.
     pub async fn create_op_session(
         &self,
         user_id: Uuid,
@@ -331,10 +339,22 @@ impl OidcProvider {
         ip: Option<std::net::IpAddr>,
         acr: &str,
         amr: &[String],
+        remember: bool,
     ) -> Result<OpSession, AppError> {
         let sid = generate_opaque_token(32);
         let now = Utc::now();
-        let expires_at = now + Duration::days(7);
+        let idle_ttl = if remember {
+            Duration::seconds(self.config.session_idle_ttl_remember_secs as i64)
+        } else {
+            Duration::seconds(self.config.session_idle_ttl_secs as i64)
+        };
+        let absolute_ttl = if remember {
+            Duration::days(30)
+        } else {
+            Duration::days(1)
+        };
+        let idle_expires_at = now + idle_ttl;
+        let expires_at = now + absolute_ttl;
         let ip_str: Option<String> = ip.map(|a| a.to_string());
 
         let row = sqlx::query_as!(
@@ -342,18 +362,19 @@ impl OidcProvider {
             r#"
             INSERT INTO op_sessions
                 (id, sid, user_id, created_at, last_active_at, expires_at,
-                 user_agent, ip, acr, amr)
+                 idle_expires_at, user_agent, ip, acr, amr)
             VALUES
-                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5::inet, $6, $7)
+                (gen_random_uuid(), $1, $2, NOW(), NOW(), $3, $4, $5, $6::inet, $7, $8)
             RETURNING
                 id, sid, user_id, created_at, last_active_at, expires_at,
-                revoked_at, user_agent,
+                idle_expires_at, revoked_at, user_agent,
                 ip::TEXT as "ip: String",
                 acr, amr
             "#,
             sid,
             user_id,
             expires_at,
+            idle_expires_at,
             user_agent,
             ip_str as Option<String>,
             acr,
@@ -376,10 +397,16 @@ impl OidcProvider {
     /// row was actually revoked; either outcome is acceptable to the
     /// caller. Errors only on a hard DB failure.
     pub async fn revoke_op_session_by_sid(&self, sid: &str) -> Result<bool, AppError> {
+        // BUNYIP-636: the WHERE clause matches the SQL twin of
+        // `OpSession::is_alive` so this revoke keeps returning `false` for a
+        // session that was already dead by either deadline.
         let result = sqlx::query(
             "UPDATE op_sessions \
              SET revoked_at = NOW() \
-             WHERE sid = $1 AND revoked_at IS NULL AND expires_at > NOW()",
+             WHERE sid = $1 \
+               AND revoked_at IS NULL \
+               AND expires_at > NOW() \
+               AND idle_expires_at > NOW()",
         )
         .bind(sid)
         .execute(&self.pool)
@@ -389,18 +416,26 @@ impl OidcProvider {
     }
 
     /// Load an active op-session by its opaque sid value.
+    ///
+    /// BUNYIP-636: the WHERE clause is the SQL twin of [`OpSession::is_alive`]:
+    /// not revoked, and both deadlines in the future. Adding an `AND
+    /// idle_expires_at > NOW()` clause anywhere else in this crate would be a
+    /// second definition of the predicate; the guard test
+    /// `op_session_predicate_has_one_home` in this module fails the build if
+    /// that phrase appears outside these two sites.
     pub async fn load_op_session(&self, sid: &str) -> Result<Option<OpSession>, AppError> {
         sqlx::query_as!(
             OpSession,
             r#"
             SELECT id, sid, user_id, created_at, last_active_at, expires_at,
-                   revoked_at, user_agent,
+                   idle_expires_at, revoked_at, user_agent,
                    ip::TEXT as "ip: String",
                    acr, amr
             FROM op_sessions
             WHERE sid = $1
               AND revoked_at IS NULL
               AND expires_at > NOW()
+              AND idle_expires_at > NOW()
             "#,
             sid
         )
@@ -1405,6 +1440,12 @@ pub struct OAuthClient {
 }
 
 /// Active IdP session row.
+///
+/// BUNYIP-636: `expires_at` is the ABSOLUTE deadline set once at creation,
+/// `idle_expires_at` is the SLIDING deadline every liveness check reads.
+/// A session is alive when it is not revoked AND both deadlines are in the
+/// future; the predicate for that lives in [`op_session_is_alive`] so no
+/// second copy of it can drift.
 pub struct OpSession {
     pub id: Uuid,
     pub sid: String,
@@ -1412,11 +1453,22 @@ pub struct OpSession {
     pub created_at: DateTime<Utc>,
     pub last_active_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+    pub idle_expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
     pub user_agent: Option<String>,
     pub ip: Option<String>,
     pub acr: Option<String>,
     pub amr: Option<Vec<String>>,
+}
+
+impl OpSession {
+    /// BUNYIP-636: one definition of "this session is alive", used by every
+    /// caller that has an [`OpSession`] in hand. The SQL twin lives beside
+    /// [`OidcProvider::load_op_session`]; `op_session_predicate_has_one_home`
+    /// in this module fails the build if a second copy appears.
+    pub fn is_alive(&self, now: DateTime<Utc>) -> bool {
+        self.revoked_at.is_none() && self.expires_at > now && self.idle_expires_at > now
+    }
 }
 
 /// Authorization code row (consumed view). `sqlx::FromRow` so
@@ -1938,5 +1990,122 @@ mod tests {
         });
         let claims: IdTokenClaims = serde_json::from_value(legacy).unwrap();
         assert_eq!(claims.bunyip_role, None);
+    }
+
+    // BUNYIP-636: `OpSession::is_alive` is one definition of "this session
+    // is alive" and the WHERE clauses of `load_op_session` /
+    // `revoke_op_session_by_sid` are its SQL twin. This test scans this file
+    // for the load-bearing predicate fragment `AND idle_expires_at > NOW()`
+    // and fails the build if it appears anywhere BUT those two sites, so a
+    // future caller that wants to gate on liveness has to route through the
+    // one place rather than paste the fragment into a fresh query. The
+    // predicate CAN reappear inside a code comment (this one, for example)
+    // without breaking the guard: only real SQL fragments trip the count.
+    #[test]
+    fn op_session_predicate_has_one_home() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/services/oidc_provider.rs");
+        let src = std::fs::read_to_string(&path).expect("readable source file");
+
+        // Count occurrences OUTSIDE comments and OUTSIDE `#[cfg(test)]` blocks.
+        // The two sanctioned sites both live in the runtime (non-test) half,
+        // so filtering test bodies out is the tighter check.
+        let (prod, _tests) = src
+            .split_once("#[cfg(test)]")
+            .expect("this file has a test module marker");
+
+        // Skip lines whose leading non-whitespace is a comment marker.
+        let mut count = 0usize;
+        for line in prod.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("AND idle_expires_at > NOW()") {
+                count += 1;
+            }
+        }
+
+        assert_eq!(
+            count, 2,
+            "the `AND idle_expires_at > NOW()` liveness fragment must appear \
+             exactly twice in production code (load_op_session + \
+             revoke_op_session_by_sid). A new use routes through \
+             `OpSession::is_alive` (in-Rust) or `load_op_session` (SQL); it \
+             does not copy the fragment. Found {count} occurrences.",
+        );
+    }
+
+    // BUNYIP-636: `OpSession::is_alive` is a pure function of the row and the
+    // "now" instant. Pins the three arms the SQL twin also refuses: revoked,
+    // past absolute deadline, past idle deadline.
+    #[test]
+    fn op_session_is_alive_matches_the_predicate_arms() {
+        let base_now = Utc::now();
+        let alive = OpSession {
+            id: Uuid::new_v4(),
+            sid: "s".to_string(),
+            user_id: Uuid::new_v4(),
+            created_at: base_now,
+            last_active_at: base_now,
+            expires_at: base_now + Duration::hours(1),
+            idle_expires_at: base_now + Duration::minutes(30),
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(alive.is_alive(base_now));
+
+        let revoked = OpSession {
+            revoked_at: Some(base_now),
+            ..OpSession {
+                id: alive.id,
+                sid: alive.sid.clone(),
+                user_id: alive.user_id,
+                created_at: alive.created_at,
+                last_active_at: alive.last_active_at,
+                expires_at: alive.expires_at,
+                idle_expires_at: alive.idle_expires_at,
+                revoked_at: None,
+                user_agent: None,
+                ip: None,
+                acr: None,
+                amr: None,
+            }
+        };
+        assert!(!revoked.is_alive(base_now));
+
+        let expired_absolute = OpSession {
+            expires_at: base_now - Duration::seconds(1),
+            id: alive.id,
+            sid: alive.sid.clone(),
+            user_id: alive.user_id,
+            created_at: alive.created_at,
+            last_active_at: alive.last_active_at,
+            idle_expires_at: alive.idle_expires_at,
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(!expired_absolute.is_alive(base_now));
+
+        let expired_idle = OpSession {
+            idle_expires_at: base_now - Duration::seconds(1),
+            id: alive.id,
+            sid: alive.sid,
+            user_id: alive.user_id,
+            created_at: alive.created_at,
+            last_active_at: alive.last_active_at,
+            expires_at: alive.expires_at,
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        };
+        assert!(!expired_idle.is_alive(base_now));
     }
 }

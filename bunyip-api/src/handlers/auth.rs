@@ -50,6 +50,7 @@ pub(crate) async fn establish_op_session(
     op_session_cookie_domain: Option<&str>,
     acr: &str,
     amr: &[String],
+    remember: bool,
 ) -> Option<actix_web::cookie::Cookie<'static>> {
     let provider = provider.as_ref().as_ref()?;
     let user_agent = req
@@ -73,7 +74,7 @@ pub(crate) async fn establish_op_session(
     }
 
     match provider
-        .create_op_session(user_id, user_agent, ip, acr, amr)
+        .create_op_session(user_id, user_agent, ip, acr, amr, remember)
         .await
     {
         Ok(session) => Some(AuthCookies::op_session(
@@ -353,6 +354,9 @@ pub async fn register(
     let secure = config.cookies_secure(&req);
     let cookie_domain = config.cookie_domain.as_deref();
 
+    // BUNYIP-381 / BUNYIP-636: a fresh registration is not "remember me",
+    // so the OP session takes the shorter idle window in step with the
+    // 1-day refresh-token cookie set below.
     let op_cookie = establish_op_session(
         &oidc_provider,
         &req,
@@ -361,6 +365,7 @@ pub async fn register(
         config.op_session_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
+        false,
     )
     .await;
 
@@ -495,6 +500,9 @@ pub async fn login(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
+            // BUNYIP-636: the OP session's idle window matches the refresh
+            // token cookie's max-age (`body.remember`), so both clocks are
+            // driven by the same signal from the same login.
             let op_cookie = establish_op_session(
                 &oidc_provider,
                 &req,
@@ -503,6 +511,7 @@ pub async fn login(
                 config.op_session_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
+                body.remember,
             )
             .await;
 
@@ -657,6 +666,9 @@ pub async fn verify_magic_link(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
+            // BUNYIP-636: the magic-link cookie has always been set with
+            // the remember-me (30-day) lifetime; carry the same signal into
+            // the OP session so both clocks match.
             let op_cookie = establish_op_session(
                 &oidc_provider,
                 &req,
@@ -665,6 +677,7 @@ pub async fn verify_magic_link(
                 config.op_session_cookie_domain(),
                 ACR_OTP,
                 &["otp".to_string()],
+                true,
             )
             .await;
 
@@ -739,6 +752,11 @@ pub async fn verify_login_approval(
     // factor. v1 gates password + magic-link; report the password ACR as the
     // common single-factor assurance (a follow-up can thread the exact origin
     // through the challenge if the distinction ever matters).
+    //
+    // BUNYIP-636: the refresh_token cookie set below has always used the
+    // remember-me (30-day) lifetime for this flow, so the OP session takes
+    // the same signal. Threading the challenge's actual `remember` here is
+    // a follow-up if the copy-paste ever needs to become a real choice.
     let op_cookie = establish_op_session(
         &oidc_provider,
         &req,
@@ -747,6 +765,7 @@ pub async fn verify_login_approval(
         config.op_session_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
+        true,
     )
     .await;
 
@@ -823,6 +842,8 @@ pub async fn accept_admin_invite(
             let secure = config.cookies_secure(&req);
             let cookie_domain = config.cookie_domain.as_deref();
 
+            // BUNYIP-636: the invite-accept refresh_token cookie has always
+            // been remember-me, so the OP session matches.
             let op_cookie = establish_op_session(
                 &oidc_provider,
                 &req,
@@ -831,6 +852,7 @@ pub async fn accept_admin_invite(
                 config.op_session_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
+                true,
             )
             .await;
 
