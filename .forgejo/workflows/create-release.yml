@@ -9,11 +9,13 @@
 # only what Forgejo cannot read from the called workflow: the trigger,
 # `runs-on`, and `secrets: inherit`.
 #
-# Paired with the `just create-release <major|minor|hotfix>` recipe, which also
-# comes from common/common.just. The recipe pushes `release/v<version>` and
-# opens the PR; this workflow tags and publishes once that PR merges. Pushing
-# the tag re-triggers build-api.yml and build-web.yml (their `tags: ['v*']`
-# triggers), which publish the version-tagged OCI images.
+# Paired with the release recipes in common/common.just. `just create-release
+# <major|minor|hotfix>` pushes `release/v<version>` and opens the PR; after that
+# PR merges, `just publish-release` pushes the `release/v<version>` tag on the
+# merged commit, and that tag push is what triggers this workflow (BUNYIP-838 /
+# PC-68). The reusable workflow then creates the `vX.Y.Z` tag and release, which
+# re-triggers build-api.yml and build-web.yml (their `tags: ['v*']` triggers) to
+# publish the version-tagged OCI images.
 #
 # Secret: the reusable workflow reads FORGEJO_PAT, which needs
 # `write:repository` scope to call the /api/v1/repos/.../releases endpoint.
