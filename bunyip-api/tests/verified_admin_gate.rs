@@ -22,7 +22,7 @@
 use actix_web::{test, web, App, HttpResponse};
 use bunyip_api::middleware::{AdminUser, VerifiedAdminUser};
 use bunyip_api::models::{CreateUser, User, UserRole};
-use bunyip_api::repositories::UserRepository;
+use bunyip_api::repositories::{MailerSuppressionRepository, UserRepository};
 use bunyip_api::services::{JwtConfig, JwtService};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -214,6 +214,72 @@ async fn admin_invites_require_a_verified_admin() {
     for req in calls(&verified) {
         assert_ne!(test::call_service(&app, req).await.status(), 403);
     }
+
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+/// BUNYIP-837: `DELETE /v1/admin/mailer-suppressions/{address}` refuses an
+/// unverified admin and admits a verification-complete one.
+#[actix_rt::test]
+async fn mailer_suppression_delete_requires_a_verified_admin() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(jwt.clone())
+            .route(
+                "/admin/mailer-suppressions/{address}",
+                web::delete().to(bunyip_api::handlers::delete_mailer_suppression),
+            ),
+    )
+    .await;
+
+    let user = seed_admin(&pool).await;
+    let address = format!("verified-gate-{}@example.test", Uuid::new_v4().simple());
+    MailerSuppressionRepository::upsert(&pool, &address, "bounce", None)
+        .await
+        .expect("seed suppression");
+
+    let req = test::TestRequest::delete()
+        .uri(&format!("/admin/mailer-suppressions/{address}"))
+        .insert_header(("authorization", bearer(&jwt, &user)))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        403,
+        "an unverified admin must be refused the delete"
+    );
+
+    UserRepository::update_profile(&pool, user.id, Some("Ada"), Some("Lovelace"), None)
+        .await
+        .expect("set name");
+    UserRepository::set_email_verified(&pool, user.id)
+        .await
+        .expect("verify email");
+    let verified = UserRepository::find_by_id(&pool, user.id)
+        .await
+        .expect("reload")
+        .expect("still exists");
+
+    let req = test::TestRequest::delete()
+        .uri(&format!("/admin/mailer-suppressions/{address}"))
+        .insert_header(("authorization", bearer(&jwt, &verified)))
+        .to_request();
+    assert_eq!(
+        test::call_service(&app, req).await.status(),
+        200,
+        "a verification-complete admin must be admitted"
+    );
 
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user.id)
