@@ -11,7 +11,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::errors::AppError;
-use crate::middleware::AdminUser;
+use crate::middleware::{AdminUser, VerifiedAdminUser};
 use crate::models::{AuditAction, CreateAuditLog};
 use crate::repositories::{AuditLogRepository, MailerSuppressionRepository};
 use crate::responses::{get_request_id, paginated, success_no_data};
@@ -45,12 +45,12 @@ pub async fn list_mailer_suppressions(
 /// DELETE /v1/admin/mailer-suppressions/{address}
 ///
 /// Removes `address` from the suppression list, so it can be mailed again.
-/// Returns 404 when the address was not suppressed. AdminUser-guarded and
-/// audited, since lifting a suppression resumes sending to a recipient the
-/// suite previously stopped mailing.
+/// Returns 404 when the address was not suppressed. VerifiedAdminUser-guarded
+/// and audited, since lifting a suppression resumes sending to a recipient
+/// the suite previously stopped mailing.
 pub async fn delete_mailer_suppression(
     req: HttpRequest,
-    admin: AdminUser,
+    admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
