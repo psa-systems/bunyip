@@ -33,6 +33,13 @@ def check-workflow [path: string]: nothing -> list<string> {
     }
 
     $jobs | transpose name job | each {|entry|
+        # A reusable-workflow caller is a pure `uses:` job: it runs no step of its
+        # own, and Forgejo's schema rejects the whole workflow if `defaults` (or
+        # `runs-on`) appears beside `uses` (BUNYIP-838). The Nushell-shell rule is
+        # vacuous for it and must not be demanded, or the two rules contradict.
+        if ($entry.job | get --optional uses | is-not-empty) {
+            return []
+        }
         let declared = ($entry.job | get --optional defaults.run.shell)
         let job_problems = if $declared == $NU_SHELL { [] } else {
             [$"($path): job `($entry.name)` must set `defaults.run.shell: ($NU_SHELL)`, found ($declared | to nuon)"]
@@ -69,10 +76,16 @@ def self-test []: nothing -> nothing {
     let compliant = $"($dir)/compliant.yml"
     "jobs:\n  build:\n    defaults:\n      run:\n        shell: nu {0}\n    steps:\n      - name: Do a thing\n        run: print hi\n" | save --force $compliant
 
+    # A reusable-workflow caller (`uses:`) runs no step and cannot carry
+    # `defaults`; the gate must accept it (BUNYIP-838).
+    let reusable_caller = $"($dir)/reusable-caller.yml"
+    "jobs:\n  call:\n    uses: org/repo/.forgejo/workflows/x.yml@main\n    secrets: inherit\n" | save --force $reusable_caller
+
     let cases = [
         {file: $missing_default, expect_problems: true, why: "a job with no defaults.run.shell"}
         {file: $bash_step, expect_problems: true, why: "a step that declares shell: bash"}
         {file: $compliant, expect_problems: false, why: "a converted job"}
+        {file: $reusable_caller, expect_problems: false, why: "a reusable-workflow caller job"}
     ]
     let results = ($cases | each {|c|
         let problems = (check-workflow $c.file)

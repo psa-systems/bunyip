@@ -31,22 +31,16 @@ on:
       - 'release/v*'
 
 jobs:
+  # A reusable-workflow caller is a PURE `uses:` job. Forgejo 16's schema accepts
+  # only uses / with / secrets / needs / if on such a job and rejects the whole
+  # workflow ("Unknown Property defaults", "Failed to match workflow-job") when a
+  # normal-job key like `runs-on` or `defaults` appears beside `uses` (BUNYIP-838;
+  # BUNYIP-721 added both and no release ran to catch it). So the runner label
+  # lives on the reusable workflow's own job (common sets
+  # RUNS_ON_OPENSUSE_BASE_MEDIUM there, resolved in this repo's context), and this
+  # job declares no `defaults` shell because it runs no step of its own.
+  # psa-systems/common is the org's own shared workflow repo; `@main` is how a
+  # shared-workflow fix reaches this caller, and a SHA pin is tracked separately.
   create-release:
-    # psa-systems/common is the org's own shared workflow repo (same org, same
-    # review gate as this one); tracking `@main` is how a shared-workflow fix
-    # or a BUNYIP-444-style label rename reaches this caller. Narrowing this to
-    # a SHA pin is tracked separately.
     uses: psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
-    # MEDIUM: git plus two API calls, nothing compiles. Set here too because Forgejo
-    # resolves a cross-repo reusable job's label in the caller (common README).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
-    # A called workflow receives no secret it is not passed, and the reusable
-    # workflow needs FORGEJO_PAT.
     secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases API; this caller job runs no step and reads no secret itself
-    # This job runs no step of its own, so the Nushell rule (BUNYIP-489) is
-    # vacuous here; declared anyway so the gate stays absolute and a step added
-    # to a caller job can never inherit Bash. The called workflow declares its
-    # own shell.
-    defaults:
-      run:
-        shell: nu {0}
