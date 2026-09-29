@@ -159,6 +159,17 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
     .execute(&pool)
     .await
     .expect("add an extra application");
+    sqlx::query("DELETE FROM feature_toggles WHERE key = 'archive_fixture_toggle'")
+        .execute(&pool)
+        .await
+        .expect("delete a feature toggle");
+    sqlx::query(
+        "INSERT INTO feature_toggles (key, enabled) VALUES ('archive_fixture_extra_toggle', TRUE) \
+         ON CONFLICT (key) DO NOTHING",
+    )
+    .execute(&pool)
+    .await
+    .expect("add an extra feature toggle");
 
     let reopened = settings_archive::open(&bytes, STRONG_PASSPHRASE)
         .await
@@ -208,6 +219,24 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
         0,
         "the extra application survived a replace import"
     );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM feature_toggles WHERE key = 'archive_fixture_toggle' AND enabled"
+        )
+        .await,
+        1,
+        "the deleted feature toggle was not restored"
+    );
+    assert_eq!(
+        count(
+            &pool,
+            "SELECT COUNT(*) FROM feature_toggles WHERE key = 'archive_fixture_extra_toggle'"
+        )
+        .await,
+        0,
+        "the extra feature toggle survived a replace import"
+    );
 
     // Idempotence: the second run is a no-op, which is what makes re-running a
     // partially failed import safe.
@@ -219,6 +248,12 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
         "a second import of the same archive still had work to do: {:?}",
         again.plan
     );
+
+    // The fixture toggle names no registered feature; drop it so it never warns.
+    sqlx::query("DELETE FROM feature_toggles WHERE key = 'archive_fixture_toggle'")
+        .execute(&pool)
+        .await
+        .expect("drop the fixture toggle");
 }
 
 /// The rows the round trip deletes and restores. Created here rather than
@@ -235,6 +270,17 @@ async fn seed_fixture(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("clear a previous run's extra application");
+    sqlx::query("DELETE FROM feature_toggles WHERE key = 'archive_fixture_extra_toggle'")
+        .execute(pool)
+        .await
+        .expect("clear a previous run's extra feature toggle");
+    sqlx::query(
+        "INSERT INTO feature_toggles (key, enabled) VALUES ('archive_fixture_toggle', TRUE) \
+         ON CONFLICT (key) DO UPDATE SET enabled = TRUE",
+    )
+    .execute(pool)
+    .await
+    .expect("seed a feature toggle");
 
     // A freshly-migrated `tier_config` has every tier visible with no price
     // mapped, which is exactly the state `visible_without_price_error` refuses.

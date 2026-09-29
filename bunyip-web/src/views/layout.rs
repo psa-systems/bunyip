@@ -684,6 +684,13 @@ fn admin_items() -> Vec<NavItem> {
             icon: "settings",
             external: false,
         },
+        // BUNYIP-840: every feature toggle on one page.
+        NavItem {
+            title: "Feature Toggles",
+            href: "/admin/features",
+            icon: "sliders-horizontal",
+            external: false,
+        },
         NavItem {
             title: "Stripe",
             href: "/admin/stripe",

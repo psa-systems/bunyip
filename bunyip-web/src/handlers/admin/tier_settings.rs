@@ -20,7 +20,7 @@ use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
-use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
+use crate::views::ui::{button_class, error_box, icon};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
@@ -39,10 +39,6 @@ pub(super) struct TierFormValues {
     /// BUNYIP-527: the single trial Stripe actually grants at checkout, relocated
     /// here from the Stripe page. It persists to `stripe_config`, not tier config.
     pub(super) trial_period_days: String,
-    /// BUNYIP-493: the organizations and teams switch. A checkbox rather than a
-    /// typed field, so it carries a bool: this form always submits every
-    /// control, which makes an absent value a real "unticked".
-    pub(super) orgs_enabled: bool,
 }
 
 impl TierFormValues {
@@ -53,7 +49,6 @@ impl TierFormValues {
             early_adopter_trial_days: c.early_adopter_trial_days.to_string(),
             standard_trial_days: c.standard_trial_days.to_string(),
             trial_period_days: trial_period_days.to_string(),
-            orgs_enabled: c.orgs_enabled,
         }
     }
 
@@ -64,7 +59,6 @@ impl TierFormValues {
             early_adopter_trial_days: String::new(),
             standard_trial_days: String::new(),
             trial_period_days: String::new(),
-            orgs_enabled: false,
         }
     }
 }
@@ -126,20 +120,6 @@ pub(super) fn tier_settings_content(
                                 div class="space-y-2 max-w-md" {
                                     label for="trial_period_days" class="text-sm font-medium" { "Checkout trial (days)" }
                                     input id="trial_period_days" name="trial_period_days" type="number" min="0" max="365" value=(values.trial_period_days) class=(dashboard_input());
-                                }
-                            },
-                        ))
-                        // BUNYIP-493: the organizations and teams switch, the
-                        // same shape as the public pricing switch below: off by
-                        // default, and off means the surface is not there at all
-                        // rather than there and empty.
-                        (admin_block(
-                            "Organizations and teams",
-                            Some("Off by default. While this is off, the Organizations nav entry is hidden and its page returns 404. A change reaches the web app within a minute."),
-                            html! {
-                                div class="flex items-center gap-3 text-sm font-medium" {
-                                    (toggle_switch_field("orgs_enabled", "orgs_enabled", values.orgs_enabled, "Enable organizations and teams"))
-                                    "Enable organizations and teams"
                                 }
                             },
                         ))
@@ -269,22 +249,17 @@ pub struct TierForm {
     // BUNYIP-527: the checkout trial length, persisted to stripe_config.
     #[serde(default)]
     pub trial_period_days: String,
-    // BUNYIP-493: the organizations and teams switch. An unticked checkbox is
-    // absent from the submission, which is a real "off" here because this form
-    // always renders and submits the control.
-    #[serde(default)]
-    pub orgs_enabled: Option<String>,
 }
 
 /// BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
 /// separate backend writes that cannot be wrapped in one database transaction
 /// from this BFF. When the first succeeds and the second fails, the tier
-/// settings (slots, trial days, organizations toggle) are already committed,
+/// settings (slots, trial days) are already committed,
 /// so the error must say so rather than reading as a single undifferentiated
 /// failure that implies nothing was saved.
 pub(super) fn stripe_step_error_message(e: &ApiError) -> String {
     format!(
-        "Tier settings (slots, trial days, organizations toggle) were saved, but the checkout trial period was not: {}",
+        "Tier settings (slots, trial days) were saved, but the checkout trial period was not: {}",
         e.user_message()
     )
 }
@@ -320,16 +295,12 @@ pub async fn tier_settings_save(
             "Standard trial days",
             MAX_TRIAL_DAYS,
         )?;
-        // The unchecked checkbox is absent from the form submission, so
-        // read presence rather than parse; unticking must be a real change.
-        let orgs_enabled = f.orgs_enabled.is_some();
         let checkout_trial = parse_tier_field(&f.trial_period_days, "Checkout trial (days)", 365)?;
         Ok::<_, String>(json!({
             "lifetime_slots": lifetime,
             "early_adopter_slots": early_adopter,
             "early_adopter_trial_days": early_trial,
             "standard_trial_days": standard_trial,
-            "orgs_enabled": orgs_enabled,
             "trial_period_days": checkout_trial,
         }))
     })();
@@ -358,9 +329,6 @@ pub async fn tier_settings_save(
         early_adopter_trial_days: f.early_adopter_trial_days.trim().to_string(),
         standard_trial_days: f.standard_trial_days.trim().to_string(),
         trial_period_days: f.trial_period_days.trim().to_string(),
-        // Echo the submitted tick back, so a rejected save does not quietly
-        // revert the switch to the stored row.
-        orgs_enabled: f.orgs_enabled.is_some(),
     };
     let content = tier_settings_content(
         cfg.as_ref(),

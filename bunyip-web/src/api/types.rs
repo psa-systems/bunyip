@@ -13,6 +13,8 @@
 //! skew between bunyip-web and bunyip-api then degrades (an unknown value
 //! renders neutrally) instead of breaking the whole decode.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -244,11 +246,11 @@ pub struct SetupStatus {
     pub email_enabled: bool,
     #[serde(default)]
     pub stripe_enabled: bool,
-    /// BUNYIP-493: the organizations and teams switch. Defaults to false, so an
-    /// older API that does not send it leaves the feature dark rather than
+    /// BUNYIP-840: every feature toggle by key. Defaults to empty, so an older
+    /// API that does not send it leaves every feature dark rather than
     /// advertising a surface that is not there.
     #[serde(default)]
-    pub orgs_enabled: bool,
+    pub features: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -864,6 +866,23 @@ pub struct AdminRateLimitConfig {
     pub overridden: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+/// One row of the admin Feature Toggles page (BUNYIP-840): mirrors
+/// `bunyip_api::handlers::admin_feature_toggles::FeatureToggleEntry`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminFeatureToggle {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub help: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub updated_by_email: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1528,9 +1547,6 @@ pub struct TierConfigResponse {
     pub early_adopter_visible: bool,
     #[serde(default = "default_true")]
     pub standard_visible: bool,
-    /// BUNYIP-493: the organizations and teams switch on the Pricing tiers page.
-    #[serde(default)]
-    pub orgs_enabled: bool,
     #[serde(default)]
     pub updated_at: String,
     #[serde(default)]

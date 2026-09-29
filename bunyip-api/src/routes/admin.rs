@@ -329,13 +329,22 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))
-            // Atomic write of the six fields the admin's "Tiers & Slots"
-            // form owns: the four tier_config numbers plus the orgs
-            // toggle plus the checkout trial length on stripe_config.
-            // Combines what used to be two sequential PUTs.
+            // Atomic write of the five fields the admin's "Tiers & Slots"
+            // form owns: the four tier_config numbers plus the checkout
+            // trial length on stripe_config.
             .route(
                 "/tier-settings",
                 web::put().to(handlers::update_tier_settings),
+            )
+            // BUNYIP-840: the feature-toggle registry. Listing is open to any
+            // admin; a flip is super-admin-only and audited.
+            .route(
+                "/feature-toggles",
+                web::get().to(handlers::list_feature_toggles),
+            )
+            .route(
+                "/feature-toggles/{key}",
+                web::put().to(handlers::update_feature_toggle),
             )
             // Branding (BUNYIP-561): the product name, tagline, meta
             // description and Open Graph image, admin-managed rather than

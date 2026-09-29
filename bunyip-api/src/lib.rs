@@ -7,8 +7,8 @@
 //! and hosts the main-app `handlers` and `routes` themselves.
 
 pub use bunyip_domain::{
-    config, config_providers, errors, middleware, models, repositories, responses, services,
-    validation,
+    config, config_providers, errors, feature_toggles, middleware, models, repositories, responses,
+    services, validation,
 };
 
 pub mod access_log;
@@ -33,6 +33,7 @@ pub mod secrets;
 pub mod seed;
 pub mod settings_archive;
 pub mod support_ingest;
+pub mod tenant_routing;
 pub mod version;
 
 // Re-export commonly used types

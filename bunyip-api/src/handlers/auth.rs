@@ -5,6 +5,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::errors::AppError;
@@ -284,11 +285,14 @@ pub struct PasswordResetConfirmRequest {
 pub struct SetupStatusResponse {
     pub email_enabled: bool,
     pub stripe_enabled: bool,
-    /// BUNYIP-493: the organizations and teams switch. This is the ONE public
-    /// read of that flag, so bunyip-web can gate its nav and its routes without
-    /// admin credentials. It is answered from the process-wide `TierConfig`
-    /// snapshot the admin save hot-reloads, so the probe still touches no table
-    /// and stays in `rate_limit_floor::EXEMPT_PATHS`.
+    /// BUNYIP-840: every registered feature toggle by key. This is the ONE
+    /// public read of the toggles, so bunyip-web can gate its nav and routes
+    /// without admin credentials. Answered from the process-wide
+    /// `FeatureToggleCache`, so the probe touches no table and stays in
+    /// `rate_limit_floor::EXEMPT_PATHS`.
+    pub features: BTreeMap<&'static str, bool>,
+    /// Derived from `features["organizations"]` for a bunyip-web one release
+    /// behind (BUNYIP-493's original field).
     pub orgs_enabled: bool,
 }
 
@@ -1464,23 +1468,19 @@ pub async fn setup_status(
     req: HttpRequest,
     config: web::Data<crate::config::Config>,
     stripe_service: web::Data<Arc<crate::services::StripeService>>,
-    tier_config: web::Data<Arc<std::sync::RwLock<crate::config::TierConfig>>>,
+    toggles: web::Data<Arc<crate::feature_toggles::FeatureToggleCache>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    // BUNYIP-493: read through the poison rather than taking the process down
-    // over a feature flag; a poisoned lock means a writer panicked while the
-    // data itself is structurally intact.
-    let orgs_enabled = tier_config
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .orgs_enabled;
+    let snapshot = toggles.current();
+    let orgs_enabled = snapshot.enabled(crate::feature_toggles::Feature::Organizations);
 
     Ok(HttpResponse::Ok().json(crate::responses::ApiResponse {
         success: true,
         data: Some(SetupStatusResponse {
             email_enabled: config.email.enabled,
             stripe_enabled: stripe_service.is_configured(),
+            features: snapshot.as_map(),
             orgs_enabled,
         }),
         meta: crate::responses::ResponseMeta::new(request_id),

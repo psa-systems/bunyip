@@ -210,6 +210,9 @@ pub enum AuditAction {
     /// System page (BUNYIP-789). One row per changed key; the old and new
     /// values are on the row, and `metadata.key` names the setting.
     SystemConfigUpdated,
+    /// A super admin flipped a feature toggle (BUNYIP-840). Metadata carries
+    /// the feature `key` and the new `enabled` state.
+    AdminFeatureToggleUpdated,
 }
 
 impl AuditAction {
@@ -318,6 +321,7 @@ impl AuditAction {
             AuditAction::AdminIpBanCreated => "admin_ip_ban_created",
             AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
             AuditAction::SystemConfigUpdated => "system_config_updated",
+            AuditAction::AdminFeatureToggleUpdated => "admin_feature_toggle_updated",
         }
     }
 
@@ -375,6 +379,7 @@ impl AuditAction {
                 | AuditAction::AdminIpBanCreated
                 | AuditAction::AdminMailerSuppressionDeleted
                 | AuditAction::SystemConfigUpdated
+                | AuditAction::AdminFeatureToggleUpdated
         )
     }
 }

@@ -120,11 +120,12 @@ Always, with no flag:
 |---------|--------|
 | `branding` | The singleton `branding` row: name, tagline, meta description, Open Graph image, the theme CSS and the two theme colours, and the three asset timestamps. |
 | `branding_assets` | Every row of `branding_assets`, bytes included: the mark, the uploaded favicon source AND every size derived from it, and the mascot. |
-| `tier_config` | The singleton `tier_config` row: the slot counts, the trial lengths, the Stripe price and product ids, and the `pricing_enabled` / `orgs_enabled` / per-tier visibility flags. |
+| `tier_config` | The singleton `tier_config` row: the slot counts, the trial lengths, the Stripe price and product ids, and the `pricing_enabled` / per-tier visibility flags. |
 | `auto_ban_config` | The singleton `auto_ban_config` row. |
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
 | `rate_limit_configs` | Every per-action cap override. |
+| `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |
 | `system_settings` | The four settings the file configuration layer at `BUNYIP_CONFIG_DIR` holds: login approval, the signup bot guard, and the two country lists. |
 | `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPPORT_IMAP_PASSWORD`, resolved through whichever provider `SECRETS_STORAGE` declares. |
 

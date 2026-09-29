@@ -43,9 +43,10 @@
 //! [`CONFIG_KEYS`] declares the settings with MORE THAN ONE possible provider,
 //! the same rule [`GovernedSecret`](crate::config::GovernedSecret) applies to
 //! secrets: a setting with exactly one source needs no declaration, because the
-//! declaration would be a no-op. So the Stripe price ids, `pricing_enabled` and
-//! `orgs_enabled` stay database-only columns and are read straight from their
-//! row, and `SMTP_EHLO_NAME` and `APP_URL` stay environment reads.
+//! declaration would be a no-op. So the Stripe price ids and `pricing_enabled`
+//! stay database-only columns and are read straight from their row, the
+//! feature toggles (BUNYIP-840) are database-only rows of their own, and
+//! `SMTP_EHLO_NAME` and `APP_URL` stay environment reads.
 //!
 //! [`ENV_INVENTORY`](crate::config::ENV_INVENTORY) remains the declared registry
 //! of environment variables; every key here names the variable it is carried by,

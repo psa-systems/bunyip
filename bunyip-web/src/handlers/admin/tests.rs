@@ -16,6 +16,7 @@ use super::applications::*;
 use super::auto_ban_settings::*;
 use super::email_config::*;
 use super::error_log::*;
+use super::feature_toggles::*;
 use super::feedback::*;
 use super::ip_bans::*;
 use super::memberships::*;
@@ -1041,7 +1042,6 @@ mod two_column_layout_tests {
             early_adopter_trial_days: "90".into(),
             standard_trial_days: "30".into(),
             trial_period_days: "14".into(),
-            orgs_enabled: false,
         }
     }
 
@@ -1104,57 +1104,85 @@ mod two_column_layout_tests {
         assert!(html.contains(r#"action="/admin/tier-settings""#));
     }
 
-    /// BUNYIP-493: the organizations and teams switch sits on this page next to
-    /// the pricing one, and its tick reflects the saved row in both states. A
-    /// switch that always renders unticked reads as "off" to an admin who just
-    /// turned it on.
-    #[test]
-    fn organizations_switch_reflects_the_saved_state() {
-        // The whole page carries other checkboxes (per-tier visibility), so read
-        // the orgs input itself rather than searching the page for "checked".
-        let orgs_input = |html: &str| -> String {
-            let rest = html
-                .split_once(r#"id="orgs_enabled""#)
-                .expect("the organizations switch renders")
-                .1;
-            rest.split_once('>')
-                .expect("the input closes")
-                .0
-                .to_string()
-        };
-        let render = |orgs_enabled: bool| {
-            let vals = TierFormValues {
-                orgs_enabled,
-                ..tier_vals()
-            };
-            tier_settings_content(
-                Some(&tier_cfg()),
-                None,
-                Err("unavailable"),
-                &vals,
-                None,
-                None,
-            )
-            .into_string()
-        };
+    fn feature_toggle(key: &str, enabled: bool) -> AdminFeatureToggle {
+        serde_json::from_value(json!({
+            "key": key, "label": format!("Label {key}"), "help": format!("Help {key}"),
+            "enabled": enabled
+        }))
+        .unwrap()
+    }
 
-        let off = render(false);
-        assert!(
-            off.contains(r#"name="orgs_enabled""#),
-            "the switch is on the page whatever its state"
+    /// The `<input>` tag of one toggle row, read by its id so other controls on
+    /// the page cannot satisfy the assertion.
+    fn toggle_input(html: &str, key: &str) -> String {
+        let rest = html
+            .split_once(&format!(r#"id="feature-{key}""#))
+            .unwrap_or_else(|| panic!("the {key} switch renders: {html}"))
+            .1;
+        rest.split_once('>')
+            .expect("the input closes")
+            .0
+            .to_string()
+    }
+
+    /// BUNYIP-840: one row per registry entry, and each switch reflects its
+    /// saved state. A switch that always renders unticked reads as "off" to an
+    /// admin who just turned it on.
+    #[test]
+    fn feature_toggles_page_renders_one_row_per_entry_with_its_state() {
+        let toggles = [
+            feature_toggle("organizations", true),
+            feature_toggle("tenant_hostnames", false),
+        ];
+        let html = feature_toggles_content(&toggles, true, true).into_string();
+        assert!(html.contains("Feature Toggles"), "heading present");
+        assert_eq!(
+            html.matches(r#"action="/admin/features""#).count(),
+            toggles.len(),
+            "one form per registry entry"
         );
+        for t in &toggles {
+            assert!(html.contains(&t.label) && html.contains(&t.help));
+            assert!(html.contains(&format!(r#"name="key" value="{}""#, t.key)));
+        }
         assert!(
-            !orgs_input(&off).contains("checked"),
-            "unticked when the feature is off: {}",
-            orgs_input(&off)
-        );
-        assert!(
-            orgs_input(&render(true)).contains("checked"),
+            toggle_input(&html, "organizations").contains("checked"),
             "ticked when the feature is on"
         );
-        // It rides the Tiers & Slots form, so saving it never runs the catalog
-        // form's Stripe price validation.
-        assert!(render(true).contains(r#"action="/admin/tier-settings""#));
+        assert!(
+            !toggle_input(&html, "tenant_hostnames").contains("checked"),
+            "unticked when the feature is off: {}",
+            toggle_input(&html, "tenant_hostnames")
+        );
+    }
+
+    /// The organizations switch left the Pricing Tiers page with the column.
+    #[test]
+    fn the_tier_settings_page_no_longer_carries_the_organizations_switch() {
+        let html = tier_settings_content(
+            Some(&tier_cfg()),
+            None,
+            Err("unavailable"),
+            &tier_vals(),
+            None,
+            None,
+        )
+        .into_string();
+        assert!(!html.contains(concat!("orgs_", "enabled")));
+    }
+
+    /// Only the super admin gets a form; everybody else sees the state, and the
+    /// three list states stay distinct.
+    #[test]
+    fn feature_toggles_page_is_read_only_below_super_admin_and_says_when_unreachable() {
+        let toggles = [feature_toggle("organizations", true)];
+        let html = feature_toggles_content(&toggles, true, false).into_string();
+        assert!(!html.contains(r#"action="/admin/features""#));
+        assert!(html.contains("Only the super admin can change this."));
+        let down = feature_toggles_content(&[], false, true).into_string();
+        assert!(down.contains("Could not reach the API to load the feature toggles."));
+        let empty = feature_toggles_content(&[], true, true).into_string();
+        assert!(empty.contains("No feature toggles."));
     }
 
     #[test]
@@ -2939,7 +2967,6 @@ mod tier_settings_partial_failure_tests {
             early_adopter_trial_days: "14".into(),
             standard_trial_days: "7".into(),
             trial_period_days: "30".into(),
-            orgs_enabled: true,
         }
     }
 

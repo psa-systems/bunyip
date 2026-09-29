@@ -1,23 +1,24 @@
-//! The feature switches the BFF reads from bunyip-api (BUNYIP-493).
+//! The feature toggles the BFF reads from bunyip-api (BUNYIP-493, BUNYIP-840).
 //!
-//! Today that is one flag: organizations and teams. It is an admin switch
-//! persisted on `tier_config`, published on the public feature-flags probe
-//! (`GET /v1/auth/setup/status`), and installed into the process-wide cell the
-//! nav and the flagged routes read (`views::layout::orgs_enabled`). A free
-//! function builds the nav list with no access to `AppState`, which is why the
-//! value lives in a cell rather than being threaded through every caller - the
-//! same reason the Community flag does.
+//! Every toggle is an admin switch in bunyip-api's `feature_toggles` registry,
+//! published as the `features` map on the public probe
+//! (`GET /v1/auth/setup/status`) and installed whole into the process-wide cell
+//! the nav and the flagged routes read (`views::layout::feature_enabled`, and
+//! `orgs_enabled` for organizations). A free function builds the nav list with
+//! no access to `AppState`, which is why the values live in a cell rather than
+//! being threaded through every caller - the same reason the Community flag
+//! does.
 //!
 //! Loaded once before the listener binds and re-read on an interval, the same
-//! shape `branding` uses, so an admin flipping the switch does not need a
-//! restart. A fetch that fails never turns the feature ON: the startup path
-//! leaves it dark and logs at `error`, and a later failure keeps the last good
-//! value and logs at `warn`.
+//! shape `branding` uses, so an admin flipping a switch does not need a
+//! restart. A fetch that fails never turns a feature ON: the startup path
+//! leaves every feature dark and logs at `error`, and a later failure keeps the
+//! last good values and logs at `warn`.
 
 use std::time::Duration;
 
 use crate::api::{auth as auth_api, Api, ApiError};
-use crate::views::layout::install_orgs_enabled;
+use crate::views::layout::install_features;
 
 /// The flag cell is process-wide, so a test that flips it has to be the only
 /// one reading it. Every test that installs a value takes this lock first and
@@ -42,7 +43,7 @@ pub const FLAGS_STARTUP_TIMEOUT_SECS: u64 = 5;
 async fn refresh(api: &Api, startup: bool) -> bool {
     match auth_api::setup_status(api).await {
         Ok(s) => {
-            install_orgs_enabled(s.orgs_enabled);
+            install_features(s.features);
             true
         }
         Err(e) => {
@@ -60,8 +61,8 @@ fn report(e: &ApiError, startup: bool) {
             code = %e.code,
             error = %e.message,
             request_id = ?e.request_id,
-            "feature-flag read failed at startup; organizations and teams stay off (their nav \
-             entry is hidden and /organizations 404s) until a refresh succeeds"
+            "feature-flag read failed at startup; every feature toggle stays off (its nav \
+             entries are hidden and its routes 404) until a refresh succeeds"
         );
     } else {
         tracing::warn!(

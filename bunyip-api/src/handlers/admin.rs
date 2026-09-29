@@ -3180,8 +3180,6 @@ pub struct UpdateTierConfigRequest {
     pub lifetime_visible: Option<bool>,
     pub early_adopter_visible: Option<bool>,
     pub standard_visible: Option<bool>,
-    /// BUNYIP-493: enable switch for the organizations and teams feature.
-    pub orgs_enabled: Option<bool>,
 }
 
 /// BUNYIP-517: resolve a mapped price id to the Stripe product bunyip stores for
@@ -3291,7 +3289,6 @@ pub async fn get_tier_config(
             lifetime_visible: resolved.lifetime_visible,
             early_adopter_visible: resolved.early_adopter_visible,
             standard_visible: resolved.standard_visible,
-            orgs_enabled: resolved.orgs_enabled,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,
@@ -3490,7 +3487,6 @@ pub async fn update_tier_config(
         body.lifetime_visible,
         body.early_adopter_visible,
         body.standard_visible,
-        body.orgs_enabled,
         admin.0.sub,
     )
     .await?;
@@ -3532,7 +3528,6 @@ pub async fn update_tier_config(
                 "lifetime_visible": body.lifetime_visible,
                 "early_adopter_visible": body.early_adopter_visible,
                 "standard_visible": body.standard_visible,
-                "orgs_enabled": body.orgs_enabled,
             })),
     )
     .await?;
@@ -3543,7 +3538,6 @@ pub async fn update_tier_config(
             lifetime_visible: resolved.lifetime_visible,
             early_adopter_visible: resolved.early_adopter_visible,
             standard_visible: resolved.standard_visible,
-            orgs_enabled: resolved.orgs_enabled,
             config: TierConfigResponse {
                 lifetime_slots: resolved.lifetime_slots,
                 early_adopter_slots: resolved.early_adopter_slots,
@@ -3570,25 +3564,23 @@ pub async fn update_tier_config(
 // Combined tier-settings write
 // =============================================================================
 
-/// Body for the atomic tier-settings write. Six fields: the five that
-/// belong to `tier_config` (slots, trials, orgs) plus the checkout trial
-/// on `stripe_config`. Every field is required; the shape mirrors the
-/// admin form so an empty submission is a form defect, not a partial
-/// update.
+/// Body for the atomic tier-settings write. Five fields: the four that
+/// belong to `tier_config` (slots, trials) plus the checkout trial on
+/// `stripe_config`. Every field is required; the shape mirrors the admin
+/// form so an empty submission is a form defect, not a partial update.
 #[derive(Debug, Deserialize)]
 pub struct UpdateTierSettingsRequest {
     pub lifetime_slots: i64,
     pub early_adopter_slots: i64,
     pub early_adopter_trial_days: i64,
     pub standard_trial_days: i64,
-    pub orgs_enabled: bool,
     pub trial_period_days: i32,
 }
 
 /// PUT /v1/admin/tier-settings
 ///
 /// The two writes the admin's "Tiers & Slots" form used to make in
-/// sequence (tier_config slots/trials/orgs + stripe_config trial) here
+/// sequence (tier_config slots/trials + stripe_config trial) here
 /// commit in one database transaction, so a failure on either side
 /// rolls the whole save back. The admin never sees a state where the
 /// slot count moved and the trial length did not.
@@ -3650,9 +3642,8 @@ pub async fn update_tier_settings(
             early_adopter_slots      = $2,
             early_adopter_trial_days = $3,
             standard_trial_days      = $4,
-            orgs_enabled             = $5,
             updated_at               = NOW(),
-            updated_by               = $6
+            updated_by               = $5
         WHERE id = 1
         RETURNING *
         "#,
@@ -3661,7 +3652,6 @@ pub async fn update_tier_settings(
     .bind(body.early_adopter_slots)
     .bind(body.early_adopter_trial_days)
     .bind(body.standard_trial_days)
-    .bind(body.orgs_enabled)
     .bind(admin.0.sub)
     .fetch_one(&mut *tx)
     .await?;
@@ -3690,7 +3680,6 @@ pub async fn update_tier_settings(
             "early_adopter_slots": body.early_adopter_slots,
             "early_adopter_trial_days": body.early_adopter_trial_days,
             "standard_trial_days": body.standard_trial_days,
-            "orgs_enabled": body.orgs_enabled,
             "trial_period_days": body.trial_period_days,
         }));
     AuditLogRepository::create_in_tx(&mut *tx, audit_log).await?;
@@ -3698,7 +3687,7 @@ pub async fn update_tier_settings(
     tx.commit().await?;
 
     // Post-commit cache refreshes: the admin's next request must see
-    // the new orgs flag and the pricing page must render the fresh
+    // the new slot counts and the pricing page must render the fresh
     // trial length without waiting out its TTL.
     let (stack, _source) = section_stack(
         TierConfig::database_provider(&tier_row),
@@ -3718,7 +3707,6 @@ pub async fn update_tier_settings(
                 lifetime_visible: resolved.lifetime_visible,
                 early_adopter_visible: resolved.early_adopter_visible,
                 standard_visible: resolved.standard_visible,
-                orgs_enabled: resolved.orgs_enabled,
                 config: TierConfigResponse {
                     lifetime_slots: resolved.lifetime_slots,
                     early_adopter_slots: resolved.early_adopter_slots,

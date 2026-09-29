@@ -226,7 +226,8 @@ and no second precedence rule.
 
 The registry is the settings with **more than one** possible provider, the same rule the governed secrets follow: a
 setting with exactly one source is not declared, because the declaration would be a no-op. So the Stripe price ids,
-`pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, and `SMTP_EHLO_NAME`,
+`pricing_enabled` and the per-tier visibility flags stay database-only columns, the
+[feature toggles](#feature-toggles-feature_toggles-admin-page-feature-toggles) are database-only rows, and `SMTP_EHLO_NAME`,
 `APP_URL`, `APP_NAME`, `SUPPORT_INBOX_EMAIL` and `SUPPORT_IMAP_POLL_SECS` stay environment-only reads. The declared
 keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values, the
 four `TIER_*` slot and trial lengths, the four application-level deployment settings the admin System page writes
@@ -354,6 +355,7 @@ logged at boot, one `WARN` per ignored provider, which is the stale-copy case wo
 | `OIDC_ISSUER`                           | -                           | the whole OIDC provider: no RP can log in through bunyip            |
 | `FORGEJO_BASE_URL`                      | -                           | the distribution proxy has no upstream                              |
 | `FORGEJO_API_TOKEN`                     | -                           | downloads cannot authenticate to Forgejo                            |
+| `BUNYIP_TRAEFIK_DYNAMIC_CONFIG_PATH`    | -                           | no Traefik tenant routing file is managed: a stale file is not removed while the `tenant_hostnames` toggle is off (BUNYIP-840). The docker stack mounts `/data/traefik/tenants.yml` |
 | `MOKOSH_PROVIDER_STATUS_URL`            | -                           | the suite provider-status aggregate (BUNYIP-634) cannot reach Mokosh: its admin-page row reads as unreachable rather than being fetched |
 | `DRILLMARK_PROVIDER_STATUS_URL`         | -                           | the suite provider-status aggregate (BUNYIP-634) cannot reach Drillmark: its admin-page row reads as unreachable rather than being fetched |
 | `PROVIDER_STATUS_CLIENT_ID`             | -                           | the suite provider-status aggregate (BUNYIP-634) has no machine credential to present to Mokosh or Drillmark, so every remote fetch answers unreachable |
@@ -527,14 +529,13 @@ Unconfigured means payment is simply disabled. Test-mode walkthrough:
 
 Singleton row. The slot counts and trial lengths are declared configuration keys, so they also have a file and an
 environment provider (see [the declared order](#configuration-providers-and-their-precedence-bunyip-643644)). The Stripe
-identifiers, the two feature switches and the per-tier visibility flags have **no second provider at all**: the admin
+identifiers, the pricing switch and the per-tier visibility flags have **no second provider at all**: the admin
 page is their only source, which is exactly why they are not declared keys, so no file or environment value can ever
 turn a feature on.
 
 | Column                                                                              | Meaning                                                                   |
 |-------------------------------------------------------------------------------------|---------------------------------------------------------------------------|
 | `pricing_enabled`                                                                   | when false the public `/pricing` page 404s and every link to it is hidden |
-| `orgs_enabled`                                                                      | when false `/organizations` 404s and its nav entry is not rendered        |
 | `free_price_id`, `early_adopter_price_id`, `standard_price_id`                      | Stripe price ids per tier                                                 |
 | `lifetime_product_id`, `early_adopter_product_id`, `standard_product_id`            | Stripe product ids per tier                                               |
 | `lifetime_visible`, `early_adopter_visible`, `standard_visible`                     | per-tier visibility on `/pricing`. A visible tier must have a price id    |
@@ -548,12 +549,28 @@ priceless" is never a state the page can render. A request that sends neither ha
 form) leaves that tier alone, so a row saved in that state before the check existed is corrected by the catalog form,
 not by an unrelated save.
 
-`orgs_enabled` is the organizations and teams switch (BUNYIP-493), saved by the Tiers & Slots form on the same page so
-it never rides the catalog form's Stripe validation. It is published on the public feature-flags probe
-`GET /v1/auth/setup/status`, answered from the process-wide tier-config snapshot the admin save hot-reloads, so the
-probe still reads no table. bunyip-web reads that probe once before its listener binds and every 60 seconds after, and
-installs the value into the process-wide cell its nav and its flagged routes read: a change reaches the web app within
-a minute with no restart, and a read that fails leaves the feature off rather than guessing it on.
+The organizations and teams switch that used to be a column here is the `organizations`
+[feature toggle](#feature-toggles-feature_toggles-admin-page-feature-toggles) (BUNYIP-840), and moving
+`pricing_enabled` into the same registry is BUNYIP-841.
+
+### Feature toggles (`feature_toggles`, admin page: Feature Toggles)
+
+One row per feature, keyed by the `Feature` variant's key in `crates/bunyip-domain/src/feature_toggles.rs`, with
+`enabled`, `updated_at` and `updated_by`. A feature with no row is OFF, and a row whose key no variant matches is ignored
+(logged once at `warn`). Listed to any admin; flipped by the super admin only, and every flip is audited
+(`admin_feature_toggle_updated`). The toggles have no file or environment provider, so nothing but the admin page can
+turn one on.
+
+| Key                | When off                                                                                              |
+|--------------------|-------------------------------------------------------------------------------------------------------|
+| `organizations`    | `/organizations` 404s and its nav entry is not rendered (BUNYIP-493)                                  |
+| `tenant_hostnames` | no tenant hostname is routed, and the file at `BUNYIP_TRAEFIK_DYNAMIC_CONFIG_PATH` is deleted (BUNYIP-591) |
+
+Every api process loads the table at startup, re-reads it every 60 seconds and refreshes at once after a save it served,
+so a change is live everywhere within a minute with no restart. The public probe `GET /v1/auth/setup/status` publishes
+every key as `features`, answered from that snapshot, so the probe reads no table. bunyip-web reads the probe once before
+its listener binds and every 60 seconds after; a read that fails leaves every feature off rather than guessing one on.
+Adding a toggle is described in [`feature-toggles.md`](feature-toggles.md).
 
 ### Branding (`branding`, admin page: Branding)
 

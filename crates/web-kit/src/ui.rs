@@ -455,28 +455,18 @@ mod tests {
     /// the same switch semantics and visual language.
     #[test]
     fn toggle_switch_field_is_a_checkbox_with_switch_semantics() {
-        let on = toggle_switch_field(
-            "orgs_enabled",
-            "orgs_enabled",
-            true,
-            "Enable organizations and teams",
-        )
-        .into_string();
+        let on = toggle_switch_field("feature_on", "feature_on", true, "Enable the feature")
+            .into_string();
         assert!(on.contains(r#"type="checkbox""#));
         assert!(on.contains(r#"role="switch""#));
-        assert!(on.contains(r#"aria-label="Enable organizations and teams""#));
-        assert!(on.contains(r#"name="orgs_enabled""#));
+        assert!(on.contains(r#"aria-label="Enable the feature""#));
+        assert!(on.contains(r#"name="feature_on""#));
         assert!(on.contains("checked"));
         assert!(on.contains("peer-checked:bg-primary"));
         assert!(on.contains("peer-checked:translate-x-[22px]"));
 
-        let off = toggle_switch_field(
-            "orgs_enabled",
-            "orgs_enabled",
-            false,
-            "Enable organizations and teams",
-        )
-        .into_string();
+        let off = toggle_switch_field("feature_on", "feature_on", false, "Enable the feature")
+            .into_string();
         let input = off
             .split_once("<input")
             .expect("the checkbox renders")

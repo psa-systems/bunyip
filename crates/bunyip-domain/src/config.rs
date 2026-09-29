@@ -886,10 +886,6 @@ pub struct TierConfig {
     pub lifetime_visible: bool,
     pub early_adopter_visible: bool,
     pub standard_visible: bool,
-    /// BUNYIP-493: whether the organizations and teams feature is switched on.
-    /// DB only (admin Pricing tiers page); false until an admin turns it on, so
-    /// the feature is dark from its first commit rather than after a retrofit.
-    pub orgs_enabled: bool,
 }
 
 impl TierConfig {
@@ -901,9 +897,9 @@ impl TierConfig {
     /// The `tier_config` row as a configuration provider (BUNYIP-643).
     ///
     /// Only the four slot/trial columns are here. The price and product ids and
-    /// the `pricing_enabled` / visibility / `orgs_enabled` switches have exactly
+    /// the `pricing_enabled` / visibility switches have exactly
     /// ONE possible provider - the admin pages write them and no environment
-    /// variable exists for them (BUNYIP-482/487/493/527) - so they are not
+    /// variable exists for them (BUNYIP-482/487/527) - so they are not
     /// declared keys, for the same reason `GovernedSecret` excludes a secret
     /// with one provider: the declaration would be a no-op, and declaring them
     /// would hand the file provider a feature flag `CLAUDE.md` requires to be
@@ -954,9 +950,8 @@ impl TierConfig {
             lifetime_product_id: row.and_then(|row| row.lifetime_product_id.clone()),
             early_adopter_product_id: row.and_then(|row| row.early_adopter_product_id.clone()),
             standard_product_id: row.and_then(|row| row.standard_product_id.clone()),
-            // BUNYIP-487/493: database only, off until an admin turns it on.
+            // BUNYIP-487: database only, off until an admin turns it on.
             pricing_enabled: row.is_some_and(|row| row.pricing_enabled),
-            orgs_enabled: row.is_some_and(|row| row.orgs_enabled),
             // BUNYIP-527: database only, visible until an admin hides it.
             lifetime_visible: row.is_none_or(|row| row.lifetime_visible),
             early_adopter_visible: row.is_none_or(|row| row.early_adopter_visible),
@@ -1941,6 +1936,13 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
          instead of the end user (BUNYIP-409)",
         "Set it to the CIDRs of the peers allowed to set X-Forwarded-For (see \
          docs/client-ip-forwarding.md).",
+    ),
+    EnvVarSpec::gating(
+        "BUNYIP_TRAEFIK_DYNAMIC_CONFIG_PATH",
+        "no Traefik tenant routing file is managed: while the tenant_hostnames feature toggle is \
+         off, a stale file at the docker side's path is not removed (BUNYIP-840)",
+        "Set it to the file Traefik's file provider reads for tenant hosts; the docker stack \
+         mounts /data/traefik/tenants.yml.",
     ),
     EnvVarSpec::gating(
         "OIDC_ISSUER",

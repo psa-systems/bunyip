@@ -55,6 +55,7 @@ const ESSENTIAL_FIELDS = [
     {field: "AdminRateLimit.action", reason: "identifies the throttle to the reset endpoint"}
     {field: "AdminRateLimit.key", reason: "identifies the throttle to the reset endpoint"}
     {field: "AdminRateLimitConfig.action", reason: "identifies the config row being edited"}
+    {field: "AdminFeatureToggle.key", reason: "identifies the toggle a save targets"}
     {field: "AdminApplication.id", reason: "target of every admin action on the row"}
     {field: "UserEntitlement.application_id", reason: "the revoke target"}
     {field: "ApplicationGroup.id", reason: "target of every admin action on the row"}

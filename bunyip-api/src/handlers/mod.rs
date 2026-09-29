@@ -160,6 +160,7 @@ pub mod account_backup;
 pub mod admin;
 pub mod admin_branding;
 pub mod admin_entitlements;
+pub mod admin_feature_toggles;
 pub mod admin_ip_bans;
 pub mod admin_ip_enrichment;
 pub mod admin_mailer_suppressions;
@@ -254,6 +255,7 @@ pub use admin_entitlements::{
     add_price_mapping, grant_entitlement, list_user_entitlements, remove_price_mapping,
     revoke_entitlement, set_application_restricted,
 };
+pub use admin_feature_toggles::{list_feature_toggles, update_feature_toggle};
 pub use admin_ip_bans::{create_ip_ban, list_ip_bans, unban_ip};
 pub use admin_ip_enrichment::ip_enrichment;
 pub use admin_mailer_suppressions::{delete_mailer_suppression, list_mailer_suppressions};
