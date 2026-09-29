@@ -94,8 +94,9 @@ impl<T: Send + Sync> TtlCache<T> {
     /// The read lock is never held across the await. A fetch error is logged
     /// (with the HTTP status and the target type, BUNYIP-506/518) and never
     /// silently becomes an empty payload: the last-read value is served if
-    /// there is one, else `None` for the caller to fall back on.
-    pub async fn get_or_fetch<F, Fut>(&self, fetch: F) -> Option<Arc<T>>
+    /// there is one, else the `ApiError` is returned so the caller can render
+    /// it (BUNYIP-844) or apply its own documented fallback.
+    pub async fn get_or_fetch<F, Fut>(&self, fetch: F) -> Result<Arc<T>, ApiError>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, ApiError>>,
@@ -105,14 +106,17 @@ impl<T: Send + Sync> TtlCache<T> {
     }
 
     /// [`Self::get_or_fetch`] plus the [`CacheSource`], for tests.
-    pub async fn get_or_fetch_traced<F, Fut>(&self, fetch: F) -> (Option<Arc<T>>, CacheSource)
+    pub async fn get_or_fetch_traced<F, Fut>(
+        &self,
+        fetch: F,
+    ) -> (Result<Arc<T>, ApiError>, CacheSource)
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, ApiError>>,
     {
         if let Some((at, hit)) = self.slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
             if at.elapsed() < self.ttl {
-                return (Some(Arc::clone(hit)), CacheSource::CacheHit);
+                return (Ok(Arc::clone(hit)), CacheSource::CacheHit);
             }
         }
         match fetch().await {
@@ -120,7 +124,7 @@ impl<T: Send + Sync> TtlCache<T> {
                 let fresh = Arc::new(fresh);
                 *self.slot.write().unwrap_or_else(|e| e.into_inner()) =
                     Some((Instant::now(), Arc::clone(&fresh)));
-                (Some(fresh), CacheSource::Fetched)
+                (Ok(fresh), CacheSource::Fetched)
             }
             Err(e) => {
                 let stale = self
@@ -145,7 +149,7 @@ impl<T: Send + Sync> TtlCache<T> {
                     note = self.note,
                     "cached BFF fetch failed"
                 );
-                (stale, source)
+                (stale.ok_or(e), source)
             }
         }
     }
@@ -252,9 +256,9 @@ mod tests {
         );
     }
 
-    /// With nothing ever cached, a failed fetch yields `None` (there is no
-    /// honest value to show), still logged, never panicking. The pricing caller
-    /// turns that into the unpublished default.
+    /// With nothing ever cached, a failed fetch yields the `ApiError` (there is
+    /// no honest value to show), still logged, never panicking. The pricing
+    /// caller turns that into the unpublished default.
     #[tokio::test]
     async fn a_cold_failure_yields_no_value() {
         let cache = pricing_cache(30);
@@ -262,7 +266,7 @@ mod tests {
             .get_or_fetch_traced(|| async { Err(rate_limited()) })
             .await;
         assert_eq!(source, CacheSource::NoValueOnError);
-        assert!(payload.is_none());
+        assert!(payload.is_err());
         assert!(!payload.unwrap_or_default().published());
     }
 
@@ -311,7 +315,7 @@ mod tests {
 
         for _ in 0..5 {
             let status = cache.get_or_fetch(fetch).await;
-            assert!(status.is_some_and(|s| s.stripe_enabled));
+            assert!(status.is_ok_and(|s| s.stripe_enabled));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one upstream call");
     }

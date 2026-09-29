@@ -14,8 +14,9 @@ use maud::{html, Markup};
 
 use crate::api::admin as admin_api;
 use crate::api::types::{IntegrationState, IntegrationStatus};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
-use crate::views::ui::{badge, error_box};
+use crate::views::ui::{badge, error_box_for};
 
 /// The badge for one integration state, reusing the dashboard's colour language:
 /// success (green) configured, outline (muted) unconfigured, destructive (red)
@@ -52,7 +53,7 @@ fn integration_row(s: &IntegrationStatus) -> Markup {
 /// stated inside the card rather than hidden, because hiding it makes a broken
 /// status page look like a healthy one. The list is never empty (the API always
 /// returns the full set), so only the reachable / list states are drawn.
-fn integrations_card(integrations: &[IntegrationStatus], reachable: bool) -> Markup {
+fn integrations_card(integrations: &[IntegrationStatus], fetch_error: Option<&ApiError>) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -60,8 +61,8 @@ fn integrations_card(integrations: &[IntegrationStatus], reachable: bool) -> Mar
                 p class="text-sm text-muted-foreground" { "Each optional integration and whether it is configured, off, or half-configured. Turning one on is what prompts for its credentials; a missing one degrades that capability and never stops the application." }
             }
             div class="p-6 pt-0" {
-                @if !reachable {
-                    (error_box("Could not reach the API to load integration status."))
+                @if let Some(e) = fetch_error {
+                    (error_box_for("Could not reach the API to load integration status.", e))
                 } @else {
                     div class="divide-y" { @for s in integrations { (integration_row(s)) } }
                 }
@@ -70,11 +71,11 @@ fn integrations_card(integrations: &[IntegrationStatus], reachable: bool) -> Mar
     }
 }
 
-fn status_content(integrations: &[IntegrationStatus], reachable: bool) -> Markup {
+fn status_content(integrations: &[IntegrationStatus], fetch_error: Option<&ApiError>) -> Markup {
     html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "System Status" } p class="mt-2 text-muted-foreground" { "Each optional integration and whether it is configured, off, or half-configured." } }
-            (integrations_card(integrations, reachable))
+            (integrations_card(integrations, fetch_error))
         }
     }
 }
@@ -88,9 +89,9 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
     // BUNYIP-546: keep the reachable flag beside the fallback, so "could not
     // load" stays distinct from "everything is configured".
     let fetched = admin_api::integration_status(&st.api, c.forward.as_deref()).await;
-    let reachable = fetched.is_ok();
+    let fetch_error = fetched.as_ref().err().cloned();
     let integrations = fetched.unwrap_or_default();
-    let content = status_content(&integrations, reachable);
+    let content = status_content(&integrations, fetch_error.as_ref());
     admin_response(&c, &user, "/admin/status", "System Status", content)
 }
 
@@ -98,6 +99,16 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
 mod tests {
     use super::*;
     use crate::api::types::IntegrationState;
+
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to load integration status".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        }
+    }
 
     fn row(key: &str, state: IntegrationState, detail: &str, remedy: &str) -> IntegrationStatus {
         IntegrationStatus {
@@ -126,7 +137,7 @@ mod tests {
             ),
             row("oci", IntegrationState::Configured, "Enabled", ""),
         ];
-        let html = integrations_card(&rows, true).into_string();
+        let html = integrations_card(&rows, None).into_string();
         assert!(html.contains(">Failing<"), "failing badge");
         assert!(html.contains(">Unconfigured<"), "unconfigured badge");
         assert!(html.contains(">Configured<"), "configured badge");
@@ -140,7 +151,7 @@ mod tests {
     fn a_configured_row_shows_no_remedy() {
         let html = integrations_card(
             &[row("oci", IntegrationState::Configured, "Enabled", "")],
-            true,
+            None,
         )
         .into_string();
         assert!(html.contains("Enabled"));
@@ -151,7 +162,8 @@ mod tests {
     /// that reads as "everything is fine".
     #[test]
     fn an_unreachable_api_is_stated_inside_the_card() {
-        let html = integrations_card(&[], false).into_string();
+        let err = load_error();
+        let html = integrations_card(&[], Some(&err)).into_string();
         assert!(
             html.contains("Could not reach the API to load integration status."),
             "{html}"

@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminIpBan, IpEnrichment};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
@@ -160,6 +160,7 @@ pub async fn ip_bans(
         Err(r) => return r,
     };
     let data = admin_api::ip_bans(&st.api, c.forward.as_deref()).await;
+    let fetch_error = data.as_ref().err().cloned();
     let reachable = data.is_ok();
     let bans = data.unwrap_or_default();
 
@@ -189,8 +190,8 @@ pub async fn ip_bans(
                     @if reachable { p class="text-sm text-muted-foreground" { (bans.len()) " active." } }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load IP bans."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load IP bans.", e))
                     } @else if bans.is_empty() {
                         (empty_state("shield-off", "No active IP bans.", None))
                     } @else {

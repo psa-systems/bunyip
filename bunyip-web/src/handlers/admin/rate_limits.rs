@@ -9,9 +9,10 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminRateLimitConfig};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
@@ -147,7 +148,7 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
 /// API that could not be reached from a genuinely empty list.
 pub(super) fn rate_limit_config_card(
     configs: &[AdminRateLimitConfig],
-    reachable: bool,
+    error: Option<&ApiError>,
     editable: bool,
 ) -> Markup {
     html! {
@@ -163,8 +164,8 @@ pub(super) fn rate_limit_config_card(
                 }
             }
             div class="p-6 pt-0" {
-                @if !reachable {
-                    (error_box("Could not reach the API to load the limit configuration."))
+                @if let Some(e) = error {
+                    (error_box_for("Could not reach the API to load the limit configuration.", e))
                 } @else {
                     div class="grid gap-x-8 lg:grid-cols-2" { @for cfg in configs { (rate_limit_config_row(cfg, editable)) } }
                 }
@@ -189,10 +190,10 @@ pub async fn rate_limits(
     };
     let page = q.page.unwrap_or(1).max(1);
     let cfg_data = admin_api::rate_limit_configs(&st.api, c.forward.as_deref()).await;
-    let configs_reachable = cfg_data.is_ok();
+    let configs_error = cfg_data.as_ref().err().cloned();
     let configs = cfg_data.unwrap_or_default();
     let data = admin_api::rate_limits(&st.api, c.forward.as_deref(), page, 20).await;
-    let reachable = data.is_ok();
+    let error = data.as_ref().err().cloned();
     let (items, total, total_pages) = match data {
         Ok(p) => (p.items, p.total, p.total_pages),
         Err(_) => (Vec::new(), 0, 1),
@@ -204,11 +205,11 @@ pub async fn rate_limits(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("gauge", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Throttles" } }
-                    @if reachable { p class="text-sm text-muted-foreground" { (total) " active." } }
+                    @if error.is_none() { p class="text-sm text-muted-foreground" { (total) " active." } }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load rate limits."))
+                    @if let Some(e) = &error {
+                        (error_box_for("Could not reach the API to load rate limits.", e))
                     } @else if items.is_empty() {
                         (empty_state("gauge", "No active rate limits.", None))
                     } @else {
@@ -220,7 +221,7 @@ pub async fn rate_limits(
                     }
                 }
             }
-            (rate_limit_config_card(&configs, configs_reachable, user.is_super_admin))
+            (rate_limit_config_card(&configs, configs_error.as_ref(), user.is_super_admin))
         }
     };
     admin_response(&c, &user, "/admin/rate-limits", "Rate Limits", content)

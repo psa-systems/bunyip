@@ -25,9 +25,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::types::Branding;
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, error_box_for, icon};
 use crate::web::{redirect_cookies, AppState};
 
 /// BUNYIP-560: 2 MiB upload ceiling on the BFF, matching `ImagePolicy::avatar()`
@@ -140,8 +141,7 @@ impl BrandingValues {
 }
 
 pub(super) fn branding_content(
-    cfg: Option<&Branding>,
-    reachable: bool,
+    data: Result<&Branding, &ApiError>,
     values: &BrandingValues,
     error: Option<&str>,
 ) -> Markup {
@@ -151,9 +151,9 @@ pub(super) fn branding_content(
                 h1 class="text-3xl font-bold" { "Branding" }
                 p class="mt-2 text-muted-foreground" { "The product name, tagline and sharing metadata. Saved here, not compiled in; changes reach every page within a minute." }
             }
-            @if !reachable {
-                (error_box("Could not reach the API to load branding."))
-            } @else if let Some(b) = cfg {
+            @if let Err(e) = data {
+                (error_box_for("Could not reach the API to load branding.", e))
+            } @else if let Ok(b) = data {
                 form method="post" action="/admin/branding" class="space-y-6" {
                     @if let Some(err) = error { (error_box(err)) }
                     (admin_block_grid(vec![
@@ -227,8 +227,6 @@ pub(super) fn branding_content(
                 // BUNYIP-560: the images, each its own upload. Outside the form
                 // above, because a file upload is a separate request.
                 (admin_block_grid(ASSET_SLOTS.iter().map(|s| admin_block(s.title, None, asset_card(s, b))).collect()))
-            } @else {
-                (error_box("Could not load branding."))
             }
         }
     }
@@ -242,13 +240,11 @@ pub async fn branding(State(st): State<AppState>, headers: HeaderMap) -> Respons
     // BUNYIP-461/546: a failed fetch is told apart from an empty record, so
     // "could not load" never reads as "nothing configured".
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
-    let cfg = data.ok();
-    let values = cfg
+    let values = data
         .as_ref()
         .map(BrandingValues::from_branding)
         .unwrap_or_default();
-    let content = branding_content(cfg.as_ref(), reachable, &values, None);
+    let content = branding_content(data.as_ref(), &values, None);
     admin_response(&c, &user, "/admin/branding", "Branding", content)
 }
 
@@ -314,9 +310,7 @@ pub async fn branding_save(
     // Re-render with the submitted values plus the inline error; only the
     // record's non-form info (asset slots) needs a re-fetch (BUNYIP-731).
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
-    let cfg = data.ok();
-    let content = branding_content(cfg.as_ref(), reachable, &values, Some(&error));
+    let content = branding_content(data.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/branding", "Branding", content)
 }
 
@@ -366,13 +360,11 @@ async fn branding_error_page(
     error: &str,
 ) -> Response {
     let data = crate::branding::admin_get(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
-    let cfg = data.ok();
-    let values = cfg
+    let values = data
         .as_ref()
         .map(BrandingValues::from_branding)
         .unwrap_or_default();
-    let content = branding_content(cfg.as_ref(), reachable, &values, Some(error));
+    let content = branding_content(data.as_ref(), &values, Some(error));
     admin_response(c, user, "/admin/branding", "Branding", content)
 }
 
@@ -525,7 +517,7 @@ mod tests {
             ..Branding::default()
         };
         let values = BrandingValues::from_branding(&b);
-        let markup = branding_content(Some(&b), true, &values, None).into_string();
+        let markup = branding_content(Ok(&b), &values, None).into_string();
         assert!(markup.contains("--skin-primary-500: #123456;"), "{markup}");
         assert!(markup.contains(r##"value="#abcdef""##), "{markup}");
         assert!(markup.contains(r#"name="theme_color_dark""#), "{markup}");
@@ -549,8 +541,7 @@ mod tests {
             theme_color_dark: String::new(),
         };
         let values = BrandingValues::from_form(&submitted);
-        let html =
-            branding_content(Some(&stored), true, &values, Some("Name too long.")).into_string();
+        let html = branding_content(Ok(&stored), &values, Some("Name too long.")).into_string();
 
         assert!(
             html.contains(r#"value="Typed Name""#),

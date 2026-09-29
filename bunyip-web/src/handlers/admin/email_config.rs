@@ -9,11 +9,14 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
+use crate::api::ApiError;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
-use crate::views::ui::{button_class, error_box, icon, success_box, toggle_switch_field};
+use crate::views::ui::{
+    button_class, error_box, error_box_for, icon, success_box, toggle_switch_field,
+};
 use crate::web::{redirect_cookies, AppState};
 
 /// Email form values, kept as strings (numerics) so a failed save echoes back
@@ -77,7 +80,7 @@ impl EmailSettingsValues {
 }
 
 pub(super) fn email_settings_content(
-    cfg: Option<&crate::api::types::EmailConfigResponse>,
+    cfg: Result<&crate::api::types::EmailConfigResponse, &ApiError>,
     values: &EmailSettingsValues,
     error: Option<&str>,
 ) -> Markup {
@@ -85,12 +88,12 @@ pub(super) fn email_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Email" } p class="mt-2 text-muted-foreground" { "Configure the SMTP relay for transactional email. Changes apply immediately without a restart." } }
             @match cfg {
-                None => (error_box("Could not load email config.")),
+                Err(e) => (error_box_for("Could not load email config.", e)),
                 // BUNYIP-415: two-column block layout. The SMTP transport
                 // settings and the sender/notification settings sit in
                 // side-by-side blocks (one column below lg), inside one form so
                 // a single Save persists everything.
-                Some(e) => div class="space-y-6" {
+                Ok(e) => div class="space-y-6" {
                     form method="post" action="/admin/email" class="space-y-6" {
                     @if let Some(err) = error { (error_box(err)) }
                     (admin_block_grid(vec![
@@ -213,9 +216,7 @@ pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
         .map(EmailSettingsValues::from_config)
@@ -346,9 +347,7 @@ pub async fn email_save(
 
     // Re-render with the submitted values plus the inline error; only the
     // record's non-form info (source, secret flags) needs a re-fetch (BUNYIP-731).
-    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref()).await;
     let content = email_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
@@ -373,9 +372,7 @@ pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Respo
         Err(e) => error_box(&e.user_message()),
     };
 
-    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
         .map(EmailSettingsValues::from_config)
@@ -412,9 +409,7 @@ pub async fn email_test_send(State(st): State<AppState>, headers: HeaderMap) -> 
 
     let banner = test_send_banner(admin_api::send_test_email(&st.api, c.forward.as_deref()).await);
 
-    let cfg = admin_api::email_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::email_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
         .map(EmailSettingsValues::from_config)

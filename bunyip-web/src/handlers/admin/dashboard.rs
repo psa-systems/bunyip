@@ -7,9 +7,10 @@ use maud::html;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{AdminStatsResponse, DatasetHealth};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon};
 use crate::web::AppState;
 
 use super::title_case;
@@ -49,7 +50,10 @@ pub(super) fn dataset_row(d: &DatasetHealth) -> maud::Markup {
 /// empty erased the very distinction `dataset_row`'s four badges exist to draw,
 /// and hiding it when the health call failed made a broken dashboard look like
 /// a healthy one, so both states are stated inside the card instead.
-pub(super) fn datasets_card(datasets: &[DatasetHealth], reachable: bool) -> maud::Markup {
+pub(super) fn datasets_card(
+    datasets: &[DatasetHealth],
+    fetch_error: Option<&ApiError>,
+) -> maud::Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -57,8 +61,8 @@ pub(super) fn datasets_card(datasets: &[DatasetHealth], reachable: bool) -> maud
                 p class="text-sm text-muted-foreground" { "Offline IP intelligence for login-location and abuse enrichment. Refreshed out of band (see scripts/refresh-ip2-datasets.nu); a stale file keeps working but its data drifts." }
             }
             div class="p-6 pt-0" {
-                @if !reachable {
-                    (error_box("Could not reach the API to load dataset health."))
+                @if let Some(e) = fetch_error {
+                    (error_box_for("Could not reach the API to load dataset health.", e))
                 } @else if datasets.is_empty() {
                     (empty_state("package", "No datasets are configured.", None))
                 } @else {
@@ -100,15 +104,17 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let stats = admin_api::stats(&st.api, fwd).await.ok();
+    let stats_data = admin_api::stats(&st.api, fwd).await;
+    let stats_fetch_error = stats_data.as_ref().err().cloned();
+    let stats = stats_data.ok();
     // BUNYIP-474: dataset freshness for the Datasets card. BUNYIP-546: the card
     // always renders and says which of the three states it is in; a failed
     // health call still never blocks the dashboard.
     let health = admin_api::system_health(&st.api, fwd).await;
-    let datasets_reachable = health.is_ok();
+    let datasets_fetch_error = health.as_ref().err().cloned();
     let datasets = health.map(|h| h.datasets).unwrap_or_default();
     let logs_data = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await;
-    let logs_reachable = logs_data.is_ok();
+    let logs_fetch_error = logs_data.as_ref().err().cloned();
     let logs = logs_data.map(|p| p.items).unwrap_or_default();
     // Only prompt when we positively know the catalog is empty (stats fetched
     // and zero apps), not when the stats call failed (PSA-57).
@@ -134,14 +140,14 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
             }
             @if let Some(s) = &stats {
                 (stats_grid(s))
-            } @else {
-                (error_box("Could not reach the API."))
+            } @else if let Some(e) = &stats_fetch_error {
+                (error_box_for("Could not reach the API.", e))
             }
-            (datasets_card(&datasets, datasets_reachable))
+            (datasets_card(&datasets, datasets_fetch_error.as_ref()))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Recent Activity" } p class="text-sm text-muted-foreground" { "Latest platform events" } }
                 div class="p-6 pt-0" {
-                    @if !logs_reachable { (error_box("Could not reach the API to load recent activity.")) }
+                    @if let Some(e) = &logs_fetch_error { (error_box_for("Could not reach the API to load recent activity.", e)) }
                     @else if logs.is_empty() { (empty_state("activity", "No recent activity.", None)) }
                     @else {
                         div class="space-y-4" {
@@ -164,6 +170,16 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod dataset_card_tests {
     use super::*;
+
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to load dataset health".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        }
+    }
 
     fn ds(
         name: &str,
@@ -190,7 +206,7 @@ mod dataset_card_tests {
             ds("Missing one", true, false, None, false),
             ds("Unset one", false, false, None, false),
         ];
-        let html = datasets_card(&rows, true).into_string();
+        let html = datasets_card(&rows, None).into_string();
         assert!(html.contains("Datasets"), "card titled");
         assert!(html.contains("3 days old"), "fresh age shown");
         assert!(html.contains(">Fresh<"), "fresh badge");
@@ -221,7 +237,7 @@ mod dataset_card_tests {
 
     #[test]
     fn age_is_singular_for_one_day() {
-        let html = datasets_card(&[ds("A", true, true, Some(1), false)], true).into_string();
+        let html = datasets_card(&[ds("A", true, true, Some(1), false)], None).into_string();
         assert!(html.contains("1 day old") && !html.contains("1 days old"));
     }
 
@@ -229,7 +245,7 @@ mod dataset_card_tests {
     /// be able to read, not a reason to drop the card off the page.
     #[test]
     fn datasets_card_states_an_empty_list_inside_the_card() {
-        let html = datasets_card(&[], true).into_string();
+        let html = datasets_card(&[], None).into_string();
         assert!(html.contains("Datasets"), "card still renders");
         assert!(
             html.contains("No datasets are configured."),
@@ -245,7 +261,8 @@ mod dataset_card_tests {
     /// list, and neither hides the card.
     #[test]
     fn datasets_card_distinguishes_an_unreachable_api_from_an_empty_list() {
-        let html = datasets_card(&[], false).into_string();
+        let err = load_error();
+        let html = datasets_card(&[], Some(&err)).into_string();
         assert!(html.contains("Datasets"), "card still renders");
         assert!(
             html.contains("Could not reach the API to load dataset health."),

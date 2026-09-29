@@ -16,9 +16,10 @@ use serde_json::{json, Value};
 
 use crate::api::admin as admin_api;
 use crate::api::types::{SettingProvenance, SystemConfigResponse};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, error_box_for, icon};
 use crate::web::{redirect_cookies, AppState};
 
 fn toggle(id: &str, label: &str, on: bool, provenance: Markup) -> Markup {
@@ -130,7 +131,7 @@ impl SystemSettingsValues {
 }
 
 pub(super) fn system_settings_content(
-    cfg: Option<&SystemConfigResponse>,
+    cfg: Result<&SystemConfigResponse, &ApiError>,
     values: &SystemSettingsValues,
     error: Option<&str>,
 ) -> Markup {
@@ -146,8 +147,8 @@ pub(super) fn system_settings_content(
                 }
             }
             @match cfg {
-                None => (error_box("Could not load the system config.")),
-                Some(e) => div class="space-y-6" {
+                Err(err) => (error_box_for("Could not load the system config.", err)),
+                Ok(e) => div class="space-y-6" {
                     div class="rounded-md border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground" {
                         "Directory: " code { (e.path) } ". Changes take effect after the next restart."
                     }
@@ -188,11 +189,10 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
+        .ok()
         .map(SystemSettingsValues::from_config)
         .unwrap_or_default();
     let content = system_settings_content(cfg.as_ref(), &values, None);
@@ -247,9 +247,7 @@ pub async fn system_config_save(
 
     // Re-render with the submitted values plus the inline error; only the
     // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
-    let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let content = system_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/system-config", "System", content)
 }
@@ -311,7 +309,7 @@ mod tests {
             provenance("COUNTRY_DENY", Some("file"), &["file", "environment"]),
         ]);
         let values = SystemSettingsValues::from_config(&cfg);
-        let html = system_settings_content(Some(&cfg), &values, None).into_string();
+        let html = system_settings_content(Ok(&cfg), &values, None).into_string();
         let fields = rendered_fields(&html);
         assert!(!fields.is_empty(), "the form renders its settings");
         for field in fields {
@@ -376,8 +374,8 @@ mod tests {
             country_deny: String::new(),
         };
         let values = SystemSettingsValues::from_form(&f);
-        let html = system_settings_content(Some(&cfg), &values, Some("Country code invalid."))
-            .into_string();
+        let html =
+            system_settings_content(Ok(&cfg), &values, Some("Country code invalid.")).into_string();
 
         assert!(
             html.contains(r#"value="US, GB, FR""#),

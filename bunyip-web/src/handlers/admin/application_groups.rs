@@ -13,7 +13,7 @@ use crate::api::types::ApplicationGroup;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, empty_state, error_box, icon};
+use crate::views::ui::{button_class, empty_state, error_box, error_box_for, icon};
 use crate::web::{redirect_cookies, AppState};
 
 #[derive(Deserialize, Default)]
@@ -138,7 +138,7 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
         Err(r) => return r,
     };
     let data = admin_api::application_groups(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
+    let error = data.as_ref().err().cloned();
     let groups = data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
@@ -148,8 +148,8 @@ pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) 
             }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load application groups."))
+                    @if let Some(e) = &error {
+                        (error_box_for("Could not reach the API to load application groups.", e))
                     } @else if groups.is_empty() {
                         (empty_state("layers", "No groups yet.", None))
                     } @else {
@@ -232,13 +232,13 @@ pub async fn application_group_edit(
         Err(r) => return r,
     };
     let data = admin_api::application_groups(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
+    let error = data.as_ref().err().cloned();
     let groups = data.unwrap_or_default();
     let content = match groups.iter().find(|g| g.id == id) {
         None => {
             html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit group" }
-                @if !reachable {
-                    (error_box("Could not reach the API to load application groups."))
+                @if let Some(e) = &error {
+                    (error_box_for("Could not reach the API to load application groups.", e))
                 } @else {
                     p class="text-muted-foreground" { "Group not found." }
                 }
