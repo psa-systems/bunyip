@@ -49,7 +49,7 @@ async fn test_pool() -> Option<PgPool> {
 }
 
 /// The public probe publishes every registered key, plus the derived
-/// `orgs_enabled` a bunyip-web one release behind still reads.
+/// `orgs_enabled` a bunyip-web one release behind still reads (until BUNYIP-842).
 #[actix_rt::test]
 async fn setup_status_publishes_every_registry_key() {
     let toggles = Arc::new(FeatureToggleCache::new());

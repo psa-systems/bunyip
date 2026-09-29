@@ -292,7 +292,7 @@ pub struct SetupStatusResponse {
     /// `rate_limit_floor::EXEMPT_PATHS`.
     pub features: BTreeMap<&'static str, bool>,
     /// Derived from `features["organizations"]` for a bunyip-web one release
-    /// behind (BUNYIP-493's original field).
+    /// behind (BUNYIP-493's original field); BUNYIP-842 removes it.
     pub orgs_enabled: bool,
 }
 
