@@ -208,6 +208,17 @@ pub fn document(title: &str, body: Markup) -> Markup {
 /// the remaining rules plus `avatar-picker.js` ship on that page alone.
 /// Reached through `handlers::dashboard_response_with_avatar_picker`.
 pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker: bool) -> Markup {
+    document_with_toasts(title, body, with_avatar_picker, html! {})
+}
+
+/// `document_with_avatar_picker()` plus server-rendered pills that start inside
+/// `#bunyip-toast-root`, so they show without JavaScript (BUNYIP-843).
+pub fn document_with_toasts(
+    title: &str,
+    body: Markup,
+    with_avatar_picker: bool,
+    toasts: Markup,
+) -> Markup {
     let branding = branding();
     html! {
         (DOCTYPE)
@@ -292,8 +303,31 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 // itself via its own `role` (`status` or `alert`), so a live
                 // region is never nested inside another.
                 div id="bunyip-toast-root"
-                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2" {}
+                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2" { (toasts) }
             }
+        }
+    }
+}
+
+/// The review screen the reminder pill links to (BUNYIP-843).
+pub const FEATURE_REVIEW_PATH: &str = "/admin/features/review";
+
+/// BUNYIP-843: the super admin's persistent reminder that features await a
+/// decision. The info pill's token pair from `app.js`, with no timer; "Later"
+/// hides it for the browser session through `data-feature-review-later`.
+pub fn feature_review_pill(user: &User) -> Markup {
+    let pending = features_pending_review();
+    if !user.is_super_admin || pending == 0 {
+        return html! {};
+    }
+    let noun = if pending == 1 { "feature" } else { "features" };
+    html! {
+        div role="status" data-feature-review-pill
+            class="pointer-events-auto flex items-center gap-3 rounded-md border border-border bg-popover px-4 py-2 text-sm text-popover-foreground shadow-lg" {
+            span { (pending) " new " (noun) " to review" }
+            a href=(FEATURE_REVIEW_PATH) class="font-medium text-primary-text hover:underline" { "Review" }
+            button type="button" data-feature-review-later aria-label="Later: hide this reminder until your next session"
+                class="cursor-pointer text-xs opacity-70 hover:opacity-100" { "Later" }
         }
     }
 }
@@ -1232,6 +1266,58 @@ mod tests {
         );
 
         install_orgs_enabled(false);
+    }
+
+    /// BUNYIP-843: the review reminder is the super admin's alone, and only
+    /// while something is undecided. The count starts at zero, which is also
+    /// what the probe reports before bunyip-api's first successful load.
+    #[test]
+    fn the_review_reminder_shows_only_to_the_super_admin_while_features_wait() {
+        let _guard = crate::feature_flags::FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let admin = test_user(UserRole::Admin);
+        let super_admin = User {
+            is_super_admin: true,
+            ..test_user(UserRole::Admin)
+        };
+
+        install_features_pending_review(0);
+        assert!(
+            feature_review_pill(&super_admin).into_string().is_empty(),
+            "nothing to review, no reminder"
+        );
+
+        install_features_pending_review(2);
+        let pill = feature_review_pill(&super_admin).into_string();
+        assert!(pill.contains("2 new features to review"), "{pill}");
+        assert!(pill.contains(r#"href="/admin/features/review""#));
+        assert!(pill.contains("data-feature-review-pill"));
+        assert!(pill.contains("data-feature-review-later"));
+        assert!(pill.contains(r#"type="button""#));
+        assert!(
+            pill.contains(r#"aria-label="Later: hide this reminder until your next session""#),
+            "the Later button has an accessible name that contains its label"
+        );
+        assert!(
+            feature_review_pill(&admin).into_string().is_empty(),
+            "a plain admin never sees it"
+        );
+
+        install_features_pending_review(1);
+        assert!(feature_review_pill(&super_admin)
+            .into_string()
+            .contains("1 new feature to review"));
+
+        // It starts inside the toast column, so it shows without JavaScript.
+        let doc = document_with_toasts("T", html! {}, false, feature_review_pill(&super_admin))
+            .into_string();
+        let root = doc
+            .split_once(r#"id="bunyip-toast-root""#)
+            .expect("the toast root renders")
+            .1;
+        assert!(root.contains("data-feature-review-pill"));
+        install_features_pending_review(0);
     }
 
     /// BUNYIP-506: a role string this build does not recognise decodes to

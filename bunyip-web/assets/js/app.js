@@ -10,6 +10,8 @@
 //   [data-dialog-open]   button- showModal() the <dialog> with that id
 //   [data-dialog-close]  button- close the enclosing <dialog>
 //   [data-download-file] button- download the attribute value as a plain-text file
+//   [data-feature-review-later] button - hide the enclosing [data-feature-review-pill]
+//                                for this browser session (BUNYIP-843)
 //   [data-feedback-link] a     - append the current path as ?from=
 //   [data-redirect-to]   any   - navigate after [data-redirect-after] ms
 //   [data-reload-after]  any   - reload after that many ms
@@ -156,6 +158,37 @@
       if (err) window.bunyipToast(err, 'error');
     }
   }
+
+  // --------------------------------------------- feature review reminder --
+  // BUNYIP-843: the super admin's reminder pill is server-rendered into
+  // #bunyip-toast-root with no timer. "Later" hides it until the next browser
+  // session; the server keeps rendering it until a decision is recorded.
+  var REVIEW_LATER_KEY = 'bunyip.featureReview.later';
+  var reviewLater = false;
+  try {
+    reviewLater = sessionStorage.getItem(REVIEW_LATER_KEY) === '1';
+  } catch (e) {
+    report('warn', 'session storage is unavailable; the review reminder cannot be deferred', e);
+  }
+  if (reviewLater) {
+    document.querySelectorAll('[data-feature-review-pill]').forEach(function (el) {
+      el.hidden = true;
+    });
+  }
+  document.addEventListener('click', function (e) {
+    var el = e.target;
+    if (!el || typeof el.closest !== 'function') return;
+    var later = el.closest('[data-feature-review-later]');
+    if (!later) return;
+    try {
+      sessionStorage.setItem(REVIEW_LATER_KEY, '1');
+    } catch (err) {
+      // Still hide it on this page; only the session-long deferral is lost.
+      report('warn', 'the review reminder deferral could not be saved', err);
+    }
+    var reviewPill = later.closest('[data-feature-review-pill]');
+    if (reviewPill) dismissToast(reviewPill);
+  });
 
   // ------------------------------------------------------- OTP autosubmit --
   // BUNYIP-331: submit a 2FA form the moment its six-digit TOTP field is

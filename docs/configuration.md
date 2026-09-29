@@ -568,7 +568,9 @@ turn one on.
 
 Every api process loads the table at startup, re-reads it every 60 seconds and refreshes at once after a save it served,
 so a change is live everywhere within a minute with no restart. The public probe `GET /v1/auth/setup/status` publishes
-every key as `features`, answered from that snapshot, so the probe reads no table. bunyip-web reads the probe once before
+every key as `features`, answered from that snapshot, so the probe reads no table. A feature with no row is pending
+review (BUNYIP-843): the probe also publishes `features_pending_review`, a count and never the keys, which drives the
+super admin's review reminder and the `/admin/features/review` screen. bunyip-web reads the probe once before
 its listener binds and every 60 seconds after; a read that fails leaves every feature off rather than guessing one on.
 Adding a toggle is described in [`feature-toggles.md`](feature-toggles.md).
 

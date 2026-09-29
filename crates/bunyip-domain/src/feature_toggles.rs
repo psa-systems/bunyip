@@ -14,6 +14,10 @@
 //! bunyip-api holds the rows in a process-wide [`FeatureToggleCache`], read at
 //! startup, refreshed every 60 seconds and right after an admin save, so every
 //! api process converges on a change within one interval.
+//!
+//! A registered feature with no row is PENDING REVIEW (BUNYIP-843): nobody has
+//! decided it yet, so the super admin is prompted until someone records on or
+//! off. Only a real reading can report one, so an outage at boot never prompts.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, RwLock};
@@ -80,10 +84,14 @@ impl Feature {
 /// rather than once per refresh.
 static WARNED_UNKNOWN_KEYS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
-/// The resolved state of every registered feature.
+/// The resolved state of every registered feature. `Default` is the state
+/// before any reading: everything off and nothing pending.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeatureToggles {
     on: BTreeSet<Feature>,
+    /// Features with a stored row, whatever its value.
+    decided: BTreeSet<Feature>,
+    loaded: bool,
 }
 
 impl FeatureToggles {
@@ -91,12 +99,15 @@ impl FeatureToggles {
     /// key no variant matches is ignored and logged once at `warn`.
     pub fn from_rows<'a>(rows: impl IntoIterator<Item = (&'a str, bool)>) -> Self {
         let mut on = BTreeSet::new();
+        let mut decided = BTreeSet::new();
         for (key, enabled) in rows {
             match Feature::from_key(key) {
-                Some(feature) if enabled => {
-                    on.insert(feature);
+                Some(feature) => {
+                    decided.insert(feature);
+                    if enabled {
+                        on.insert(feature);
+                    }
                 }
-                Some(_) => {}
                 None => {
                     let first = WARNED_UNKNOWN_KEYS
                         .lock()
@@ -111,11 +122,28 @@ impl FeatureToggles {
                 }
             }
         }
-        Self { on }
+        Self {
+            on,
+            decided,
+            loaded: true,
+        }
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
         self.on.contains(&feature)
+    }
+
+    /// Registered features nobody has decided yet, in registry order. Empty
+    /// until a reading has loaded.
+    pub fn pending(&self) -> Vec<Feature> {
+        if !self.loaded {
+            return Vec::new();
+        }
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| !self.decided.contains(f))
+            .collect()
     }
 
     /// Every registered key with its state, the shape the public probe publishes.
@@ -220,6 +248,25 @@ mod tests {
             "only registered keys publish"
         );
         assert!(!map.contains_key("retired_feature"));
+    }
+
+    #[test]
+    fn pending_lists_the_features_with_no_row() {
+        let toggles = FeatureToggles::from_rows([("organizations", false)]);
+        assert_eq!(toggles.pending(), vec![Feature::TenantHostnames]);
+        let decided: Vec<(&str, bool)> = Feature::ALL.iter().map(|f| (f.key(), false)).collect();
+        assert!(FeatureToggles::from_rows(decided).pending().is_empty());
+        assert_eq!(
+            FeatureToggles::from_rows([]).pending(),
+            Feature::ALL.to_vec(),
+            "an empty table leaves everything to review"
+        );
+    }
+
+    #[test]
+    fn nothing_is_pending_before_the_first_load() {
+        assert!(FeatureToggles::default().pending().is_empty());
+        assert!(FeatureToggleCache::new().current().pending().is_empty());
     }
 
     #[test]

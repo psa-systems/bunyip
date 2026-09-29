@@ -291,6 +291,9 @@ pub struct SetupStatusResponse {
     /// `FeatureToggleCache`, so the probe touches no table and stays in
     /// `rate_limit_floor::EXEMPT_PATHS`.
     pub features: BTreeMap<&'static str, bool>,
+    /// BUNYIP-843: how many registered features nobody has decided yet. A count
+    /// only, so this unauthenticated probe never names a feature that is dark.
+    pub features_pending_review: u32,
     /// Derived from `features["organizations"]` for a bunyip-web one release
     /// behind (BUNYIP-493's original field); BUNYIP-842 removes it.
     pub orgs_enabled: bool,
@@ -1481,6 +1484,7 @@ pub async fn setup_status(
             email_enabled: config.email.enabled,
             stripe_enabled: stripe_service.is_configured(),
             features: snapshot.as_map(),
+            features_pending_review: u32::try_from(snapshot.pending().len()).unwrap_or(u32::MAX),
             orgs_enabled,
         }),
         meta: crate::responses::ResponseMeta::new(request_id),

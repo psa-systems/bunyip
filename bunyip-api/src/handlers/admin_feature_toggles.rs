@@ -28,10 +28,20 @@ pub struct FeatureToggleEntry {
     pub label: &'static str,
     pub help: &'static str,
     pub enabled: bool,
+    /// BUNYIP-843: false while no decision is stored, which is what the
+    /// review prompt lists.
+    pub decided: bool,
     /// `None` until the toggle has been saved once.
     pub updated_at: Option<DateTime<Utc>>,
     pub updated_by: Option<Uuid>,
     pub updated_by_email: Option<String>,
+}
+
+/// The admin list, with the environment a decision applies to (BUNYIP-843).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FeatureToggleList {
+    pub environment: String,
+    pub toggles: Vec<FeatureToggleEntry>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -51,6 +61,7 @@ fn entries(rows: &[FeatureToggleRow], emails: &HashMap<Uuid, String>) -> Vec<Fea
                 label: feature.label(),
                 help: feature.help(),
                 enabled: row.is_some_and(|r| r.enabled),
+                decided: row.is_some(),
                 updated_at: row.map(|r| r.updated_at),
                 updated_by,
                 updated_by_email: updated_by.and_then(|id| emails.get(&id).cloned()),
@@ -92,11 +103,18 @@ pub async fn list_feature_toggles(
     req: HttpRequest,
     _admin: AdminUser,
     pool: web::Data<PgPool>,
+    config: web::Data<crate::config::Config>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let rows = FeatureToggleRepository::get_all(&pool).await?;
     let emails = actor_emails(&pool, &rows).await?;
-    Ok(success(entries(&rows, &emails), request_id))
+    Ok(success(
+        FeatureToggleList {
+            environment: config.environment.clone(),
+            toggles: entries(&rows, &emails),
+        },
+        request_id,
+    ))
 }
 
 /// PUT /v1/admin/feature-toggles/{key}
@@ -161,7 +179,14 @@ mod tests {
         let registry: Vec<&str> = Feature::ALL.iter().map(|f| f.key()).collect();
         assert_eq!(keys, registry);
         let tenant = listed.iter().find(|e| e.key == "tenant_hostnames").unwrap();
-        assert!(!tenant.enabled && tenant.updated_at.is_none());
+        assert!(!tenant.enabled && !tenant.decided && tenant.updated_at.is_none());
+        assert!(
+            listed
+                .iter()
+                .find(|e| e.key == "organizations")
+                .unwrap()
+                .decided
+        );
         assert!(
             listed
                 .iter()

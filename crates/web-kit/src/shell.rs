@@ -9,6 +9,7 @@
 //! data, document `<head>`, and shells on top of these.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{OnceLock, RwLock};
 
 use maud::{html, Markup};
@@ -114,6 +115,18 @@ pub fn install_orgs_enabled(enabled: bool) {
 
 pub fn orgs_enabled() -> bool {
     feature_enabled(ORGANIZATIONS_FEATURE)
+}
+
+/// BUNYIP-843: how many registered features nobody has decided yet, as the
+/// consumer last read it. Zero until installed, so nothing prompts by default.
+static FEATURES_PENDING_REVIEW: AtomicU32 = AtomicU32::new(0);
+
+pub fn install_features_pending_review(count: u32) {
+    FEATURES_PENDING_REVIEW.store(count, Ordering::Relaxed);
+}
+
+pub fn features_pending_review() -> u32 {
+    FEATURES_PENDING_REVIEW.load(Ordering::Relaxed)
 }
 
 /// Absolute URL of the committed share image, installed once from the

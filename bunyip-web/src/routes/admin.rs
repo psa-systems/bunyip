@@ -198,6 +198,11 @@ pub fn routes() -> Router<AppState> {
             "/admin/features",
             get(admin::feature_toggles).post(admin::feature_toggle_save),
         )
+        // BUNYIP-843: the super admin's card-by-card review of undecided toggles.
+        .route(
+            "/admin/features/review",
+            get(admin::feature_review).post(admin::feature_review_save),
+        )
         // BUNYIP-527: the tier -> Stripe price catalog mapping moved back here
         // from the Stripe page (its own form + save, alongside slots/trials).
         .route(

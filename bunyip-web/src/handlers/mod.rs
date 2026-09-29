@@ -23,7 +23,9 @@ use maud::Markup;
 use crate::api::types::{PricingResponse, User, UserRole};
 use crate::auth::{self, AuthCtx};
 use crate::util::urlenc;
-use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
+use crate::views::layout::{
+    admin_shell, dashboard_shell, document, document_with_toasts, feature_review_pill, public_shell,
+};
 use crate::web::{html_cookies, redirect_cookies, AppState};
 
 /// Read the forwarded cookie from the request.
@@ -364,8 +366,47 @@ pub fn dashboard_response(
     // tab suffix (" · {app_name}") is appended in `document()`; the top bar
     // renders the bare title.
     html_cookies(
-        document(title, dashboard_shell(user, active, title, content)),
+        dashboard_page(user, active, title, content, false),
         &c.set_cookies,
+    )
+}
+
+/// A dashboard-shell document, carrying the super admin's feature review
+/// reminder (BUNYIP-843).
+pub(crate) fn dashboard_page(
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+    with_avatar_picker: bool,
+) -> Markup {
+    document_with_toasts(
+        title,
+        dashboard_shell(user, active, title, content),
+        with_avatar_picker,
+        feature_review_pill(user),
+    )
+}
+
+/// An admin-shell document. `review_reminder` is false only on the review
+/// screen itself, where the reminder would point at the page it is on.
+pub(crate) fn admin_page(
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+    review_reminder: bool,
+) -> Markup {
+    let toasts = if review_reminder {
+        feature_review_pill(user)
+    } else {
+        maud::html! {}
+    };
+    document_with_toasts(
+        title,
+        admin_shell(user, active, title, content),
+        false,
+        toasts,
     )
 }
 
@@ -382,11 +423,7 @@ pub fn dashboard_response_with_avatar_picker(
     content: Markup,
 ) -> Response {
     html_cookies(
-        crate::views::layout::document_with_avatar_picker(
-            title,
-            dashboard_shell(user, active, title, content),
-            true,
-        ),
+        dashboard_page(user, active, title, content, true),
         &c.set_cookies,
     )
 }
@@ -399,7 +436,21 @@ pub fn admin_response(
     content: Markup,
 ) -> Response {
     html_cookies(
-        document(title, admin_shell(user, active, title, content)),
+        admin_page(user, active, title, content, true),
+        &c.set_cookies,
+    )
+}
+
+/// `admin_response` without the feature review reminder: the review screen.
+pub fn admin_response_without_review_reminder(
+    c: &AuthCtx,
+    user: &User,
+    active: &str,
+    title: &str,
+    content: Markup,
+) -> Response {
+    html_cookies(
+        admin_page(user, active, title, content, false),
         &c.set_cookies,
     )
 }
@@ -408,13 +459,19 @@ pub fn admin_response(
 /// fails fast: a route gate must not depend on the API being reachable.
 #[cfg(test)]
 pub(crate) fn unreachable_api_state() -> AppState {
+    test_state("http://127.0.0.1:1")
+}
+
+/// Test state pointed at `api_url`, typically a mock API a test serves.
+#[cfg(test)]
+pub(crate) fn test_state(api_url: &str) -> AppState {
     use std::sync::Arc;
     use std::time::Duration;
 
     use crate::ttl_cache::TtlCache;
 
     AppState {
-        api: crate::api::Api::new("http://127.0.0.1:1"),
+        api: crate::api::Api::new(api_url),
         cfg: Arc::new(crate::config::Config::from_env()),
         pricing_cache: Arc::new(TtlCache::new(
             "/v1/pricing",
@@ -809,6 +866,10 @@ mod verification_gate_tests {
             include_str!("admin/error_log.rs"),
         ),
         (
+            "bunyip-web/src/handlers/admin/feature_toggles.rs",
+            include_str!("admin/feature_toggles.rs"),
+        ),
+        (
             "bunyip-web/src/handlers/admin/feedback.rs",
             include_str!("admin/feedback.rs"),
         ),
@@ -863,5 +924,77 @@ mod verification_gate_tests {
                  refused action into a fake success redirect (BUNYIP-723)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod review_reminder_page_tests {
+    //! BUNYIP-843: the admin and dashboard pages carry the super admin's review
+    //! reminder inside `#bunyip-toast-root`; the review screen does not.
+    use maud::html;
+
+    use super::{admin_page, dashboard_page};
+    use crate::api::types::{MembershipStatus, MembershipTier, User, UserRole};
+    use crate::views::layout::install_features_pending_review;
+
+    fn super_admin() -> User {
+        User {
+            id: "u1".into(),
+            email: "root@example.com".into(),
+            role: UserRole::Admin,
+            email_verified: true,
+            two_factor_enabled: true,
+            membership_status: MembershipStatus::None,
+            price_locked: false,
+            locked_price_amount: None,
+            created_at: String::new(),
+            membership_tier: MembershipTier::Free,
+            trial_ends_at: None,
+            lifetime_member: false,
+            first_name: Some("Ada".into()),
+            last_name: Some("Lovelace".into()),
+            phone: None,
+            avatar_updated_at: None,
+            is_super_admin: true,
+        }
+    }
+
+    fn in_toast_root(page: &str) -> bool {
+        page.split_once(r#"id="bunyip-toast-root""#)
+            .is_some_and(|(_, root)| root.contains("data-feature-review-pill"))
+    }
+
+    #[test]
+    fn both_shells_carry_the_reminder_and_the_review_screen_does_not() {
+        let _guard = crate::feature_flags::FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        install_features_pending_review(1);
+        let user = super_admin();
+        let admin = admin_page(&user, "/admin", "Admin", html! {}, true).into_string();
+        let dashboard =
+            dashboard_page(&user, "/dashboard", "Dashboard", html! {}, false).into_string();
+        let review = admin_page(
+            &user,
+            "/admin/features",
+            "Review New Features",
+            html! {},
+            false,
+        )
+        .into_string();
+        install_features_pending_review(0);
+
+        assert!(
+            in_toast_root(&admin),
+            "the admin shell carries the reminder"
+        );
+        assert!(
+            in_toast_root(&dashboard),
+            "the dashboard shell carries the reminder"
+        );
+        assert!(
+            !review.contains("data-feature-review-pill"),
+            "the review screen never reminds about itself"
+        );
     }
 }

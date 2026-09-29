@@ -1112,6 +1112,41 @@ mod two_column_layout_tests {
         .unwrap()
     }
 
+    fn toggle_list(toggles: &[AdminFeatureToggle]) -> AdminFeatureToggleList {
+        AdminFeatureToggleList {
+            environment: "staging".into(),
+            toggles: toggles.to_vec(),
+        }
+    }
+
+    /// BUNYIP-843: an undecided row says "New", and the super admin gets a way
+    /// into the review screen only while something is undecided.
+    #[test]
+    fn feature_toggles_page_marks_undecided_rows_and_offers_the_review() {
+        let mut undecided = feature_toggle("tenant_hostnames", false);
+        undecided.decided = false;
+        let toggles = [feature_toggle("organizations", true), undecided];
+        let html = feature_toggles_content(&toggle_list(&toggles), true, true).into_string();
+        assert_eq!(
+            html.matches(">New<").count(),
+            1,
+            "only the undecided row is new"
+        );
+        assert!(html.contains(r#"href="/admin/features/review""#));
+        assert!(html.contains("Review new features (1)"));
+
+        let all_decided = [feature_toggle("organizations", true)];
+        let html = feature_toggles_content(&toggle_list(&all_decided), true, true).into_string();
+        assert!(!html.contains("/admin/features/review") && !html.contains(">New<"));
+
+        let plain_admin =
+            feature_toggles_content(&toggle_list(&toggles), true, false).into_string();
+        assert!(
+            !plain_admin.contains("/admin/features/review"),
+            "the review screen is the super admin's"
+        );
+    }
+
     /// The `<input>` tag of one toggle row, read by its id so other controls on
     /// the page cannot satisfy the assertion.
     fn toggle_input(html: &str, key: &str) -> String {
@@ -1134,7 +1169,7 @@ mod two_column_layout_tests {
             feature_toggle("organizations", true),
             feature_toggle("tenant_hostnames", false),
         ];
-        let html = feature_toggles_content(&toggles, true, true).into_string();
+        let html = feature_toggles_content(&toggle_list(&toggles), true, true).into_string();
         assert!(html.contains("Feature Toggles"), "heading present");
         assert_eq!(
             html.matches(r#"action="/admin/features""#).count(),
@@ -1176,12 +1211,12 @@ mod two_column_layout_tests {
     #[test]
     fn feature_toggles_page_is_read_only_below_super_admin_and_says_when_unreachable() {
         let toggles = [feature_toggle("organizations", true)];
-        let html = feature_toggles_content(&toggles, true, false).into_string();
+        let html = feature_toggles_content(&toggle_list(&toggles), true, false).into_string();
         assert!(!html.contains(r#"action="/admin/features""#));
         assert!(html.contains("Only the super admin can change this."));
-        let down = feature_toggles_content(&[], false, true).into_string();
+        let down = feature_toggles_content(&toggle_list(&[]), false, true).into_string();
         assert!(down.contains("Could not reach the API to load the feature toggles."));
-        let empty = feature_toggles_content(&[], true, true).into_string();
+        let empty = feature_toggles_content(&toggle_list(&[]), true, true).into_string();
         assert!(empty.contains("No feature toggles."));
     }
 

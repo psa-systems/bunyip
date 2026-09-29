@@ -3,15 +3,16 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
-    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
-    ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
-    FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
-    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
-    TestEmailResult, TierConfigResponse, UserEntitlement,
+    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggleList,
+    AdminFeedbackDetail, AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit,
+    AdminRateLimitConfig, AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup,
+    ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse,
+    ErrorLogsResponse, FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse,
+    IpEnrichment, MailerSuppression, PaginatedResponse, PricingStatus,
+    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -792,12 +793,12 @@ pub async fn set_rate_limit_config(
     ok_data(&r).map(|_| ())
 }
 
-/// Every registered feature toggle (BUNYIP-840). Wraps
-/// `GET /v1/admin/feature-toggles`, open to any admin.
+/// Every registered feature toggle (BUNYIP-840) and the environment they apply
+/// to (BUNYIP-843). Wraps `GET /v1/admin/feature-toggles`, open to any admin.
 pub async fn feature_toggles(
     api: &Api,
     cookie: Option<&str>,
-) -> Result<Vec<AdminFeatureToggle>, ApiError> {
+) -> Result<AdminFeatureToggleList, ApiError> {
     parse(api.get("/admin/feature-toggles", cookie).await?)
 }
 

@@ -7,7 +7,8 @@
 //! `orgs_enabled` for organizations). A free function builds the nav list with
 //! no access to `AppState`, which is why the values live in a cell rather than
 //! being threaded through every caller - the same reason the Community flag
-//! does.
+//! does. The probe's `features_pending_review` count goes into the same shell
+//! module, where it drives the super admin's review reminder (BUNYIP-843).
 //!
 //! Loaded once before the listener binds and re-read on an interval, the same
 //! shape `branding` uses, so an admin flipping a switch does not need a
@@ -18,7 +19,7 @@
 use std::time::Duration;
 
 use crate::api::{auth as auth_api, Api, ApiError};
-use crate::views::layout::install_features;
+use crate::views::layout::{install_features, install_features_pending_review};
 
 /// The flag cell is process-wide, so a test that flips it has to be the only
 /// one reading it. Every test that installs a value takes this lock first and
@@ -44,6 +45,7 @@ async fn refresh(api: &Api, startup: bool) -> bool {
     match auth_api::setup_status(api).await {
         Ok(s) => {
             install_features(s.features);
+            install_features_pending_review(s.features_pending_review);
             true
         }
         Err(e) => {
@@ -74,6 +76,12 @@ fn report(e: &ApiError, startup: bool) {
             "feature-flag refresh failed; keeping the last read values"
         );
     }
+}
+
+/// Re-read right after an admin changes a toggle (BUNYIP-843), so this process
+/// drops the review reminder without waiting out the interval.
+pub async fn refresh_now(api: &Api) {
+    refresh(api, false).await;
 }
 
 /// One bounded read before the listener binds, so the first render already has

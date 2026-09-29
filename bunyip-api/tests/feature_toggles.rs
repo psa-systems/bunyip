@@ -83,6 +83,36 @@ async fn setup_status_publishes_every_registry_key() {
     assert_eq!(features["organizations"], true);
     assert_eq!(features["tenant_hostnames"], false);
     assert_eq!(body["data"]["orgs_enabled"], true);
+    // BUNYIP-843: a count only; tenant_hostnames has no row, so it is pending.
+    assert_eq!(body["data"]["features_pending_review"], 1);
+    assert!(
+        !body.to_string().contains("pending_features"),
+        "the probe must never list the pending keys: {body}"
+    );
+}
+
+/// BUNYIP-843 negative case: before the first load nothing is pending, so a
+/// database outage at boot never prompts the super admin.
+#[actix_rt::test]
+async fn nothing_is_pending_review_before_the_first_load() {
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(test_config()))
+            .app_data(web::Data::new(Arc::new(StripeService::new(
+                unconfigured_stripe_config(),
+            ))))
+            .app_data(web::Data::new(Arc::new(FeatureToggleCache::new())))
+            .route(
+                "/v1/auth/setup/status",
+                web::get().to(bunyip_api::handlers::setup_status),
+            ),
+    )
+    .await;
+    let req = test::TestRequest::get()
+        .uri("/v1/auth/setup/status")
+        .to_request();
+    let body: serde_json::Value = test::call_and_read_body_json(&app, req).await;
+    assert_eq!(body["data"]["features_pending_review"], 0);
 }
 
 async fn seed_admin(pool: &PgPool, super_admin: bool) -> User {
@@ -135,6 +165,7 @@ async fn only_the_super_admin_flips_a_registered_toggle() {
     let app = test::init_service(
         App::new()
             .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
             .app_data(jwt.clone())
             .app_data(web::Data::new(toggles.clone()))
             .app_data(web::Data::new(routing))
@@ -152,10 +183,12 @@ async fn only_the_super_admin_flips_a_registered_toggle() {
         .to_request();
     let listed: serde_json::Value = test::call_and_read_body_json(&app, req).await;
     assert_eq!(
-        listed["data"].as_array().map(Vec::len),
+        listed["data"]["toggles"].as_array().map(Vec::len),
         Some(Feature::ALL.len()),
         "every registered feature is listed: {listed}"
     );
+    assert_eq!(listed["data"]["environment"], "development");
+    assert!(listed["data"]["toggles"][0]["decided"].is_boolean());
 
     let req = test::TestRequest::put()
         .uri("/v1/admin/feature-toggles/tenant_hostnames")
@@ -188,6 +221,10 @@ async fn only_the_super_admin_flips_a_registered_toggle() {
         .to_request();
     let saved: serde_json::Value = test::call_and_read_body_json(&app, req).await;
     assert_eq!(saved["data"]["enabled"], false);
+    assert_eq!(
+        saved["data"]["decided"], true,
+        "an explicit off is a decision"
+    );
     assert_eq!(saved["data"]["updated_by"], super_admin.id.to_string());
     assert!(toggles.is_loaded(), "the save refreshed the snapshot");
     assert!(

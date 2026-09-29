@@ -17,6 +17,27 @@ feature gates on one.
 - **Admin-managed.** The admin Feature Toggles page (`/admin/features`) lists every toggle to any admin. Only the super
   admin can flip one, and every flip is audited as `admin_feature_toggle_updated`.
 
+## Reviewing new features
+
+A feature that nobody has decided yet (it has no row) is **pending review** (BUNYIP-843). Shipping dark is the
+default, but a new feature should not sit dark and forgotten, so the super admin is prompted until someone records an
+explicit decision, on or off.
+
+- The public probe publishes only the count, `features_pending_review`, never the keys: naming a pending feature would
+  reveal a surface that is meant to be invisible. Before bunyip-api's first successful read the count is 0, so a
+  database outage at boot never prompts.
+- While the count is above zero, the super admin sees a persistent pill on every admin and dashboard page: "N new
+  features to review", with a Review link and a Later button. Later hides it for the rest of the browser session; it
+  comes back in the next session until the decision is made. Other admins never see it.
+- The review screen, `/admin/features/review`, is a stack of cards, one per undecided feature. The top card shows the
+  feature, the environment the decision applies to, and a switch that starts off. "Save and next" records the decision
+  (audited, like any save) and moves on; "Decide later" skips the card for this visit without recording anything.
+  With nothing left it says "All caught up". It works without JavaScript.
+- On `/admin/features`, undecided rows carry a "New" badge, and a "Review new features (N)" button leads to the review
+  screen.
+- A decision is environment-wide: one recorded decision clears the prompt for every admin. After a save the web
+  process refreshes its copy at once; other processes follow within 60 seconds.
+
 ## How a change spreads
 
 | Process        | When it sees a change                                                                           |
@@ -39,7 +60,8 @@ first successful read), and bunyip-web leaves every feature off at startup and k
    only one.
 
 No migration, admin form, probe field or settings-archive change is needed: the admin page, the probe and the archive
-all iterate the registry and the table.
+all iterate the registry and the table. The new variant has no row, so it is pending review on every deployment until
+the super admin decides it.
 
 ## The toggles
 

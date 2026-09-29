@@ -251,6 +251,10 @@ pub struct SetupStatus {
     /// advertising a surface that is not there.
     #[serde(default)]
     pub features: HashMap<String, bool>,
+    /// BUNYIP-843: how many features await a decision. Defaults to zero, so an
+    /// older API never prompts.
+    #[serde(default)]
+    pub features_pending_review: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -879,10 +883,24 @@ pub struct AdminFeatureToggle {
     pub help: String,
     #[serde(default)]
     pub enabled: bool,
+    /// BUNYIP-843: false while nobody has decided it. Defaults to true, so an
+    /// older API that does not send it never prompts for a review.
+    #[serde(default = "default_true")]
+    pub decided: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
     #[serde(default)]
     pub updated_by_email: Option<String>,
+}
+
+/// The admin toggle list plus the environment a decision applies to
+/// (BUNYIP-843): mirrors `FeatureToggleList`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AdminFeatureToggleList {
+    #[serde(default)]
+    pub environment: String,
+    #[serde(default)]
+    pub toggles: Vec<AdminFeatureToggle>,
 }
 
 fn default_true() -> bool {
