@@ -582,17 +582,12 @@
   display: inline-flex;
 }
 
-/* Always-visible scrollbars (BUNYIP-509). These rules replace a global
-   `::-webkit-scrollbar { display: none }` + `* { scrollbar-width: none }` pair
-   that hid the bar on every scroll container in the app. Colours come from the
-   theme tokens so light / dark / high-contrast all track; `auto` (never `thin`)
-   and an explicit 14px keep the thumb a grabbable drag target and opt Chromium
-   and Safari out of the fading OS overlay bar. Do not reintroduce any
-   auto-hide, fade, or hover-to-reveal behaviour: scripts/check-scrollbars.nu
-   fails the build if a hiding or `thin` rule comes back. */
-* {
-  scrollbar-width: auto;
-  scrollbar-color: hsl(var(--muted-foreground)) hsl(var(--muted));
+/* Auto-hiding scrollbars (BUNYIP-848, superseding BUNYIP-509's always-visible rule): a 5px thumb,
+   no track, BUNYIP-509's 14px grab zone; app.js reveals it and check-scrollbars.nu gates it. */
+@property --sb-alpha {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
 }
 
 /* Reserve the track on vertical scroll containers so a pane gaining or losing
@@ -607,25 +602,79 @@ html,
   scrollbar-gutter: stable;
 }
 
+/* Hidden at rest only once app.js tags <html>, so a page without it fails visible. `transition-*`
+   utilities outrank this layer; reduced motion drops the glide, not the hold. */
+@layer base {
+  html[data-scrollbars="auto"],
+  html[data-scrollbars="auto"]
+    :where(
+      [class*="overflow-auto"],
+      [class*="overflow-x-auto"],
+      [class*="overflow-y-auto"],
+      [class*="overflow-scroll"],
+      [class*="overflow-x-scroll"],
+      [class*="overflow-y-scroll"],
+      pre,
+      table,
+      textarea
+    ) {
+    --sb-alpha: 0;
+    @media (prefers-reduced-motion: no-preference) {
+      transition: --sb-alpha 400ms ease-in-out;
+    }
+  }
+  html[data-scrollbars="auto"][data-scrollbar-active],
+  html[data-scrollbars="auto"] [data-scrollbar-active] {
+    --sb-alpha: 1;
+    @media (prefers-reduced-motion: no-preference) {
+      transition: --sb-alpha 150ms ease-out;
+    }
+  }
+}
+
+/* Any `scrollbar-width` / `scrollbar-color` Chromium sees makes it drop these rules (YOTUN-208),
+   so those two live in the Firefox block alone. */
 ::-webkit-scrollbar {
   width: 14px;
   height: 14px;
+  background-color: transparent;
 }
 
-::-webkit-scrollbar-track {
-  background-color: hsl(var(--muted));
-}
-
-/* Full-width thumb (no inset border) so the grab target is the whole 14px. */
-::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--muted-foreground));
-  border-radius: 7px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--foreground));
-}
-
+::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {
-  background-color: hsl(var(--muted));
+  background-color: transparent;
+}
+
+/* A 5px pill in the 14px zone (Chromium floors a 4.5px border to 4px, a 6px pill, hence 4 + 5).
+   Its transparent border is still thumb, so the whole 14px strip drags. */
+::-webkit-scrollbar-thumb {
+  border-style: solid;
+  border-color: transparent;
+  border-width: 4px 5px 5px 4px;
+  border-radius: 9999px;
+  background-clip: padding-box;
+  background-color: hsl(var(--muted-foreground) / var(--sb-alpha));
+}
+
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  border-width: 3px;
+  background-color: hsl(var(--foreground) / var(--sb-alpha));
+}
+
+/* Firefox lacks ::-webkit-scrollbar and pixel widths, so `thin` is allowed here and nowhere else. */
+@supports not selector(::-webkit-scrollbar) {
+  html,
+  [class*="overflow-auto"],
+  [class*="overflow-x-auto"],
+  [class*="overflow-y-auto"],
+  [class*="overflow-scroll"],
+  [class*="overflow-x-scroll"],
+  [class*="overflow-y-scroll"],
+  pre,
+  table,
+  textarea {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / var(--sb-alpha)) transparent;
+  }
 }
