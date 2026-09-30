@@ -2,7 +2,8 @@
 
 bunyip's secrets split by whether the app needs them to boot. **Group-1** startup secrets are file/SOPS-based and
 provided directly. **Group-2** integration secrets come from the ONE provider the deployment declares in `SECRETS_STORAGE`
-(BUNYIP-542): `environment`, `database` or `infisical`. `CLAUDE.md`'s "Secret sourcing (two tiers)" bullet is the
+(BUNYIP-542): `environment`, `database` or `infisical`. The "Secret sourcing (two tiers)" invariant in
+[`invariants/config.md`](invariants/config.md#secret-sourcing-two-tiers-bunyip-38-bunyip-542-bunyip-642) is the
 one-paragraph summary; the enforcement table and the per-mode write behaviour are in
 [`configuration.md`](configuration.md#secrets_storage-where-the-integration-secrets-live-bunyip-542).
 
