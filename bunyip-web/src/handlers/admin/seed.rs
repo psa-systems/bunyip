@@ -12,7 +12,7 @@ use crate::api::admin as admin_api;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, empty_state, error_box, icon, success_box};
+use crate::views::ui::{button_class, empty_state, error_box, error_box_for, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
@@ -48,7 +48,7 @@ pub async fn seed_data(
         Err(r) => return r,
     };
     let data = admin_api::seed_templates(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
+    let fetch_error = data.as_ref().err().cloned();
     let templates = data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
@@ -61,8 +61,8 @@ pub async fn seed_data(
                 }
                 div class="p-6 pt-0 space-y-4" {
                     p class="text-sm text-muted-foreground" { "Start empty and add your own data, or load a starter template below. Loading is idempotent and scoped to the reserved demo domain, so it only ever adds or refreshes demo rows." }
-                    @if !reachable {
-                        (error_box("Could not reach the API to load seed templates."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load seed templates.", e))
                     } @else if templates.is_empty() {
                         (empty_state("layers", "No starter templates are available.", None))
                     } @else {

@@ -8,11 +8,14 @@ use serde::Deserialize;
 
 use crate::api::calls::{self, FeedbackAttachment, FeedbackInput};
 use crate::api::types::{Application, DocumentedApp, PricingResponse, User};
+use crate::api::ApiError;
 use crate::handlers::dashboard::tier_name;
 use crate::handlers::{dashboard_input, public_ctx, public_response};
 use crate::util::{format_stripe_amount, price_period};
 use crate::views::form_errors::{aria_invalid, field_error_slot, field_invalid_class};
-use crate::views::ui::{back_link, button_class, disabled_button, empty_state, error_box, icon};
+use crate::views::ui::{
+    back_link, button_class, disabled_button, empty_state, error_box, error_box_for, icon,
+};
 use crate::web::AppState;
 
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
@@ -1178,7 +1181,7 @@ fn docs_layout(documented: Option<&[DocumentedApp]>, active: &str, body: Markup)
 /// unreadable list says so, an empty one omits the heading entirely (there is
 /// nothing to announce and the failure has its own visible state), and a
 /// populated one links each app's docs index.
-fn docs_index_body(documented: Option<&[DocumentedApp]>) -> Markup {
+fn docs_index_body(documented: Result<&[DocumentedApp], &ApiError>) -> Markup {
     html! {
         h1 class="text-4xl font-bold mb-4" { "Documentation" }
         p class="text-muted-foreground mb-8" { (docs_index_note(&crate::views::layout::brand_name())) }
@@ -1190,14 +1193,14 @@ fn docs_index_body(documented: Option<&[DocumentedApp]>) -> Markup {
             }
         }
         @match documented {
-            None => {
+            Err(e) => {
                 div class="mt-10" {
                     h2 class="text-2xl font-semibold mb-4" { "Application documentation" }
-                    (error_box("Could not reach the API to load application documentation."))
+                    (error_box_for("Could not reach the API to load application documentation.", e))
                 }
             }
-            Some([]) => {}
-            Some(list) => {
+            Ok([]) => {}
+            Ok(list) => {
                 div class="mt-10" {
                     h2 class="text-2xl font-semibold mb-4" { "Application documentation" }
                     ul class="space-y-3" {
@@ -1220,11 +1223,8 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
     // list is the thing that failed.
     let ((c, pricing, app_links_allowed), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
-    let content = docs_layout(
-        documented.as_deref().map(|v| &**v),
-        "/docs",
-        docs_index_body(documented.as_deref().map(|v| &**v)),
-    );
+    let documented = documented.as_ref().map(|v| v.as_slice());
+    let content = docs_layout(documented.ok(), "/docs", docs_index_body(documented));
     public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content)
 }
 
@@ -1237,6 +1237,7 @@ pub async fn docs_page(
 ) -> Response {
     let ((c, pricing, app_links_allowed), documented) =
         tokio::join!(public_ctx(&st, &headers), st.documented_apps());
+    let documented = documented.ok();
     let active = format!("/docs/{slug}");
     let Some(&(_, title, md)) = DOCS.iter().find(|&&(s, _, _)| s == slug.as_str()) else {
         let body = html! {
@@ -1310,13 +1311,14 @@ pub async fn app_docs_index(
         st.public_applications(),
         st.documented_apps(),
     );
+    let documented = documented.ok();
     let app_name = app_display_name(&slug, &apps, documented.as_deref().map(|v| &**v));
     // BUNYIP-515 logged the failure because the reader could not see it.
     // BUNYIP-546: the reader now sees it too, so an unreadable docs list no
     // longer reads as an app that has published nothing. Still not a 500: the
     // rest of the page is worth rendering.
     let docs_data = calls::app_docs(&st.api, &slug).await;
-    let docs_reachable = docs_data.is_ok();
+    let docs_error = docs_data.as_ref().err().cloned();
     let docs = docs_data.unwrap_or_else(|e| {
         tracing::error!(
             endpoint = "/v1/applications/{slug}/docs",
@@ -1329,8 +1331,8 @@ pub async fn app_docs_index(
     });
     let body = html! {
         h1 class="text-4xl font-bold mb-4" { (app_name) " documentation" }
-        @if !docs_reachable {
-            (error_box("Could not reach the API to load documentation."))
+        @if let Some(e) = &docs_error {
+            (error_box_for("Could not reach the API to load documentation.", e))
         } @else if docs.is_empty() {
             (empty_state("file-text", "No documentation for this app yet.", None))
         } @else {
@@ -1373,6 +1375,7 @@ pub async fn app_docs_page(
         st.public_applications(),
         st.documented_apps(),
     );
+    let documented = documented.ok();
     let app_name = app_display_name(&slug, &apps, documented.as_deref().map(|v| &**v));
     let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
         Ok(d) => d,
@@ -1445,7 +1448,7 @@ mod docs_hub_tests {
     #[test]
     fn the_hub_lists_the_static_pages_and_every_documented_application() {
         let apps = documented(&[("mokosh", "Mokosh"), ("mokosh-apps", "Mokosh Apps")]);
-        let html = docs_index_body(Some(&apps)).into_string();
+        let html = docs_index_body(Ok(&apps)).into_string();
 
         for &(slug, title, _) in DOCS.iter() {
             // Maud escapes the title, so compare against what it emits.
@@ -1464,7 +1467,7 @@ mod docs_hub_tests {
     /// is omitted entirely rather than announcing an empty section.
     #[test]
     fn an_empty_application_list_omits_the_heading() {
-        let html = docs_index_body(Some(&[])).into_string();
+        let html = docs_index_body(Ok(&[])).into_string();
         assert!(!html.contains("Application documentation"));
         assert!(!html.contains("/apps/"));
         // The static half is unaffected: an app catalog with no docs never
@@ -1477,7 +1480,14 @@ mod docs_hub_tests {
     /// `unwrap_or_default()` here would have said.
     #[test]
     fn an_unreadable_application_list_says_so_instead_of_reading_as_empty() {
-        let html = docs_index_body(None).into_string();
+        let err = crate::api::ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "boom".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        };
+        let html = docs_index_body(Err(&err)).into_string();
         assert!(html.contains("Could not reach the API to load application documentation."));
         assert!(!html.contains("href=\"/apps/"), "no dead application links");
         assert!(html.contains("href=\"/docs/getting-started\""));

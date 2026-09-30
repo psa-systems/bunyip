@@ -10,7 +10,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminErrorLog;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon};
 use crate::web::AppState;
 
 #[derive(Deserialize)]
@@ -65,9 +65,9 @@ pub async fn logs(
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let data = admin_api::error_logs(&st.api, c.forward.as_deref(), category)
-        .await
-        .ok();
+    let result = admin_api::error_logs(&st.api, c.forward.as_deref(), category).await;
+    let fetch_error = result.as_ref().err().cloned();
+    let data = result.ok();
     let entries = data.as_ref().map(|d| d.entries.clone()).unwrap_or_default();
     let matched = data.as_ref().map(|d| d.matched).unwrap_or(0);
     let buffered = data.as_ref().map(|d| d.buffered).unwrap_or(0);
@@ -91,8 +91,8 @@ pub async fn logs(
                     }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load error logs."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load error logs.", e))
                     } @else if entries.is_empty() {
                         (empty_state("alert-triangle", &format!("No errors captured{}.", if category.is_some() { " in this category" } else { "" }), None))
                     } @else {

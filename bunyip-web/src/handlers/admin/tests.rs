@@ -796,7 +796,7 @@ mod two_column_layout_tests {
         // real value is not in the type or the markup at all.
         let cfg = email_cfg();
         let values = EmailSettingsValues::from_config(&cfg);
-        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        let html = email_settings_content(Ok(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"placeholder="••••••••""#),
             "a fixed-length mask is shown when a password is set: {html}"
@@ -809,7 +809,7 @@ mod two_column_layout_tests {
         let mut none = email_cfg();
         none.has_smtp_password = false;
         let none_values = EmailSettingsValues::from_config(&none);
-        let html_none = email_settings_content(Some(&none), &none_values, None).into_string();
+        let html_none = email_settings_content(Ok(&none), &none_values, None).into_string();
         assert!(html_none.contains(r#"placeholder="Not set""#));
     }
 
@@ -825,7 +825,7 @@ mod two_column_layout_tests {
         cfg.smtp_password_editable = true;
         cfg.imap_password_editable = true;
         let values = EmailSettingsValues::from_config(&cfg);
-        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        let html = email_settings_content(Ok(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"data-pw-toggle="smtp_password""#),
             "editable SMTP password gets a reveal toggle: {html}"
@@ -840,7 +840,7 @@ mod two_column_layout_tests {
         readonly_cfg.imap_password_editable = false;
         let readonly_values = EmailSettingsValues::from_config(&readonly_cfg);
         let readonly_html =
-            email_settings_content(Some(&readonly_cfg), &readonly_values, None).into_string();
+            email_settings_content(Ok(&readonly_cfg), &readonly_values, None).into_string();
         assert!(
             !readonly_html.contains(r#"data-pw-toggle="smtp_password""#),
             "a genuinely read-only SMTP password renders no toggle: {readonly_html}"
@@ -855,7 +855,7 @@ mod two_column_layout_tests {
     fn email_screen_uses_two_column_blocks() {
         let cfg = email_cfg();
         let values = EmailSettingsValues::from_config(&cfg);
-        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        let html = email_settings_content(Ok(&cfg), &values, None).into_string();
         assert!(
             html.contains("lg:grid-cols-2"),
             "email settings render as a responsive two-column grid"
@@ -877,7 +877,7 @@ mod two_column_layout_tests {
     fn email_screen_has_test_connection_button() {
         let cfg = email_cfg();
         let values = EmailSettingsValues::from_config(&cfg);
-        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        let html = email_settings_content(Ok(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"action="/admin/email/test""#),
             "Test connection posts to /admin/email/test"
@@ -896,7 +896,7 @@ mod two_column_layout_tests {
     fn email_screen_has_test_email_button() {
         let cfg = email_cfg();
         let values = EmailSettingsValues::from_config(&cfg);
-        let html = email_settings_content(Some(&cfg), &values, None).into_string();
+        let html = email_settings_content(Ok(&cfg), &values, None).into_string();
         assert!(
             html.contains(r#"action="/admin/email/test-send""#),
             "Test email posts to /admin/email/test-send"
@@ -986,8 +986,8 @@ mod two_column_layout_tests {
             imap_enabled: "false".into(),
         };
         let values = EmailSettingsValues::from_form(&submitted);
-        let html = email_settings_content(Some(&stored), &values, Some("SMTP host invalid."))
-            .into_string();
+        let html =
+            email_settings_content(Ok(&stored), &values, Some("SMTP host invalid.")).into_string();
 
         assert!(
             html.contains(r#"value="typed.example.com""#),
@@ -1016,7 +1016,7 @@ mod two_column_layout_tests {
     fn auto_ban_screen_uses_two_column_blocks() {
         let cfg = auto_ban_cfg();
         let vals = AutoBanFormValues::from_config(&cfg);
-        let html = auto_ban_settings_content(Some(&cfg), &vals, None).into_string();
+        let html = auto_ban_settings_content(Ok(&cfg), &vals, None).into_string();
         assert!(html.contains("lg:grid-cols-2"));
         assert!(html.contains("Detection") && html.contains("Enforcement"));
         for f in ["threshold", "window_secs", "ban_duration_secs"] {
@@ -1064,15 +1064,9 @@ mod two_column_layout_tests {
         // page now carries slots, per-tier trials, the checkout trial, the price
         // mapping (its own form) and the publish switch.
         let vals = tier_vals();
-        let html = tier_settings_content(
-            Some(&tier_cfg()),
-            None,
-            Err("unavailable"),
-            &vals,
-            None,
-            None,
-        )
-        .into_string();
+        let html =
+            tier_settings_content(Ok(&tier_cfg()), None, Err("unavailable"), &vals, None, None)
+                .into_string();
         assert!(html.contains("Pricing Tiers"), "heading present");
         for f in [
             "lifetime_slots",
@@ -1127,15 +1121,8 @@ mod two_column_layout_tests {
                 orgs_enabled,
                 ..tier_vals()
             };
-            tier_settings_content(
-                Some(&tier_cfg()),
-                None,
-                Err("unavailable"),
-                &vals,
-                None,
-                None,
-            )
-            .into_string()
+            tier_settings_content(Ok(&tier_cfg()), None, Err("unavailable"), &vals, None, None)
+                .into_string()
         };
 
         let off = render(false);
@@ -2767,7 +2754,7 @@ mod rate_limit_management_tests {
 
     #[test]
     fn config_card_offers_edit_and_revert_to_the_super_admin() {
-        let html = rate_limit_config_card(&[cfg("login", true)], true, true).into_string();
+        let html = rate_limit_config_card(&[cfg("login", true)], None, true).into_string();
         assert!(
             html.contains(r#"action="/admin/rate-limits/config""#),
             "the save form is rendered"
@@ -2783,7 +2770,7 @@ mod rate_limit_management_tests {
 
     #[test]
     fn config_card_is_read_only_for_an_ordinary_admin() {
-        let html = rate_limit_config_card(&[cfg("login", true)], true, false).into_string();
+        let html = rate_limit_config_card(&[cfg("login", true)], None, false).into_string();
         assert!(
             !html.contains("/admin/rate-limits/config"),
             "no management form for a non-super-admin"
@@ -2798,7 +2785,7 @@ mod rate_limit_management_tests {
 
     #[test]
     fn a_limit_on_its_default_offers_no_revert() {
-        let html = rate_limit_config_card(&[cfg("login", false)], true, true).into_string();
+        let html = rate_limit_config_card(&[cfg("login", false)], None, true).into_string();
         assert!(html.contains(r#"action="/admin/rate-limits/config""#));
         assert!(
             !html.contains("/admin/rate-limits/config/reset"),
@@ -2960,7 +2947,7 @@ mod tier_settings_partial_failure_tests {
         let cfg = cfg();
         let values = form_values();
         let html = tier_settings_content(
-            Some(&cfg),
+            Ok(&cfg),
             None,
             Err("unavailable"),
             &values,
