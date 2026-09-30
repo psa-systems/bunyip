@@ -24,6 +24,7 @@ const BACKDROP_PART = '::-webkit-scrollbar(?:-track(?:-piece)?|-corner)?(?![a-z-
 const FORBIDDEN = [
     {pattern: 'scrollbar-width\s*:\s*none', why: "hides the Firefox bar"}
     {pattern: '::-webkit-scrollbar[a-z-]*[^{]*\{[^}]*display\s*:\s*none', why: "hides the WebKit / Chromium bar"}
+    {pattern: 'scrollbar-gutter\s*:\s*stable', why: "reserves an empty 14px strip on containers that never scroll (BUNYIP-857)"}
 ]
 
 # CSS comments are prose: a comment naming a removed rule is not that rule.
@@ -85,7 +86,6 @@ def check-css [path: string]: nothing -> list<string> {
         {ok: ($rules | any {|r| ($r.sel =~ '::-webkit-scrollbar-thumb\s*(?:,|$)') and ($r.body =~ $"background\(?:-color\)?\\s*:\\s*($ALPHA_COLOR)") }), what: "a `::-webkit-scrollbar-thumb` color from a theme token carrying `var\(--sb-alpha\)`"}
         {ok: ($rules | any {|r| ($r.sel == "@property --sb-alpha") and ($r.body =~ 'syntax\s*:\s*"<number>"') and ($r.body =~ 'inherits\s*:\s*true') and ($r.body =~ 'initial-value\s*:\s*1\s*(?:;|$)') }), what: "`@property --sb-alpha` registered as an inherited <number> with initial-value 1, which is what fails visible"}
         {ok: ($firefox | any {|b| ($b =~ 'scrollbar-width\s*:\s*thin') and ($b =~ $"scrollbar-color\\s*:\\s*($ALPHA_COLOR)\\s+($CLEAR)") }), what: "the Firefox `@supports not selector\(::-webkit-scrollbar\)` block with `scrollbar-width: thin` and a `var\(--sb-alpha\)` thumb over a transparent track"}
-        {ok: ($scannable =~ 'scrollbar-gutter\s*:\s*stable'), what: "`scrollbar-gutter: stable`, which stops the content shifting"}
     ]
     for r in ($required | where {|r| not $r.ok }) {
         $problems = ($problems | append $"($path): missing ($r.what).")
@@ -118,10 +118,6 @@ const PARTS = {
   syntax: "<number>";
   inherits: true;
   initial-value: 1;
-}
-'
-    gutter: 'html {
-  scrollbar-gutter: stable;
 }
 '
     bar: '::-webkit-scrollbar {
@@ -190,7 +186,7 @@ def self-test []: nothing -> nothing {
         [no-firefox (css-of ($PARTS | reject firefox)) true "no Firefox `@supports` block"]
         [firefox-auto (css-of ($PARTS | update firefox {|p| $p.firefox | str replace "thin" "auto" })) true "a Firefox block without `thin`"]
         [firefox-static (css-of ($PARTS | update firefox {|p| $p.firefox | str replace " / var(--sb-alpha)" "" })) true "a Firefox thumb color without `var\(--sb-alpha\)`"]
-        [no-gutter (css-of ($PARTS | reject gutter)) true "no `scrollbar-gutter: stable`"]
+        [gutter-stable ($compliant + "html {\n  scrollbar-gutter: stable;\n}\n") true "a re-added `scrollbar-gutter: stable` (BUNYIP-857)"]
         [unstyled "body {\n  color: red;\n}\n" true "a stylesheet with the scrollbar styling stripped out"]
         [commented-styling ("/* " + $compliant + " */\nbody {\n  color: red;\n}\n") true "the styling present only inside a comment"]
     ]
