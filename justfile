@@ -148,8 +148,8 @@ check-argon2-offload:
 check-no-bash:
     ./scripts/check-no-bash.nu
 
-# Gate always-visible scrollbars: no hiding or `thin` rule in the authored or
-# built CSS, and the visible styling still present in both (BUNYIP-509).
+# Gate the auto-hiding scrollbar contract in the authored and built CSS plus the
+# app.js idle hold (BUNYIP-848, superseding BUNYIP-509's always-visible rule).
 [group: 'checks']
 check-scrollbars:
     ./scripts/check-scrollbars.nu --self-test
