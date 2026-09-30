@@ -1222,6 +1222,10 @@ pub enum SecretOutcome {
 pub struct SecretPlan {
     pub name: String,
     pub outcome: SecretOutcome,
+    /// Set when `apply` would refuse this change (`SECRETS_STORAGE=environment`
+    /// and the outcome is not [`SecretOutcome::Unchanged`]), so `--dry-run`
+    /// surfaces the same refusal `write_governed_secrets` gives at apply time.
+    pub refusal: Option<String>,
 }
 
 /// The whole diff between the target and the archive.
@@ -1307,16 +1311,28 @@ fn plan_table(
 }
 
 /// Diff one governed secret. Pure.
-fn plan_secret(name: &str, target: Option<&str>, archive: Option<&str>) -> SecretPlan {
+///
+/// Mirrors [`write_governed_secrets`]'s own gate: under `SecretsProvider::Environment`
+/// a changed secret is one `apply` will refuse, so the plan carries that refusal
+/// up front rather than letting `--dry-run` report a plain `Set`/`Cleared`.
+fn plan_secret(
+    secret: GovernedSecret,
+    provider: SecretsProvider,
+    target: Option<&str>,
+    archive: Option<&str>,
+) -> SecretPlan {
     let outcome = match (archive, target) {
         (Some(a), Some(t)) if a == t => SecretOutcome::Unchanged,
         (None, None) => SecretOutcome::Unchanged,
         (Some(_), _) => SecretOutcome::Set,
         (None, Some(_)) => SecretOutcome::Cleared,
     };
+    let refusal = (outcome != SecretOutcome::Unchanged && provider == SecretsProvider::Environment)
+        .then(|| environment_provider_refusal(secret, outcome));
     SecretPlan {
-        name: name.to_string(),
+        name: secret.name().to_string(),
         outcome,
+        refusal,
     }
 }
 
@@ -1572,7 +1588,8 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
         .iter()
         .map(|secret| {
             plan_secret(
-                secret.name(),
+                *secret,
+                config.secrets_provider,
                 target
                     .governed_secrets
                     .get(secret.name())
@@ -2266,8 +2283,11 @@ async fn write_governed_secrets(
     Ok(())
 }
 
-/// The refusal in `environment` mode, naming the file the operator must change.
-fn environment_provider_error(secret: GovernedSecret, outcome: SecretOutcome) -> AppError {
+/// The refusal message in `environment` mode, naming the file the operator must
+/// change. Pure and shared: [`plan_secret`] surfaces it in `--dry-run` and
+/// [`environment_provider_error`] wraps it in the `apply`-time [`AppError`], so
+/// the two paths cannot drift apart the way this gap showed they already had.
+fn environment_provider_refusal(secret: GovernedSecret, outcome: SecretOutcome) -> String {
     let remedy = match outcome {
         SecretOutcome::Cleared => format!(
             "remove {}_FILE (and the ./secrets/{} file it points at) from the api service",
@@ -2280,12 +2300,17 @@ fn environment_provider_error(secret: GovernedSecret, outcome: SecretOutcome) ->
             secret.secret_file()
         ),
     };
+    format!(
+        "SECRETS_STORAGE=environment, so {} is owned by the environment and the import cannot \
+         write it. To restore this deployment: {remedy}, then re-run the import.",
+        secret.name()
+    )
+}
+
+/// The refusal in `environment` mode, naming the file the operator must change.
+fn environment_provider_error(secret: GovernedSecret, outcome: SecretOutcome) -> AppError {
     AppError::Conflict {
-        message: format!(
-            "SECRETS_STORAGE=environment, so {} is owned by the environment and the import cannot \
-             write it. To restore this deployment: {remedy}, then re-run the import.",
-            secret.name()
-        ),
+        message: environment_provider_refusal(secret, outcome),
     }
 }
 
@@ -2359,6 +2384,9 @@ fn render_sections(out: &mut String, plan: &ImportPlan) {
             SecretOutcome::Unchanged => "unchanged",
         };
         out.push_str(&format!("    {}: {verdict}\n", secret.name));
+        if let Some(refusal) = &secret.refusal {
+            out.push_str(&format!("      REFUSED at apply time: {refusal}\n"));
+        }
     }
 }
 
@@ -2695,26 +2723,75 @@ mod tests {
     /// the comparison.
     #[test]
     fn every_governed_secret_outcome_occurs() {
+        let provider = SecretsProvider::Database;
         assert_eq!(
-            plan_secret("SMTP_PASSWORD", None, Some("new")).outcome,
+            plan_secret(GovernedSecret::SmtpPassword, provider, None, Some("new")).outcome,
             SecretOutcome::Set
         );
         assert_eq!(
-            plan_secret("SMTP_PASSWORD", Some("old"), Some("new")).outcome,
+            plan_secret(
+                GovernedSecret::SmtpPassword,
+                provider,
+                Some("old"),
+                Some("new")
+            )
+            .outcome,
             SecretOutcome::Set
         );
         assert_eq!(
-            plan_secret("STRIPE_SECRET_KEY", Some("old"), None).outcome,
+            plan_secret(GovernedSecret::StripeSecretKey, provider, Some("old"), None).outcome,
             SecretOutcome::Cleared
         );
         assert_eq!(
-            plan_secret("STRIPE_WEBHOOK_SECRET", Some("same"), Some("same")).outcome,
+            plan_secret(
+                GovernedSecret::StripeWebhookSecret,
+                provider,
+                Some("same"),
+                Some("same")
+            )
+            .outcome,
             SecretOutcome::Unchanged
         );
         assert_eq!(
-            plan_secret("SUPPORT_IMAP_PASSWORD", None, None).outcome,
+            plan_secret(GovernedSecret::SupportImapPassword, provider, None, None).outcome,
             SecretOutcome::Unchanged
         );
+    }
+
+    /// A dry run against an `environment`-provider deployment reports the same
+    /// refusal `write_governed_secrets` gives at apply time, rather than a plain
+    /// `Set`/`Cleared` the operator has no reason to distrust (BUNYIP-851).
+    #[test]
+    fn a_changed_secret_under_the_environment_provider_carries_the_apply_time_refusal() {
+        let changed = plan_secret(
+            GovernedSecret::StripeSecretKey,
+            SecretsProvider::Environment,
+            Some("old"),
+            Some("new"),
+        );
+        assert_eq!(changed.outcome, SecretOutcome::Set);
+        let refusal = changed.refusal.expect("dry-run must surface the refusal");
+        assert!(refusal.contains("SECRETS_STORAGE=environment"));
+        assert!(refusal.contains("STRIPE_SECRET_KEY_FILE"));
+
+        // Unchanged under the same provider carries no refusal: nothing would
+        // be written, so there is nothing to refuse.
+        let unchanged = plan_secret(
+            GovernedSecret::StripeSecretKey,
+            SecretsProvider::Environment,
+            Some("same"),
+            Some("same"),
+        );
+        assert!(unchanged.refusal.is_none());
+
+        // The same change under a writable provider carries no refusal either.
+        let writable = plan_secret(
+            GovernedSecret::StripeSecretKey,
+            SecretsProvider::Database,
+            Some("old"),
+            Some("new"),
+        );
+        assert!(writable.refusal.is_none());
     }
 
     /// A plan is printed into a terminal, a CI log and a screenshot. It carries
@@ -2741,7 +2818,12 @@ mod tests {
                 &BTreeMap::from([("mark".to_string(), "{\"data\":\"AQIDBA==\"}".to_string())]),
                 &[],
             )],
-            secrets: vec![plan_secret("SMTP_PASSWORD", None, Some("hunter2"))],
+            secrets: vec![plan_secret(
+                GovernedSecret::SmtpPassword,
+                SecretsProvider::Database,
+                None,
+                Some("hunter2"),
+            )],
             secrets_provider: "database".to_string(),
         };
         let rendered = render_plan(&plan);
