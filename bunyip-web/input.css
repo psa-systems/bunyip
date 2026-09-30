@@ -590,18 +590,6 @@
   initial-value: 1;
 }
 
-/* Reserve the track on vertical scroll containers so a pane gaining or losing
-   its scrollbar does not shift the content beside it. Horizontal-only wrappers
-   are left alone: their bar sits on the block edge, so there is nothing to
-   reserve on the inline edge but dead space. Not `html` (BUNYIP-857): the app
-   shell never scrolls the document, so its gutter was a permanent 14px strip. */
-[class*="overflow-auto"],
-[class*="overflow-y-auto"],
-[class*="overflow-scroll"],
-[class*="overflow-y-scroll"] {
-  scrollbar-gutter: stable;
-}
-
 /* Hidden at rest only once app.js tags <html>, so a page without it fails visible. `transition-*`
    utilities outrank this layer; reduced motion drops the glide, not the hold. */
 @layer base {
