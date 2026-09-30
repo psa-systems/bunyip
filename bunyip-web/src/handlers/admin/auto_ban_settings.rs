@@ -9,9 +9,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::api::admin as admin_api;
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
+use crate::views::ui::{button_class, error_box, error_box_for, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for the auto-ban fields. Threshold is a strike count; the two
@@ -57,7 +58,7 @@ fn parse_auto_ban_field(raw: &str, label: &str, max: i64) -> Result<i64, String>
 }
 
 pub(super) fn auto_ban_settings_content(
-    cfg: Option<&crate::api::types::AutoBanConfigResponse>,
+    cfg: Result<&crate::api::types::AutoBanConfigResponse, &ApiError>,
     values: &AutoBanFormValues,
     error: Option<&str>,
 ) -> Markup {
@@ -65,11 +66,11 @@ pub(super) fn auto_ban_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Auto-ban Settings" } p class="mt-2 text-muted-foreground" { "Tune the automatic IP-ban thresholds. Changes apply immediately without a restart." } }
             @match cfg {
-                None => (error_box("Could not load auto-ban config.")),
+                Err(e) => (error_box_for("Could not load auto-ban config.", e)),
                 // BUNYIP-415: detection (when to strike/ban) and enforcement
                 // (the on/off switch and how long a ban lasts) sit in two
                 // side-by-side blocks, one column below lg, inside one form.
-                Some(c) => form method="post" action="/admin/auto-ban-settings" class="space-y-6" {
+                Ok(c) => form method="post" action="/admin/auto-ban-settings" class="space-y-6" {
                     @if let Some(e) = error { (error_box(e)) }
                     (admin_block_grid(vec![
                         admin_block(
@@ -108,9 +109,7 @@ pub async fn auto_ban_settings(State(st): State<AppState>, headers: HeaderMap) -
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::auto_ban_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::auto_ban_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
         .map(AutoBanFormValues::from_config)
@@ -208,9 +207,7 @@ pub async fn auto_ban_settings_save(
     };
 
     // Re-render the form inline with the error and the submitted values.
-    let cfg = admin_api::auto_ban_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::auto_ban_config(&st.api, c.forward.as_deref()).await;
     let content = auto_ban_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(
         &c,

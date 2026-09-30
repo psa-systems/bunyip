@@ -15,7 +15,7 @@ use crate::util::urlenc;
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
-    back_link, badge, button_class, empty_state, error_box, icon, toggle_switch,
+    back_link, badge, button_class, empty_state, error_box, error_box_for, icon, toggle_switch,
     toggle_switch_field,
 };
 use crate::web::{redirect_cookies, status_cookies, AppState};
@@ -99,7 +99,7 @@ pub async fn applications(
         Err(r) => return r,
     };
     let data = admin_api::applications(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
+    let fetch_error = data.as_ref().err().cloned();
     let apps = data.unwrap_or_default();
 
     let content = html! {
@@ -112,8 +112,8 @@ pub async fn applications(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Applications" } }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load applications."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load applications.", e))
                     } @else if apps.is_empty() {
                         (empty_state("app-window", "No applications.", None))
                     } @else {
@@ -1048,7 +1048,7 @@ pub async fn application_docs(
     // "No pages yet" over a failed fetch invites the admin to re-add pages that
     // already exist.
     let docs_data = admin_api::app_docs(&st.api, c.forward.as_deref(), &id).await;
-    let docs_reachable = docs_data.is_ok();
+    let docs_fetch_error = docs_data.as_ref().err().cloned();
     let docs = docs_data.unwrap_or_default();
     let content = html! {
         div class="space-y-6" {
@@ -1059,8 +1059,8 @@ pub async fn application_docs(
             }
             @if let Some(e) = &q.error { (error_box(e)) }
             div class="space-y-6" {
-                @if !docs_reachable {
-                    (error_box("Could not reach the API to load documentation pages."))
+                @if let Some(e) = &docs_fetch_error {
+                    (error_box_for("Could not reach the API to load documentation pages.", e))
                 } @else if docs.is_empty() {
                     (empty_state("file-text", "No pages yet. Add one below.", None))
                 }

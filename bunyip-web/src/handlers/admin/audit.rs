@@ -10,7 +10,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminAuditLog;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::rel_time;
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
 use crate::web::AppState;
 
 use super::title_case;
@@ -64,10 +64,9 @@ pub async fn audit_logs(
     };
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
-    let data = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only)
-        .await
-        .ok();
-    let reachable = data.is_some();
+    let result = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only).await;
+    let fetch_error = result.as_ref().err().cloned();
+    let data = result.ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
     let base = if admin_only {
@@ -90,7 +89,7 @@ pub async fn audit_logs(
                     }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable { (error_box("Could not reach the API to load audit logs.")) }
+                    @if let Some(e) = &fetch_error { (error_box_for("Could not reach the API to load audit logs.", e)) }
                     @else if items.is_empty() { (empty_state("file-text", "No audit logs found.", None)) }
                     @else { div class="space-y-0" { @for log in &items { (audit_row(log)) } } }
                     (pager(base, "page", page, total_pages))

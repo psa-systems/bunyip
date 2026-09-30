@@ -20,7 +20,7 @@ use crate::api::types::{PricingStatus, StripePrice, TierConfigResponse};
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::admin_block;
-use crate::views::ui::{button_class, error_box, icon, toggle_switch_field};
+use crate::views::ui::{button_class, error_box, error_box_for, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
@@ -86,7 +86,7 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
 }
 
 pub(super) fn tier_settings_content(
-    cfg: Option<&TierConfigResponse>,
+    cfg: Result<&TierConfigResponse, &ApiError>,
     prices: Option<&[StripePrice]>,
     status: Result<&PricingStatus, &str>,
     values: &TierFormValues,
@@ -100,8 +100,8 @@ pub(super) fn tier_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Pricing Tiers" } p class="mt-2 text-muted-foreground" { "Slot limits, trial lengths, the tier -> Stripe price mapping, and the public pricing switch. Raw Stripe products, prices and webhooks live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
             @match cfg {
-                None => (error_box("Could not load tier config.")),
-                Some(c) => {
+                Err(err) => (error_box_for("Could not load tier config.", err)),
+                Ok(c) => {
                     form method="post" action="/admin/tier-settings" class="space-y-6" {
                         @if let Some(e) = error { (error_box(e)) }
                         (admin_block(
@@ -155,21 +155,20 @@ pub(super) fn tier_settings_content(
     }
 }
 
-/// Tier config for the page. `None` renders "Could not load tier config.", so
-/// the admin sees the failure; the log is what names its cause.
-async fn tier_config(st: &AppState, cookie: Option<&str>) -> Option<TierConfigResponse> {
-    match admin_api::tier_config(&st.api, cookie).await {
-        Ok(c) => Some(c),
-        Err(e) => {
+/// Tier config for the page. `Err` renders "Could not load tier config." with
+/// the failure's message and request id (BUNYIP-844); the log is what names
+/// its cause for the operator.
+async fn tier_config(st: &AppState, cookie: Option<&str>) -> Result<TierConfigResponse, ApiError> {
+    admin_api::tier_config(&st.api, cookie)
+        .await
+        .inspect_err(|e| {
             tracing::warn!(
                 endpoint = "/v1/admin/tier-config",
                 error = %e.message,
                 code = %e.code,
                 "tier config unavailable on the Pricing tiers page"
             );
-            None
-        }
-    }
+        })
 }
 
 /// Stripe prices for the catalog selects. `None` on an unreadable list, which the
@@ -242,7 +241,7 @@ pub async fn tier_settings(
     let values = cfg
         .as_ref()
         .map(|c| TierFormValues::from_config(c, &trial))
-        .unwrap_or_else(TierFormValues::empty);
+        .unwrap_or_else(|_| TierFormValues::empty());
     let content = tier_settings_content(
         cfg.as_ref(),
         prices.as_deref(),

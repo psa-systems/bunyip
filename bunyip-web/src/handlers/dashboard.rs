@@ -27,8 +27,8 @@ use crate::util::{
 use crate::views::layout::community_enabled;
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 use crate::views::ui::{
-    back_link, badge, button_class, disabled_button, empty_state, error_box, icon, pager,
-    success_box,
+    back_link, badge, button_class, disabled_button, empty_state, error_box, error_box_for, icon,
+    pager, success_box,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -60,7 +60,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         st.stripe_enabled(),
         st.pricing()
     );
-    let apps_reachable = apps_data.is_ok();
+    let apps_error = apps_data.as_ref().err().cloned();
     let apps = apps_data.unwrap_or_default();
     let is_member = has_active_membership(Some(&user));
     let tagline = TAGLINES[rotating_index(TAGLINES.len())];
@@ -123,7 +123,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
                     }
                     h2 class="text-3xl font-semibold tracking-tight" { "Your Applications" }
                 }
-                (dashboard_apps_grid(&apps, apps_reachable, &base_domain, is_member))
+                (dashboard_apps_grid(&apps, apps_error.as_ref(), &base_domain, is_member))
             }
         }
     };
@@ -138,13 +138,13 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
 /// (BUNYIP-546).
 fn dashboard_apps_grid(
     apps: &[Application],
-    reachable: bool,
+    error: Option<&crate::api::ApiError>,
     base_domain: &str,
     is_member: bool,
 ) -> Markup {
     html! {
-        @if !reachable {
-            (error_box("Could not reach the API to load applications."))
+        @if let Some(e) = error {
+            (error_box_for("Could not reach the API to load applications.", e))
         } @else if apps.is_empty() {
             (empty_state("app-window", "No applications are available yet.", None))
         } @else {
@@ -425,7 +425,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
         calls::downloads_all(&st.api, fwd),
         st.stripe_enabled(),
     );
-    let apps_reachable = apps_data.is_ok();
+    let apps_error = apps_data.as_ref().err().cloned();
     let apps = apps_data.unwrap_or_default();
     // Groups (BUNYIP-100). A failed fetch degrades to a flat ungrouped list,
     // which is a usable page rather than an error, so it is logged rather than
@@ -505,8 +505,8 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
             }
             // BUNYIP-546: could-not-load, empty and populated are three states,
             // not two. Nothing to render used to look identical either way.
-            @if !apps_reachable {
-                (error_box("Could not reach the API to load applications."))
+            @if let Some(e) = &apps_error {
+                (error_box_for("Could not reach the API to load applications.", e))
             } @else if nothing_to_show {
                 (empty_state("app-window", "No applications are available yet.", None))
             } @else {
@@ -1091,9 +1091,9 @@ pub async fn membership(
         st.pricing(),
     );
     let current: Option<Membership> = membership_data.unwrap_or(None);
-    let payments_reachable = payments_data.is_ok();
+    let payments_error = payments_data.as_ref().err().cloned();
     let payments = payments_data.unwrap_or_default();
-    let invoices_reachable = invoices_data.is_ok();
+    let invoices_error = invoices_data.as_ref().err().cloned();
     let invoices = invoices_data.unwrap_or_default();
     let tier = user.membership_tier.clone();
     let status = current.as_ref().map(|m| m.status.clone());
@@ -1241,8 +1241,8 @@ pub async fn membership(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invoices" } p class="text-sm text-muted-foreground" { "Your billing history" } }
                 div class="p-6 pt-0" {
-                    @if !invoices_reachable {
-                        (error_box("Could not reach the API to load invoices."))
+                    @if let Some(e) = &invoices_error {
+                        (error_box_for("Could not reach the API to load invoices.", e))
                     } @else if invoices.is_empty() {
                         (empty_state("file-text", "No invoices yet.", None))
                     } @else {
@@ -1269,7 +1269,7 @@ pub async fn membership(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm border-border/50" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Payment History" } }
                 div class="p-6 pt-0" {
-                    @if !payments_reachable { (error_box("Could not reach the API to load payment history.")) }
+                    @if let Some(e) = &payments_error { (error_box_for("Could not reach the API to load payment history.", e)) }
                     @else if payments.is_empty() { (empty_state("receipt", "No payment history yet.", None)) }
                     @else {
                         div class="space-y-4" {
@@ -1482,9 +1482,10 @@ pub async fn settings(
             // card below renders under the same condition, so `None` here can
             // only mean a failed fetch.
             let trusted_devices = if twofa_enabled {
-                auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
-                    .await
-                    .ok()
+                Some(
+                    auth_api::list_trusted_devices(&st.api, fwd, device_page, SETTINGS_PAGE_SIZE)
+                        .await,
+                )
             } else {
                 None
             };
@@ -1492,7 +1493,7 @@ pub async fn settings(
         },
         calls::list_sessions(&st.api, fwd, session_page, SETTINGS_PAGE_SIZE),
     );
-    let sessions = sessions_data.ok();
+    let sessions = sessions_data;
 
     let content = html! {
         div class="space-y-6" {
@@ -1602,7 +1603,11 @@ pub async fn settings(
 
             // Trusted devices (BUNYIP-138). Only meaningful with 2FA on.
             @if twofa_enabled {
-                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(trusted_devices.as_ref(), session_page)))
+                @let td = trusted_devices
+                    .as_ref()
+                    .expect("trusted devices are fetched whenever 2FA is enabled")
+                    .as_ref();
+                (settings_card("shield-check", "from-teal-500 to-primary", "Trusted Devices", trusted_devices_card_body(td, session_page)))
             }
 
             // Danger zone
@@ -1675,11 +1680,15 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
 /// failed fetch, which someone auditing a compromised account very much needs
 /// told apart from an account with no sessions (BUNYIP-546).
 fn sessions_card_body(
-    page: Option<&crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>>,
+    page: Result<
+        &crate::api::types::PaginatedResponse<crate::api::types::SessionInfo>,
+        &crate::api::ApiError,
+    >,
     device_page: i64,
 ) -> Markup {
-    let Some(page) = page else {
-        return error_box("Could not reach the API to load active sessions.");
+    let page = match page {
+        Ok(page) => page,
+        Err(e) => return error_box_for("Could not reach the API to load active sessions.", e),
     };
     let sessions = &page.items;
     // "Log out all other devices" appears whenever the account has more than one
@@ -1764,11 +1773,15 @@ pub async fn settings_revoke_other_sessions(
 /// prompt at login, each with a revoke action. `None` is a failed fetch
 /// (BUNYIP-546).
 fn trusted_devices_card_body(
-    page: Option<&crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>>,
+    page: Result<
+        &crate::api::types::PaginatedResponse<crate::api::types::TrustedDeviceInfo>,
+        &crate::api::ApiError,
+    >,
     session_page: i64,
 ) -> Markup {
-    let Some(page) = page else {
-        return error_box("Could not reach the API to load trusted devices.");
+    let page = match page {
+        Ok(page) => page,
+        Err(e) => return error_box_for("Could not reach the API to load trusted devices.", e),
     };
     let devices = &page.items;
     html! {
@@ -2836,11 +2849,11 @@ mod tests {
         assert!(card.contains(">mokosh.a8n.run<"), "host label");
         assert!(card.contains(r#"href="https://mokosh.a8n.run/dashboard""#));
 
-        let grid = dashboard_apps_grid(&[declared], true, "a8n.run", true).into_string();
+        let grid = dashboard_apps_grid(&[declared], None, "a8n.run", true).into_string();
         assert!(grid.contains(r#"href="https://mokosh.a8n.run/dashboard""#));
 
         let card = app_card(&undeclared, "a8n.run", true, None).into_string();
-        let grid = dashboard_apps_grid(&[undeclared], true, "a8n.run", true).into_string();
+        let grid = dashboard_apps_grid(&[undeclared], None, "a8n.run", true).into_string();
         for (surface, html) in [("card", &card), ("grid", &grid)] {
             assert!(
                 !html.contains("a8n.run"),
@@ -2933,14 +2946,14 @@ mod tests {
 
         let forward = dashboard_apps_grid(
             &[alpha.clone(), beta.clone(), gamma.clone()],
-            true,
+            None,
             "a8n.run",
             true,
         )
         .into_string();
         let reversed = dashboard_apps_grid(
             &[gamma.clone(), beta.clone(), alpha.clone()],
-            true,
+            None,
             "a8n.run",
             true,
         )
@@ -3047,7 +3060,7 @@ mod tests {
         lets_chat.slug = "lets-chat".into();
         lets_chat.subdomain = Some("chat".into());
         assert!(!community_enabled());
-        let html = dashboard_apps_grid(&[lets_chat], true, "a8n.systems", true).into_string();
+        let html = dashboard_apps_grid(&[lets_chat], None, "a8n.systems", true).into_string();
         assert!(
             html.contains("disabled") && html.contains("Not configured"),
             "an accessible app with no tile link must render a disabled button \
@@ -3427,7 +3440,7 @@ mod session_row_clipping_tests {
             page_size: Some(20),
             total_pages: 1,
         };
-        let html = super::sessions_card_body(Some(&page), 1).into_string();
+        let html = super::sessions_card_body(Ok(&page), 1).into_string();
         assert_no_truncating_flex_container(&html);
         assert!(
             html.contains(">This device<"),
@@ -3469,7 +3482,7 @@ mod card_spacing_tests {
     #[test]
     fn dashboard_application_cards_are_spaced() {
         let apps = [app("mokosh"), app("backup"), app("chat")];
-        let html = super::dashboard_apps_grid(&apps, true, "example.com", true).into_string();
+        let html = super::dashboard_apps_grid(&apps, None, "example.com", true).into_string();
         assert_cards_are_spaced(&html);
         assert!(html.contains("grid gap-6"), "24px rhythm: {html}");
     }
@@ -3501,6 +3514,17 @@ mod card_spacing_tests {
 #[cfg(test)]
 mod fetch_state_tests {
     use crate::api::types::{Application, PaginatedResponse, SessionInfo, TrustedDeviceInfo};
+    use crate::api::ApiError;
+
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to reach the API".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        }
+    }
 
     fn app(slug: &str) -> Application {
         Application {
@@ -3534,17 +3558,19 @@ mod fetch_state_tests {
     #[test]
     fn dashboard_grid_separates_the_three_catalog_states() {
         let populated =
-            super::dashboard_apps_grid(&[app("mokosh")], true, "a8n.run", true).into_string();
+            super::dashboard_apps_grid(&[app("mokosh")], None, "a8n.run", true).into_string();
         assert!(populated.contains("mokosh"), "cards render: {populated}");
 
-        let empty = super::dashboard_apps_grid(&[], true, "a8n.run", true).into_string();
+        let empty = super::dashboard_apps_grid(&[], None, "a8n.run", true).into_string();
         assert!(
             empty.contains("No applications are available yet."),
             "shared empty state: {empty}"
         );
         assert!(!empty.contains("Could not reach"), "empty is not an error");
 
-        let unreachable = super::dashboard_apps_grid(&[], false, "a8n.run", true).into_string();
+        let err = load_error();
+        let unreachable =
+            super::dashboard_apps_grid(&[], Some(&err), "a8n.run", true).into_string();
         assert!(
             unreachable.contains("Could not reach the API to load applications."),
             "error box on a failed fetch: {unreachable}"
@@ -3557,7 +3583,8 @@ mod fetch_state_tests {
 
     #[test]
     fn sessions_card_says_it_could_not_load_rather_than_none_exist() {
-        let unreachable = super::sessions_card_body(None, 1).into_string();
+        let err = load_error();
+        let unreachable = super::sessions_card_body(Err(&err), 1).into_string();
         assert!(
             unreachable.contains("Could not reach the API to load active sessions."),
             "error box on a failed fetch: {unreachable}"
@@ -3568,7 +3595,7 @@ mod fetch_state_tests {
         );
 
         let empty =
-            super::sessions_card_body(Some(&page(Vec::<SessionInfo>::new())), 1).into_string();
+            super::sessions_card_body(Ok(&page(Vec::<SessionInfo>::new())), 1).into_string();
         assert!(
             empty.contains("No active sessions found.") && !empty.contains("Could not reach"),
             "genuinely empty keeps the empty state: {empty}"
@@ -3577,7 +3604,8 @@ mod fetch_state_tests {
 
     #[test]
     fn trusted_devices_card_says_it_could_not_load_rather_than_none_exist() {
-        let unreachable = super::trusted_devices_card_body(None, 1).into_string();
+        let err = load_error();
+        let unreachable = super::trusted_devices_card_body(Err(&err), 1).into_string();
         assert!(
             unreachable.contains("Could not reach the API to load trusted devices."),
             "error box on a failed fetch: {unreachable}"
@@ -3587,9 +3615,8 @@ mod fetch_state_tests {
             "a failed fetch never claims there are no trusted devices: {unreachable}"
         );
 
-        let empty =
-            super::trusted_devices_card_body(Some(&page(Vec::<TrustedDeviceInfo>::new())), 1)
-                .into_string();
+        let empty = super::trusted_devices_card_body(Ok(&page(Vec::<TrustedDeviceInfo>::new())), 1)
+            .into_string();
         assert!(
             empty.contains("No trusted devices.") && !empty.contains("Could not reach"),
             "genuinely empty keeps the empty state: {empty}"

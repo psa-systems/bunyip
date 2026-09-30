@@ -56,7 +56,7 @@ impl AppState {
         self.pricing_cache
             .get_or_fetch(|| calls::pricing(&self.api))
             .await
-            .unwrap_or_else(unpublished_pricing)
+            .unwrap_or_else(|_| unpublished_pricing())
     }
 
     /// The application list an ANONYMOUS visitor sees: the footer's Product
@@ -77,14 +77,15 @@ impl AppState {
         self.applications_cache
             .get_or_fetch(|| calls::applications(&self.api, None))
             .await
-            .unwrap_or_else(empty_applications)
+            .unwrap_or_else(|_| empty_applications())
     }
 
     /// The applications with published documentation, coalesced per TTL
-    /// (BUNYIP-635). `None` only when the cache has never read the list, which
-    /// the `/docs` hub renders as "could not load" - never as "no application
-    /// has documentation", and never as a menu of dead links.
-    pub async fn documented_apps(&self) -> Option<Arc<Vec<DocumentedApp>>> {
+    /// (BUNYIP-635). `Err` only when the cache has never read the list, which
+    /// the `/docs` hub renders as "could not load" (with the underlying
+    /// `ApiError`'s message and request id, BUNYIP-844) - never as "no
+    /// application has documentation", and never as a menu of dead links.
+    pub async fn documented_apps(&self) -> Result<Arc<Vec<DocumentedApp>>, crate::api::ApiError> {
         self.documented_apps_cache
             .get_or_fetch(|| calls::documented_apps(&self.api))
             .await
@@ -100,6 +101,7 @@ impl AppState {
         self.setup_status_cache
             .get_or_fetch(|| crate::api::auth::setup_status(&self.api))
             .await
+            .ok()
             .map(|s| (*s).clone())
     }
 
