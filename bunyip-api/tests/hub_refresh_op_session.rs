@@ -1,11 +1,15 @@
 //! BUNYIP-636 PR 3b: hub `refresh_tokens` is bound to its op-session and the
 //! hub refresh path (`AuthService::refresh_tokens`) reads and slides it.
 //!
-//! Two behavioural halves land here. First, the happy path: a rotation slides
-//! the op-session's `idle_expires_at` forward, so activity on the hub keeps
-//! the session the RP families also read alive - the "one session clock" the
-//! ticket promises. Second, the refusal path: a revoked op-session stops the
-//! next hub rotation, matching how PR 2 already refused an RP rotation.
+//! Three behavioural halves land here. First, the happy path: a rotation
+//! slides the op-session's `idle_expires_at` forward, so activity on the hub
+//! keeps the session the RP families also read alive - the "one session
+//! clock" the ticket promises. Second, the refusal path: a revoked op-session
+//! stops the next hub rotation, matching how PR 2 already refused an RP
+//! rotation. Third (BUNYIP-850): a revoke that commits WHILE a concurrent
+//! rotation is mid-flight also wins the race, now that the read, liveness
+//! check and idle-slide run inside one SERIALIZABLE transaction instead of
+//! as separate un-transacted statements.
 //!
 //! Env-gated. bunyip CI has no Postgres service (`just check-container` runs
 //! the workspace tests only), so with `RLS_TEST_DATABASE_URL` unset this test
@@ -252,6 +256,67 @@ async fn a_hub_refresh_rotation_refuses_when_the_op_session_is_revoked() {
     // BUNYIP-636 PR 3b maps the three refusal arms to `InvalidCredentials`
     // (the hub path's existing error type) so a revoked session reads the
     // same as any other invalid refresh at the wire, per BUNYIP-373.
+    match err {
+        bunyip_api::errors::AppError::InvalidCredentials => {}
+        other => panic!("expected InvalidCredentials, got {other:?}"),
+    }
+
+    cleanup(&pool, user_id).await;
+}
+
+/// BUNYIP-850: a revoke that commits DURING a concurrent rotation, not just
+/// one already committed before it started, must still win. The revoke here
+/// runs inside its own transaction held open across the row-locking `UPDATE`,
+/// so the concurrent `refresh_tokens` call's `SELECT ... FOR UPDATE` (run
+/// inside a SERIALIZABLE transaction) blocks on that lock; committing the
+/// revoke while the rotation is blocked is what exercises the gap the
+/// un-transacted version of this code left open.
+#[tokio::test]
+async fn a_hub_refresh_rotation_loses_a_revoke_that_commits_mid_rotation() {
+    let Some(pool) = connect_and_migrate().await else {
+        eprintln!("RLS_TEST_DATABASE_URL unset; skipping BUNYIP-850 mid-rotation race test");
+        return;
+    };
+
+    let auth = build_auth_service(pool.clone());
+    let user_id = seed_user(&pool).await;
+    let now = Utc::now();
+    let session_id = seed_op_session(
+        &pool,
+        user_id,
+        now + Duration::days(30),
+        now + Duration::hours(1),
+        28_800,
+        // Live at seed time - the race, not the seed, must be what refuses it.
+        false,
+    )
+    .await;
+
+    let (raw, _) = mint_and_link(&auth, &pool, user_id, session_id).await;
+
+    // Hold the revoke's row lock open in its own transaction so the
+    // concurrent rotation below is guaranteed to start while the session
+    // still reads as live, then block on the lock.
+    let mut revoke_tx = pool.begin().await.expect("begin revoke tx");
+    sqlx::query("UPDATE op_sessions SET revoked_at = NOW() WHERE id = $1")
+        .bind(session_id)
+        .execute(&mut *revoke_tx)
+        .await
+        .expect("revoke op_session inside held-open tx");
+
+    let refresh_auth = build_auth_service(pool.clone());
+    let refresh_task =
+        tokio::spawn(async move { refresh_auth.refresh_tokens(raw, None, None).await });
+
+    // Give the rotation time to reach and block on the row lock the revoke
+    // is holding before releasing it.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    revoke_tx.commit().await.expect("commit revoke");
+
+    let err = refresh_task
+        .await
+        .expect("refresh task did not panic")
+        .expect_err("a revoke that commits mid-rotation must still refuse it, not succeed");
     match err {
         bunyip_api::errors::AppError::InvalidCredentials => {}
         other => panic!("expected InvalidCredentials, got {other:?}"),
