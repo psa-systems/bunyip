@@ -16,18 +16,18 @@ use serde_json::{json, Value};
 
 use crate::api::admin as admin_api;
 use crate::api::types::{SettingProvenance, SystemConfigResponse};
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::views::layout::{admin_block, admin_block_grid};
-use crate::views::ui::{button_class, error_box, icon};
+use crate::views::ui::{button_class, error_box, error_box_for, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
-fn toggle(id: &str, label: &str, on: bool, provenance: Markup) -> Markup {
+fn toggle_field(id: &str, label: &str, on: bool, provenance: Markup) -> Markup {
     html! {
         div class="space-y-2" {
-            label for=(id) class="text-sm font-medium" { (label) }
-            select id=(id) name=(id) class=(dashboard_input()) {
-                option value="true" selected[on] { "Enabled" }
-                option value="false" selected[!on] { "Disabled" }
+            div class="flex items-center gap-3 text-sm font-medium" {
+                (toggle_switch_field(id, id, on, label))
+                (label)
             }
             (provenance)
         }
@@ -121,8 +121,8 @@ impl SystemSettingsValues {
 
     fn from_form(f: &SystemSettingsForm) -> Self {
         SystemSettingsValues {
-            login_approval_enabled: f.login_approval_enabled.trim() == "true",
-            signup_bot_guard_enabled: f.signup_bot_guard_enabled.trim() == "true",
+            login_approval_enabled: f.login_approval_enabled.is_some(),
+            signup_bot_guard_enabled: f.signup_bot_guard_enabled.is_some(),
             country_allow: f.country_allow.trim().to_string(),
             country_deny: f.country_deny.trim().to_string(),
         }
@@ -130,7 +130,7 @@ impl SystemSettingsValues {
 }
 
 pub(super) fn system_settings_content(
-    cfg: Option<&SystemConfigResponse>,
+    cfg: Result<&SystemConfigResponse, &ApiError>,
     values: &SystemSettingsValues,
     error: Option<&str>,
 ) -> Markup {
@@ -146,8 +146,8 @@ pub(super) fn system_settings_content(
                 }
             }
             @match cfg {
-                None => (error_box("Could not load the system config.")),
-                Some(e) => div class="space-y-6" {
+                Err(err) => (error_box_for("Could not load the system config.", err)),
+                Ok(e) => div class="space-y-6" {
                     div class="rounded-md border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground" {
                         "Directory: " code { (e.path) } ". Changes take effect after the next restart."
                     }
@@ -159,8 +159,8 @@ pub(super) fn system_settings_content(
                             Some("Opt-in switches. Restart required."),
                             html! {
                                 div class="space-y-4" {
-                                    (toggle("login_approval_enabled", "Suspicious-login approval gate", values.login_approval_enabled, provenance_line(e, "login_approval_enabled")))
-                                    (toggle("signup_bot_guard_enabled", "Signup bot guard", values.signup_bot_guard_enabled, provenance_line(e, "signup_bot_guard_enabled")))
+                                    (toggle_field("login_approval_enabled", "Suspicious-login approval gate", values.login_approval_enabled, provenance_line(e, "login_approval_enabled")))
+                                    (toggle_field("signup_bot_guard_enabled", "Signup bot guard", values.signup_bot_guard_enabled, provenance_line(e, "signup_bot_guard_enabled")))
                                 }
                             },
                         ),
@@ -188,11 +188,10 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
         Ok(v) => v,
         Err(r) => return r,
     };
-    let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let values = cfg
         .as_ref()
+        .ok()
         .map(SystemSettingsValues::from_config)
         .unwrap_or_default();
     let content = system_settings_content(cfg.as_ref(), &values, None);
@@ -202,9 +201,9 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
 #[derive(Deserialize)]
 pub struct SystemSettingsForm {
     #[serde(default)]
-    pub login_approval_enabled: String,
+    pub login_approval_enabled: Option<String>,
     #[serde(default)]
-    pub signup_bot_guard_enabled: String,
+    pub signup_bot_guard_enabled: Option<String>,
     #[serde(default)]
     pub country_allow: String,
     #[serde(default)]
@@ -215,8 +214,8 @@ pub struct SystemSettingsForm {
 /// field clears the setting. The API validates before writing (BUNYIP-580 AC4).
 pub(super) fn system_config_update_body(f: &SystemSettingsForm) -> Value {
     json!({
-        "login_approval_enabled": f.login_approval_enabled.trim() == "true",
-        "signup_bot_guard_enabled": f.signup_bot_guard_enabled.trim() == "true",
+        "login_approval_enabled": f.login_approval_enabled.is_some(),
+        "signup_bot_guard_enabled": f.signup_bot_guard_enabled.is_some(),
         "country_allow": f.country_allow.trim(),
         "country_deny": f.country_deny.trim(),
     })
@@ -247,9 +246,7 @@ pub async fn system_config_save(
 
     // Re-render with the submitted values plus the inline error; only the
     // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
-    let cfg = admin_api::system_config(&st.api, c.forward.as_deref())
-        .await
-        .ok();
+    let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let content = system_settings_content(cfg.as_ref(), &values, Some(&error));
     admin_response(&c, &user, "/admin/system-config", "System", content)
 }
@@ -311,7 +308,7 @@ mod tests {
             provenance("COUNTRY_DENY", Some("file"), &["file", "environment"]),
         ]);
         let values = SystemSettingsValues::from_config(&cfg);
-        let html = system_settings_content(Some(&cfg), &values, None).into_string();
+        let html = system_settings_content(Ok(&cfg), &values, None).into_string();
         let fields = rendered_fields(&html);
         assert!(!fields.is_empty(), "the form renders its settings");
         for field in fields {
@@ -350,8 +347,8 @@ mod tests {
     #[test]
     fn update_body_sends_only_application_level_keys() {
         let f = SystemSettingsForm {
-            login_approval_enabled: "true".into(),
-            signup_bot_guard_enabled: "false".into(),
+            login_approval_enabled: Some("true".into()),
+            signup_bot_guard_enabled: None,
             country_allow: "US, GB".into(),
             country_deny: String::new(),
         };
@@ -370,14 +367,14 @@ mod tests {
     fn rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
         let cfg = config(vec![]);
         let f = SystemSettingsForm {
-            login_approval_enabled: "true".into(),
-            signup_bot_guard_enabled: "true".into(),
+            login_approval_enabled: Some("true".into()),
+            signup_bot_guard_enabled: Some("true".into()),
             country_allow: " US, GB, FR ".into(),
             country_deny: String::new(),
         };
         let values = SystemSettingsValues::from_form(&f);
-        let html = system_settings_content(Some(&cfg), &values, Some("Country code invalid."))
-            .into_string();
+        let html =
+            system_settings_content(Ok(&cfg), &values, Some("Country code invalid.")).into_string();
 
         assert!(
             html.contains(r#"value="US, GB, FR""#),

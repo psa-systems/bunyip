@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::UserEntitlement;
 use crate::handlers::{admin_guard, admin_response, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{back_link, badge, button_class, empty_state, error_box};
+use crate::views::ui::{back_link, badge, button_class, empty_state, error_box_for};
 use crate::web::{redirect_cookies, AppState};
 
 pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -20,7 +20,7 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
         Err(r) => return r,
     };
     let data = admin_api::applications(&st.api, c.forward.as_deref()).await;
-    let reachable = data.is_ok();
+    let fetch_error = data.as_ref().err().cloned();
     let apps = data.unwrap_or_default();
 
     let content = html! {
@@ -29,8 +29,8 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Products" } p class="text-sm text-muted-foreground" { "Restricted products are only available to users who have been granted an entitlement." } }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load applications."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load applications.", e))
                     } @else if apps.is_empty() {
                         (empty_state("package", "No applications.", None))
                     } @else {
@@ -107,10 +107,10 @@ pub async fn user_entitlements(
     };
     let fwd = c.forward.as_deref();
     let granted_data = admin_api::list_user_entitlements(&st.api, fwd, &user_id).await;
-    let granted_reachable = granted_data.is_ok();
+    let granted_fetch_error = granted_data.as_ref().err().cloned();
     let granted: Vec<UserEntitlement> = granted_data.unwrap_or_default();
     let apps_data = admin_api::applications(&st.api, fwd).await;
-    let apps_reachable = apps_data.is_ok();
+    let apps_fetch_error = apps_data.as_ref().err().cloned();
     let apps = apps_data.unwrap_or_default();
 
     let content = html! {
@@ -123,8 +123,8 @@ pub async fn user_entitlements(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Granted Entitlements" } }
                 div class="p-6 pt-0" {
-                    @if !granted_reachable {
-                        (error_box("Could not reach the API to load entitlements."))
+                    @if let Some(e) = &granted_fetch_error {
+                        (error_box_for("Could not reach the API to load entitlements.", e))
                     } @else if granted.is_empty() {
                         (empty_state("shield-check", "No entitlements granted.", None))
                     } @else {
@@ -144,8 +144,8 @@ pub async fn user_entitlements(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "All Products" } p class="text-sm text-muted-foreground" { "Grant or revoke any product for this user." } }
                 div class="p-6 pt-0" {
-                    @if !apps_reachable {
-                        (error_box("Could not reach the API to load applications."))
+                    @if let Some(e) = &apps_fetch_error {
+                        (error_box_for("Could not reach the API to load applications.", e))
                     } @else if apps.is_empty() {
                         (empty_state("package", "No applications.", None))
                     } @else {

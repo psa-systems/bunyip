@@ -16,7 +16,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::MailerSuppression;
 use crate::handlers::{admin_guard, admin_response, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{empty_state, error_box, icon, pager};
+use crate::views::ui::{empty_state, error_box_for, icon, pager};
 use crate::web::redirect_cookies;
 use crate::web::AppState;
 
@@ -64,6 +64,7 @@ pub async fn mailer_suppressions(
     };
     let page = q.page.unwrap_or(1).max(1);
     let data = admin_api::list_mailer_suppressions(&st.api, c.forward.as_deref(), page, 20).await;
+    let fetch_error = data.as_ref().err().cloned();
     let reachable = data.is_ok();
     let (items, total, total_pages) = match data {
         Ok(p) => (p.items, p.total, p.total_pages),
@@ -79,8 +80,8 @@ pub async fn mailer_suppressions(
                     @if reachable { p class="text-sm text-muted-foreground" { (total) " total." } }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load mailer suppressions."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load mailer suppressions.", e))
                     } @else if items.is_empty() {
                         (empty_state("shield-off", "No suppressed addresses.", None))
                     } @else {

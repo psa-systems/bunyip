@@ -1595,7 +1595,7 @@ fn check_op_session_alive(
     idle_expires_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    if revoked_at.is_some() || now > expires_at || now > idle_expires_at {
+    if revoked_at.is_some() || now >= expires_at || now >= idle_expires_at {
         return Err(AppError::OidcInvalidGrant(
             "op session revoked or expired".into(),
         ));
@@ -2388,6 +2388,102 @@ mod tests {
             now,
         )
         .expect("a live session passes the gate");
+    }
+
+    // BUNYIP-852: `check_op_session_alive`'s doc comment claims "same
+    // semantics as the negation of `OpSession::is_alive`", but the two used
+    // different comparison directions at the boundary `now == expires_at` /
+    // `now == idle_expires_at`. These two pin the exact instant: both must
+    // refuse, matching `is_alive`'s strict `>` on the "still alive" side.
+    #[test]
+    fn check_op_session_alive_refuses_at_the_idle_deadline_instant() {
+        let now = Utc::now();
+        let idle_expires_at = now;
+        let err = check_op_session_alive(None, now + Duration::hours(1), idle_expires_at, now)
+            .expect_err("now == idle_expires_at refuses the rotation");
+        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(!OpSession {
+            id: Uuid::new_v4(),
+            sid: "sid".into(),
+            user_id: Uuid::new_v4(),
+            created_at: now,
+            last_active_at: now,
+            expires_at: now + Duration::hours(1),
+            idle_expires_at,
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        }
+        .is_alive(now));
+    }
+
+    #[test]
+    fn check_op_session_alive_refuses_at_the_absolute_deadline_instant() {
+        let now = Utc::now();
+        let expires_at = now;
+        let err = check_op_session_alive(None, expires_at, now + Duration::minutes(30), now)
+            .expect_err("now == expires_at refuses the rotation");
+        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(!OpSession {
+            id: Uuid::new_v4(),
+            sid: "sid".into(),
+            user_id: Uuid::new_v4(),
+            created_at: now,
+            last_active_at: now,
+            expires_at,
+            idle_expires_at: now + Duration::minutes(30),
+            revoked_at: None,
+            user_agent: None,
+            ip: None,
+            acr: None,
+            amr: None,
+        }
+        .is_alive(now));
+    }
+
+    // BUNYIP-852: property-style check of the doc comment's equivalence
+    // claim across a set of boundary and non-boundary `now` values, so a
+    // future edit to either predicate that reintroduces drift fails here.
+    #[test]
+    fn check_op_session_alive_agrees_with_is_alive_across_boundaries() {
+        let base = Utc::now();
+        let expires_at = base + Duration::hours(1);
+        let idle_expires_at = base + Duration::minutes(30);
+
+        let sample_nows = [
+            base,
+            expires_at,
+            idle_expires_at,
+            expires_at - Duration::seconds(1),
+            expires_at + Duration::seconds(1),
+            idle_expires_at - Duration::seconds(1),
+            idle_expires_at + Duration::seconds(1),
+        ];
+
+        for now in sample_nows {
+            let session = OpSession {
+                id: Uuid::new_v4(),
+                sid: "sid".into(),
+                user_id: Uuid::new_v4(),
+                created_at: base,
+                last_active_at: base,
+                expires_at,
+                idle_expires_at,
+                revoked_at: None,
+                user_agent: None,
+                ip: None,
+                acr: None,
+                amr: None,
+            };
+            let checked = check_op_session_alive(None, expires_at, idle_expires_at, now);
+            assert_eq!(
+                checked.is_err(),
+                !session.is_alive(now),
+                "drift at now = {now:?} (expires_at = {expires_at:?}, idle_expires_at = {idle_expires_at:?})",
+            );
+        }
     }
 
     // BUNYIP-636 PR 3: the rotated refresh token's deadlines are capped at

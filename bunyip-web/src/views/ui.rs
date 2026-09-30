@@ -11,6 +11,13 @@
 
 pub use web_kit::ui::*;
 
+/// BUNYIP-844: an [`error_box_detailed`] populated from a load failure's
+/// `ApiError`, so every "could not load X" surface tells the admin the actual
+/// cause and request id instead of the bare headline `error_box` gives.
+pub fn error_box_for(headline: &str, e: &crate::api::ApiError) -> maud::Markup {
+    error_box_detailed(headline, Some(&e.user_message()), e.request_id.as_deref())
+}
+
 /// BUNYIP-421 regression guard, shared by the page tests. `truncate` is
 /// `overflow:hidden` + `text-overflow:ellipsis` + `white-space:nowrap`, and the
 /// latter two do nothing on a flex/grid container: its items keep their

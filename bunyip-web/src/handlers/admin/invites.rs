@@ -17,7 +17,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminInvite;
 use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, pager};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
 use super::PageQuery;
@@ -105,6 +105,7 @@ pub async fn invites(
     };
     let page = q.page.unwrap_or(1).max(1);
     let data = admin_api::admin_invites(&st.api, c.forward.as_deref(), page, 20).await;
+    let fetch_error = data.as_ref().err().cloned();
     let reachable = data.is_ok();
     let (items, total, total_pages) = match data {
         Ok(p) => (p.items, p.total, p.total_pages),
@@ -121,8 +122,8 @@ pub async fn invites(
                     @if reachable { p class="text-sm text-muted-foreground" { (total) " total." } }
                 }
                 div class="p-6 pt-0" {
-                    @if !reachable {
-                        (error_box("Could not reach the API to load invites."))
+                    @if let Some(e) = &fetch_error {
+                        (error_box_for("Could not reach the API to load invites.", e))
                     } @else if items.is_empty() {
                         (empty_state("mail", "No invites yet.", None))
                     } @else {

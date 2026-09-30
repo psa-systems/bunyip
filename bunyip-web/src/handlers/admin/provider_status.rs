@@ -19,8 +19,9 @@ use crate::api::types::{
     ProviderAppState, ProviderAppStatusRow, ProviderDiscrepancy, ProviderKindEntry,
     ProviderStatusReport,
 };
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
-use crate::views::ui::{badge, empty_state, error_box};
+use crate::views::ui::{badge, empty_state, error_box_for};
 
 /// The badge for one application's state.
 fn state_badge(status: &ProviderAppState) -> Markup {
@@ -181,14 +182,14 @@ fn intro_note(brand_name: &str) -> String {
 fn provider_status_content(
     apps: &[ProviderAppStatusRow],
     discrepancies: &[ProviderDiscrepancy],
-    reachable: bool,
+    fetch_error: Option<&ApiError>,
     brand_name: &str,
 ) -> Markup {
     html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Provider Status" } p class="mt-2 text-muted-foreground" { (intro_note(brand_name)) } }
-            @if !reachable {
-                (error_box("Could not reach the API to load the suite provider status."))
+            @if let Some(e) = fetch_error {
+                (error_box_for("Could not reach the API to load the suite provider status.", e))
             } @else {
                 (discrepancies_card(discrepancies))
                 div class="grid gap-4 md:grid-cols-2" { @for row in apps { (app_card(row, brand_name)) } }
@@ -207,12 +208,12 @@ pub async fn provider_status_page(
         Err(r) => return r,
     };
     let fetched = admin_api::provider_status(&st.api, c.forward.as_deref()).await;
-    let reachable = fetched.is_ok();
+    let fetch_error = fetched.as_ref().err().cloned();
     let aggregate = fetched.unwrap_or_default();
     let content = provider_status_content(
         &aggregate.apps,
         &aggregate.discrepancies,
-        reachable,
+        fetch_error.as_ref(),
         &crate::views::layout::brand_name(),
     );
     admin_response(
@@ -228,6 +229,16 @@ pub async fn provider_status_page(
 mod tests {
     use super::*;
     use crate::api::types::ProviderStatusReport;
+
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to load provider status".into(),
+            retry_after: None,
+            request_id: Some("req_abc123".into()),
+        }
+    }
 
     fn ok_row(app: &str) -> ProviderAppStatusRow {
         ProviderAppStatusRow {
@@ -261,7 +272,7 @@ mod tests {
             app: "drillmark".to_string(),
             status: ProviderAppState::Unauthenticated,
         };
-        let html = provider_status_content(&[ok, unreachable, unauth], &[], true, "").into_string();
+        let html = provider_status_content(&[ok, unreachable, unauth], &[], None, "").into_string();
         assert!(html.contains(">Reachable<"));
         assert!(html.contains(">Unreachable<"));
         assert!(html.contains(">Unauthenticated<"));
@@ -272,7 +283,8 @@ mod tests {
     /// than an empty page that reads as "everything is fine".
     #[test]
     fn an_unreachable_api_is_stated_on_the_page() {
-        let html = provider_status_content(&[], &[], false, "").into_string();
+        let err = load_error();
+        let html = provider_status_content(&[], &[], Some(&err), "").into_string();
         assert!(html.contains("Could not reach the API to load the suite provider status."));
     }
 
@@ -292,7 +304,7 @@ mod tests {
                 status: ProviderAppState::Unknown,
             },
         ];
-        let html = provider_status_content(&rows, &[], true, "").into_string();
+        let html = provider_status_content(&rows, &[], None, "").into_string();
         assert!(html.contains("bunyip"));
         assert!(html.contains("mokosh"));
         assert!(html.contains("drillmark"));
