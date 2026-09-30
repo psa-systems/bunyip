@@ -58,7 +58,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -204,6 +204,13 @@ check-theme-colors:
 check-doc-surface:
     ./scripts/check-doc-surface.nu --self-test
     ./scripts/check-doc-surface.nu
+
+# Gate CLAUDE.md as an index: at most 20,000 bytes, no unfenced line over 400
+# characters, and every docs/ link and anchor resolves (BUNYIP-854).
+[group: 'checks']
+check-claude-md:
+    ./scripts/check-claude-md.nu --self-test
+    ./scripts/check-claude-md.nu
 
 # Gate the buildkit cargo cache mounts: every `type=cache` mount carries a
 # per-image `id=` and `sharing=locked`, so concurrent builds cannot unpack

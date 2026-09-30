@@ -281,6 +281,15 @@ jobs:
           ./scripts/check-doc-surface.nu --self-test
           ./scripts/check-doc-surface.nu
 
+      - name: Check CLAUDE.md stays an index over docs/invariants
+        # CLAUDE.md loads into every agent session, so each convention is one
+        # index line there and its full text lives in docs/invariants/. Fails
+        # over 20,000 bytes, on an unfenced line over 400 characters, or on a
+        # docs/ link or anchor that does not resolve (BUNYIP-854).
+        run: |
+          ./scripts/check-claude-md.nu --self-test
+          ./scripts/check-claude-md.nu
+
       - name: Check buildkit cache mounts are per-image and locked
         # Every `--mount=type=cache` carries an `id=` and `sharing=locked`, so
         # the concurrent builds of a release commit (main push plus tag push,
