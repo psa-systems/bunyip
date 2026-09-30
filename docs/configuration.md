@@ -226,7 +226,8 @@ and no second precedence rule.
 
 The registry is the settings with **more than one** possible provider, the same rule the governed secrets follow: a
 setting with exactly one source is not declared, because the declaration would be a no-op. So the Stripe price ids,
-`pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, and `SMTP_EHLO_NAME`,
+`pricing_enabled`, `orgs_enabled` and the per-tier visibility flags stay database-only columns, the
+[feature toggles](#feature-toggles-feature_toggles-admin-page-feature-toggles) are database-only rows, and `SMTP_EHLO_NAME`,
 `APP_URL`, `APP_NAME`, `SUPPORT_INBOX_EMAIL` and `SUPPORT_IMAP_POLL_SECS` stay environment-only reads. The declared
 keys are the SMTP and IMAP settings, `EMAIL_ENABLED`, `ADMIN_NOTIFICATION_EMAILS`, the four `AUTO_BAN_*` values, the
 four `TIER_*` slot and trial lengths, the four application-level deployment settings the admin System page writes
@@ -647,6 +648,20 @@ rate-limit decision is a lookup and costs no query and no provider read. A save 
 force on the next request there; another api process picks it up within the 30 seconds. If the table cannot be read, the
 last good snapshot keeps being enforced and the failure is logged at `error`: a refresh failure never silently reverts
 the platform to its compile-time caps.
+
+### Feature toggles (`feature_toggles`, admin page: Feature Toggles)
+
+One row per feature, keyed by the `Feature` variant's key in `crates/bunyip-domain/src/feature_toggles.rs`, with
+`enabled`, `updated_at` and `updated_by` (BUNYIP-840). A feature with no row is OFF, and a row whose key no variant
+matches is ignored (logged once at `warn`). Listed to any admin; flipped by the super admin only, and every flip is
+audited (`admin_feature_toggle_updated`). The toggles have no file or environment provider, so nothing but the admin
+page can turn one on.
+
+Every api process loads the table at startup, re-reads it every 60 seconds and refreshes at once after a save it served,
+so a change is live everywhere within a minute with no restart. The public probe `GET /v1/auth/setup/status` publishes
+every key as `features`, answered from that snapshot, so the probe reads no table. The organizations switch is still
+the `tier_config` column above, not a toggle. The registry and how to add a toggle are in
+[`feature-toggles.md`](feature-toggles.md).
 
 ### Applications and OAuth clients
 

@@ -1,6 +1,9 @@
 //! The feature switches the BFF reads from bunyip-api (BUNYIP-493).
 //!
-//! Today that is one flag: organizations and teams. It is an admin switch
+//! The BUNYIP-840 registry's `features` map is installed the same way
+//! (`views::layout::feature_enabled(key)`).
+//!
+//! Organizations and teams is an admin switch
 //! persisted on `tier_config`, published on the public feature-flags probe
 //! (`GET /v1/auth/setup/status`), and installed into the process-wide cell the
 //! nav and the flagged routes read (`views::layout::orgs_enabled`). A free
@@ -17,7 +20,7 @@
 use std::time::Duration;
 
 use crate::api::{auth as auth_api, Api, ApiError};
-use crate::views::layout::install_orgs_enabled;
+use crate::views::layout::{install_features, install_orgs_enabled};
 
 /// The flag cell is process-wide, so a test that flips it has to be the only
 /// one reading it. Every test that installs a value takes this lock first and
@@ -43,6 +46,7 @@ async fn refresh(api: &Api, startup: bool) -> bool {
     match auth_api::setup_status(api).await {
         Ok(s) => {
             install_orgs_enabled(s.orgs_enabled);
+            install_features(s.features);
             true
         }
         Err(e) => {

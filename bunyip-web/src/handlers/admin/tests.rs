@@ -16,6 +16,7 @@ use super::applications::*;
 use super::auto_ban_settings::*;
 use super::email_config::*;
 use super::error_log::*;
+use super::feature_toggles::*;
 use super::feedback::*;
 use super::ip_bans::*;
 use super::memberships::*;
@@ -2980,5 +2981,72 @@ mod tier_settings_partial_failure_tests {
             stripe_err.user_message(),
             "the message must distinguish the partial-failure outcome from the bare backend error"
         );
+    }
+}
+
+#[cfg(test)]
+mod feature_toggle_page_tests {
+    use super::*;
+
+    fn feature_toggle(key: &str, enabled: bool) -> AdminFeatureToggle {
+        serde_json::from_value(json!({
+            "key": key, "label": format!("Label {key}"), "help": format!("Help {key}"),
+            "enabled": enabled
+        }))
+        .unwrap()
+    }
+
+    /// The `<input>` tag of one toggle row, read by its id so other controls cannot match.
+    fn toggle_input(html: &str, key: &str) -> String {
+        let rest = html
+            .split_once(&format!(r#"id="feature-{key}""#))
+            .unwrap_or_else(|| panic!("the {key} switch renders: {html}"))
+            .1;
+        rest.split_once('>')
+            .expect("the input closes")
+            .0
+            .to_string()
+    }
+
+    /// BUNYIP-840: one row per registry entry, and each switch reflects its saved state.
+    #[test]
+    fn feature_toggles_page_renders_one_row_per_entry_with_its_state() {
+        let toggles = [
+            feature_toggle("tenant_hostnames", true),
+            feature_toggle("second_feature", false),
+        ];
+        let html = feature_toggles_content(&toggles, true, true).into_string();
+        assert!(html.contains("Feature Toggles"), "heading present");
+        assert_eq!(
+            html.matches(r#"action="/admin/features""#).count(),
+            toggles.len(),
+            "one form per registry entry"
+        );
+        for t in &toggles {
+            assert!(html.contains(&t.label) && html.contains(&t.help));
+            assert!(html.contains(&format!(r#"name="key" value="{}""#, t.key)));
+        }
+        assert!(
+            toggle_input(&html, "tenant_hostnames").contains("checked"),
+            "ticked when the feature is on"
+        );
+        assert!(
+            !toggle_input(&html, "second_feature").contains("checked"),
+            "unticked when the feature is off: {}",
+            toggle_input(&html, "second_feature")
+        );
+    }
+
+    /// Only the super admin gets a form; the three list states stay distinct.
+    #[test]
+    fn feature_toggles_page_is_read_only_below_super_admin_and_says_when_unreachable() {
+        let toggles = [feature_toggle("tenant_hostnames", true)];
+        let html = feature_toggles_content(&toggles, true, false).into_string();
+        assert!(!html.contains(r#"action="/admin/features""#));
+        assert!(html.contains("Only the super admin can change this."));
+        let down = feature_toggles_content(&[], false, true).into_string();
+        assert!(down.contains("Could not reach the API to load the feature toggles."));
+        let empty = feature_toggles_content(&[], true, true).into_string();
+        assert!(empty.contains("No feature toggles."));
     }
 }

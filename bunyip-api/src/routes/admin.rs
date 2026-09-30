@@ -337,6 +337,15 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/tier-settings",
                 web::put().to(handlers::update_tier_settings),
             )
+            // BUNYIP-840: feature toggles. Listing is open to any admin; a flip is super-admin-only and audited.
+            .route(
+                "/feature-toggles",
+                web::get().to(handlers::list_feature_toggles),
+            )
+            .route(
+                "/feature-toggles/{key}",
+                web::put().to(handlers::update_feature_toggle),
+            )
             // Branding (BUNYIP-561): the product name, tagline, meta
             // description and Open Graph image, admin-managed rather than
             // compiled in. A PUT refreshes the api-side cache in the same

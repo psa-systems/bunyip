@@ -8,8 +8,9 @@
 //! type, or an app route: the consumer supplies those and builds its own nav
 //! data, document `<head>`, and shells on top of these.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 use maud::{html, Markup};
 
@@ -90,6 +91,25 @@ pub fn install_orgs_enabled(enabled: bool) {
 
 pub fn orgs_enabled() -> bool {
     ORGS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// BUNYIP-840: the admin feature toggles by key, as last read from the api probe.
+/// Re-installable like [`ORGS_ENABLED`]; an absent key reads as OFF.
+static FEATURES: RwLock<BTreeMap<String, bool>> = RwLock::new(BTreeMap::new());
+
+/// Replace the whole feature map with a fresh reading.
+pub fn install_features(features: impl IntoIterator<Item = (String, bool)>) {
+    *FEATURES.write().unwrap_or_else(|e| e.into_inner()) = features.into_iter().collect();
+}
+
+/// Whether feature `key` is switched on. Absent means off.
+pub fn feature_enabled(key: &str) -> bool {
+    FEATURES
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(key)
+        .copied()
+        .unwrap_or(false)
 }
 
 /// Absolute URL of the committed share image, installed once from the

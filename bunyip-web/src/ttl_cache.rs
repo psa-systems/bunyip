@@ -306,6 +306,7 @@ mod tests {
                 email_enabled: true,
                 stripe_enabled: true,
                 orgs_enabled: false,
+                features: Default::default(),
             })
         };
 
