@@ -99,6 +99,19 @@ fn refresh_absolute_ttl(remember: bool) -> Duration {
     }
 }
 
+/// True for Postgres SQLSTATE 40001 ("could not serialize access due to
+/// concurrent update"), the error a SERIALIZABLE transaction's blocked `SELECT
+/// ... FOR UPDATE` raises once unblocked if the row it is locking was changed
+/// by a concurrent transaction that committed while it waited. BUNYIP-850:
+/// `refresh_tokens`'s op-session read hits exactly this case when a revoke
+/// commits during the wait, and the caller treats it as a refusal rather than
+/// an internal error.
+fn is_serialization_failure(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .and_then(|d| d.code())
+        .is_some_and(|code| code == "40001")
+}
+
 // --- email resend rate-limit policy (BUNYIP-313) ---------------------------
 
 /// Rolling window, in seconds, over which email-verify and email-change resend
@@ -1136,15 +1149,45 @@ impl AuthService {
         // rolling forward.
         let mut refresh_expires_at = stored_token.expires_at;
         if let Some(op_session_id) = stored_token.op_session_id {
+            // BUNYIP-850: read, liveness-check and idle-slide the op_session
+            // row inside one SERIALIZABLE transaction, matching
+            // `rotate_refresh_token`'s pattern in bunyip-oidc. Un-transacted,
+            // `FOR UPDATE` took and released its row lock within its own
+            // implicit statement-transaction, leaving a gap between the read
+            // and the idle-slide UPDATE where a concurrent op-session revoke
+            // could commit and be missed.
+            let mut tx = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| AppError::internal(format!("Failed to begin transaction: {e}")))?;
+            sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AppError::internal(format!("Failed to set isolation level: {e}")))?;
+
             let now = Utc::now();
             let session = sqlx::query!(
                 "SELECT expires_at, idle_expires_at, revoked_at, idle_ttl_seconds \
                  FROM op_sessions WHERE id = $1 FOR UPDATE",
                 op_session_id,
             )
-            .fetch_optional(&self.pool)
+            .fetch_optional(&mut *tx)
             .await
-            .map_err(|e| AppError::internal(format!("DB error loading op_session: {e}")))?;
+            .map_err(|e| {
+                if is_serialization_failure(&e) {
+                    // A concurrent writer (e.g. an op-session revoke) committed
+                    // against this row while our SERIALIZABLE transaction was
+                    // blocked waiting for its lock. Postgres refuses to hand us
+                    // a consistent view of a row that changed underneath us, so
+                    // fail closed rather than surface it as an internal error:
+                    // the writer that won the race is exactly the revoke this
+                    // transaction exists to observe.
+                    AppError::InvalidCredentials
+                } else {
+                    AppError::internal(format!("DB error loading op_session: {e}"))
+                }
+            })?;
             let session = match session {
                 Some(row) => row,
                 None => {
@@ -1168,9 +1211,12 @@ impl AuthService {
                 slid_idle,
                 op_session_id,
             )
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| AppError::internal(format!("Failed to slide op_session: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::internal(format!("Failed to commit transaction: {e}")))?;
             refresh_expires_at = refresh_expires_at.min(session.expires_at);
         }
 
