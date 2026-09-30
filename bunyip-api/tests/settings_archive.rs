@@ -11,7 +11,8 @@
 
 use std::collections::BTreeSet;
 
-use bunyip_api::settings_archive::{self, ExportOptions, ARCHIVED_TABLES};
+use bunyip_api::config::{GovernedSecret, SecretsProvider};
+use bunyip_api::settings_archive::{self, ExportOptions, SecretOutcome, ARCHIVED_TABLES};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 
@@ -218,6 +219,77 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
         again.plan.is_unchanged(),
         "a second import of the same archive still had work to do: {:?}",
         again.plan
+    );
+}
+
+/// A dry run (`plan`) against a `SecretsProvider::Environment` deployment
+/// reports the refusal `apply` would hit, rather than a plain `Set`/`Cleared`
+/// outcome the operator has no reason to distrust before running the real
+/// import (BUNYIP-851).
+#[tokio::test]
+async fn dry_run_surfaces_the_environment_provider_refusal_for_a_changed_secret() {
+    let Some(pool) = test_pool("the settings-archive dry-run secrets-provider gate test").await
+    else {
+        return;
+    };
+    let Some(mut config) = test_config() else {
+        eprintln!("the environment does not carry a usable bunyip Config; skipping");
+        return;
+    };
+    let key_set = config.app_key_set();
+
+    // A freshly-migrated `tier_config` has every tier visible with no price
+    // mapped, which `validate_snapshot` refuses on export's own round trip; give
+    // it a configured shape first, exactly as `seed_fixture` does.
+    sqlx::query(
+        "UPDATE tier_config SET free_price_id = 'price_fixture_free', \
+         early_adopter_price_id = 'price_fixture_early', \
+         standard_price_id = 'price_fixture_standard' WHERE id = 1",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed the tier prices");
+
+    let options = ExportOptions {
+        include_catalog: false,
+        include_oauth_clients: false,
+    };
+    let mut snapshot = settings_archive::export(&pool, &config, &key_set, options)
+        .await
+        .expect("export a baseline snapshot");
+
+    // The archive claims a value the live `Environment` provider (below) does
+    // not hold, which is exactly a rotated secret an operator is restoring.
+    snapshot.sections.governed_secrets.insert(
+        GovernedSecret::SmtpPassword.name().to_string(),
+        Some("archived-smtp-password".to_string()),
+    );
+
+    // Force the read-only provider `write_governed_secrets` refuses under,
+    // regardless of how this deployment is actually configured.
+    config.secrets_provider = SecretsProvider::Environment;
+
+    let plan = settings_archive::plan(&pool, &config, &key_set, &snapshot)
+        .await
+        .expect("plan");
+
+    let secret_plan = plan
+        .secrets
+        .iter()
+        .find(|s| s.name == GovernedSecret::SmtpPassword.name())
+        .expect("SMTP_PASSWORD is always in the plan");
+    assert_ne!(secret_plan.outcome, SecretOutcome::Unchanged);
+    let refusal = secret_plan
+        .refusal
+        .as_ref()
+        .expect("the dry run must surface the refusal apply would hit");
+    assert!(refusal.contains("SECRETS_STORAGE=environment"));
+    assert!(refusal.contains("SMTP_PASSWORD_FILE"));
+
+    let rendered = settings_archive::render_plan(&plan);
+    assert!(
+        rendered.contains("REFUSED at apply time"),
+        "the rendered dry-run plan did not surface the refusal:\n{rendered}"
     );
 }
 
