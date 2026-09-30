@@ -5,6 +5,7 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::errors::AppError;
@@ -290,6 +291,9 @@ pub struct SetupStatusResponse {
     /// snapshot the admin save hot-reloads, so the probe still touches no table
     /// and stays in `rate_limit_floor::EXEMPT_PATHS`.
     pub orgs_enabled: bool,
+    /// BUNYIP-840: every registered feature toggle by key, from the process-wide
+    /// snapshot, so the probe still touches no table.
+    pub features: BTreeMap<&'static str, bool>,
 }
 
 /// Response for successful authentication
@@ -1465,6 +1469,7 @@ pub async fn setup_status(
     config: web::Data<crate::config::Config>,
     stripe_service: web::Data<Arc<crate::services::StripeService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<crate::config::TierConfig>>>,
+    feature_toggles: web::Data<crate::feature_toggles::FeatureToggleSnapshot>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
@@ -1475,6 +1480,10 @@ pub async fn setup_status(
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .orgs_enabled;
+    let features = feature_toggles
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_map();
 
     Ok(HttpResponse::Ok().json(crate::responses::ApiResponse {
         success: true,
@@ -1482,6 +1491,7 @@ pub async fn setup_status(
             email_enabled: config.email.enabled,
             stripe_enabled: stripe_service.is_configured(),
             orgs_enabled,
+            features,
         }),
         meta: crate::responses::ResponseMeta::new(request_id),
     }))

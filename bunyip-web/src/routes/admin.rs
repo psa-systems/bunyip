@@ -193,6 +193,11 @@ pub fn routes() -> Router<AppState> {
             "/admin/tier-settings",
             get(admin::tier_settings).post(admin::tier_settings_save),
         )
+        // BUNYIP-840: the feature-toggle registry, one form per toggle.
+        .route(
+            "/admin/features",
+            get(admin::feature_toggles).post(admin::feature_toggle_save),
+        )
         // BUNYIP-527: the tier -> Stripe price catalog mapping moved back here
         // from the Stripe page (its own form + save, alongside slots/trials).
         .route(

@@ -15,6 +15,7 @@ pub use dunite_core::{errors, responses, validation};
 pub mod config;
 pub mod config_providers;
 pub mod device;
+pub mod feature_toggles;
 pub mod middleware;
 pub mod models;
 pub mod repositories;

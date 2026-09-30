@@ -53,6 +53,9 @@ use bunyip_oidc::services::{oidc_keys::OidcKeySet, oidc_provider::OidcProvider};
 /// the change reach the others.
 const BRANDING_REFRESH_SECS: u64 = 60;
 
+/// BUNYIP-840: how often each api process re-reads `feature_toggles`.
+const FEATURE_TOGGLE_REFRESH_SECS: u64 = 60;
+
 /// Connections in each database pool (BUNYIP-559 F10).
 ///
 /// Deliberately NOT a function of the actix worker count. actix opens one
@@ -426,6 +429,33 @@ async fn main() -> anyhow::Result<()> {
         TierConfig::resolve(&stack, row.as_ref())
     };
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
+
+    // BUNYIP-840: a failed first read leaves every feature OFF; the refresh task retries.
+    let feature_toggles: bunyip_api::feature_toggles::FeatureToggleSnapshot = Arc::default();
+    match bunyip_api::repositories::FeatureToggleRepository::load(&pool).await {
+        Ok(toggles) => {
+            info!(features = ?toggles.as_map(), "Feature toggles loaded");
+            *feature_toggles.write().unwrap_or_else(|e| e.into_inner()) = toggles;
+        }
+        Err(e) => error!(
+            error = %e,
+            "feature_toggles could not be read; every feature stays off until the next refresh"
+        ),
+    }
+    {
+        let snapshot = Arc::clone(&feature_toggles);
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut ticker =
+                tokio::time::interval(std::time::Duration::from_secs(FEATURE_TOGGLE_REFRESH_SECS));
+            ticker.tick().await; // the first tick fires immediately; skip it.
+            loop {
+                ticker.tick().await;
+                bunyip_api::handlers::admin_feature_toggles::refresh_snapshot(&pool, &snapshot)
+                    .await;
+            }
+        });
+    }
 
     // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
     // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
@@ -1336,6 +1366,7 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(tier_config.clone()))
             .app_data(web::Data::new(pricing_cache.clone()))
             .app_data(web::Data::new(branding_cache.clone()))
+            .app_data(web::Data::new(feature_toggles.clone()))
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))

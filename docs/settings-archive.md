@@ -125,6 +125,7 @@ Always, with no flag:
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
 | `rate_limit_configs` | Every per-action cap override. |
+| `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |
 | `system_settings` | The four settings the file configuration layer at `BUNYIP_CONFIG_DIR` holds: login approval, the signup bot guard, and the two country lists. |
 | `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPPORT_IMAP_PASSWORD`, resolved through whichever provider `SECRETS_STORAGE` declares. |
 

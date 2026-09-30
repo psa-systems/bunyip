@@ -42,6 +42,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::branding::{validate_branding, UpdateBrandingRequest};
+use bunyip_domain::repositories::FeatureToggleRepository;
 use bunyip_domain::services::argon2_offload;
 use bunyip_domain::services::encryption::{decrypt_with_key, EncryptionKeySet};
 use bunyip_domain::services::AppKeySet;
@@ -240,6 +241,11 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
         excluded: &["updated_at", "updated_by"],
     },
     ArchivedTable {
+        table: "feature_toggles",
+        archived: &["key", "enabled"],
+        excluded: &["updated_at", "updated_by"],
+    },
+    ArchivedTable {
         table: "application_groups",
         archived: &[
             "name",
@@ -388,6 +394,8 @@ pub struct Sections {
     pub email_config: EmailConfigSection,
     pub stripe_config: StripeConfigSection,
     pub rate_limit_configs: Vec<RateLimitConfigRow>,
+    /// BUNYIP-840: every stored feature toggle, by key.
+    pub feature_toggles: Vec<FeatureToggleRow>,
     pub system_settings: SystemSettingsSection,
     /// Plaintext of every [`GovernedSecret`], keyed by its variable name.
     /// `None` means the declared provider holds no value for it.
@@ -488,6 +496,13 @@ pub struct RateLimitConfigRow {
     pub action: String,
     pub max_requests: i32,
     pub window_seconds: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureToggleRow {
+    pub key: String,
+    pub enabled: bool,
 }
 
 /// The four settings the `file` configuration layer carries, read through
@@ -721,6 +736,7 @@ pub async fn export(
         email_config: read_email_config(pool).await?,
         stripe_config: read_stripe_config(pool).await?,
         rate_limit_configs: read_rate_limit_configs(pool).await?,
+        feature_toggles: read_feature_toggles(pool).await?,
         system_settings: SystemSettings::current().into(),
         governed_secrets: read_governed_secrets(pool, config, key_set).await?,
         catalog: if options.include_catalog {
@@ -804,6 +820,14 @@ async fn read_stripe_config(pool: &PgPool) -> Result<StripeConfigSection, AppErr
 async fn read_rate_limit_configs(pool: &PgPool) -> Result<Vec<RateLimitConfigRow>, AppError> {
     Ok(sqlx::query_as::<_, RateLimitConfigRow>(
         "SELECT action, max_requests, window_seconds FROM rate_limit_configs ORDER BY action",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+async fn read_feature_toggles(pool: &PgPool) -> Result<Vec<FeatureToggleRow>, AppError> {
+    Ok(sqlx::query_as::<_, FeatureToggleRow>(
+        "SELECT key, enabled FROM feature_toggles ORDER BY key",
     )
     .fetch_all(pool)
     .await?)
@@ -1514,6 +1538,12 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
             &keyed(&archive.rate_limit_configs, |r| r.action.clone()),
             &[],
         ),
+        plan_table(
+            "feature_toggles",
+            &keyed(&target.feature_toggles, |r| r.key.clone()),
+            &keyed(&archive.feature_toggles, |r| r.key.clone()),
+            &[],
+        ),
     ];
 
     if let Some(archive_catalog) = &archive.catalog {
@@ -1927,6 +1957,20 @@ async fn write_database_sections(
         .bind(updated_by)
         .execute(&mut *tx)
         .await?;
+    }
+
+    // --- feature_toggles ----------------------------------------------------
+    let keys: Vec<String> = sections
+        .feature_toggles
+        .iter()
+        .map(|r| r.key.clone())
+        .collect();
+    sqlx::query("DELETE FROM feature_toggles WHERE NOT (key = ANY($1))")
+        .bind(&keys)
+        .execute(&mut *tx)
+        .await?;
+    for row in &sections.feature_toggles {
+        FeatureToggleRepository::set(&mut *tx, &row.key, row.enabled, updated_by).await?;
     }
 
     if let Some(catalog) = &sections.catalog {
@@ -2502,6 +2546,10 @@ mod tests {
                     action: "login".to_string(),
                     max_requests: 5,
                     window_seconds: 60,
+                }],
+                feature_toggles: vec![FeatureToggleRow {
+                    key: "tenant_hostnames".to_string(),
+                    enabled: true,
                 }],
                 system_settings: SystemSettingsSection::default(),
                 governed_secrets,

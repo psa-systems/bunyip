@@ -122,7 +122,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 
 ### Configuration, secrets and feature flags
 
-- [Feature flags](docs/invariants/config.md#feature-flags-bunyip-493-bunyip-487) (BUNYIP-493, BUNYIP-487): Surface switches are `tier_config` columns; off means invisible.
+- [Feature flags](docs/invariants/config.md#feature-flags-bunyip-493-bunyip-487) (BUNYIP-493, BUNYIP-487, BUNYIP-840): New switches are `Feature` registry rows, off by default.
 - [At-rest encryption](docs/invariants/config.md#at-rest-encryption-bunyip-483-bunyip-491) (BUNYIP-483, BUNYIP-491): One `APP_ENCRYPTION_KEY` key set protects every encrypted column.
 - [Startup config validation](docs/invariants/config.md#startup-config-validation-bunyip-537) (BUNYIP-537): Classify every env var in `ENV_INVENTORY`; report all failures, never `panic!`.
 - [Configuration providers](docs/invariants/config.md#configuration-providers-bunyip-643-bunyip-537-bunyip-644) (BUNYIP-643/537/644/645): Resolve `database` > `file` > `environment` via `ConfigStack`.

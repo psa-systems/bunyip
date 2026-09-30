@@ -249,6 +249,9 @@ pub struct SetupStatus {
     /// advertising a surface that is not there.
     #[serde(default)]
     pub orgs_enabled: bool,
+    /// BUNYIP-840: every feature toggle by key. Empty from an older API, so every feature stays dark.
+    #[serde(default)]
+    pub features: std::collections::BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -864,6 +867,23 @@ pub struct AdminRateLimitConfig {
     pub overridden: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
+}
+
+/// One row of the admin Feature Toggles page (BUNYIP-840): mirrors
+/// `bunyip_api::handlers::admin_feature_toggles::FeatureToggleEntry`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminFeatureToggle {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub help: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+    #[serde(default)]
+    pub updated_by_email: Option<String>,
 }
 
 fn default_true() -> bool {

@@ -3,7 +3,7 @@
 use serde_json::{json, Value};
 
 use super::types::{
-    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeedbackDetail,
+    AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
     AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
@@ -787,6 +787,33 @@ pub async fn set_rate_limit_config(
             &format!("/admin/rate-limit-configs/{}", urlenc(action)),
             cookie,
             Some(json!({ "max_requests": max_requests, "window_seconds": window_seconds })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// Every registered feature toggle (BUNYIP-840). Wraps
+/// `GET /v1/admin/feature-toggles`, open to any admin.
+pub async fn feature_toggles(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<AdminFeatureToggle>, ApiError> {
+    parse(api.get("/admin/feature-toggles", cookie).await?)
+}
+
+/// Flip one feature toggle. Wraps `PUT /v1/admin/feature-toggles/{key}`, which
+/// is super-admin-only, audits the change and 404s on an unknown key.
+pub async fn set_feature_toggle(
+    api: &Api,
+    cookie: Option<&str>,
+    key: &str,
+    enabled: bool,
+) -> Result<(), ApiError> {
+    let r = api
+        .put(
+            &format!("/admin/feature-toggles/{}", urlenc(key)),
+            cookie,
+            Some(json!({ "enabled": enabled })),
         )
         .await?;
     ok_data(&r).map(|_| ())
