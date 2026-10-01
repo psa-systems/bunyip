@@ -104,16 +104,21 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let stats_data = admin_api::stats(&st.api, fwd).await;
-    let stats_fetch_error = stats_data.as_ref().err().cloned();
-    let stats = stats_data.ok();
     // BUNYIP-474: dataset freshness for the Datasets card. BUNYIP-546: the card
     // always renders and says which of the three states it is in; a failed
     // health call still never blocks the dashboard.
-    let health = admin_api::system_health(&st.api, fwd).await;
+    // BUNYIP-859: none of the three fetches consumes another's result, so they
+    // run concurrently via `join!`, not `try_join!`: each keeps its own
+    // fallback below.
+    let (stats_data, health, logs_data) = tokio::join!(
+        admin_api::stats(&st.api, fwd),
+        admin_api::system_health(&st.api, fwd),
+        admin_api::audit_logs(&st.api, fwd, 1, 5, false)
+    );
+    let stats_fetch_error = stats_data.as_ref().err().cloned();
+    let stats = stats_data.ok();
     let datasets_fetch_error = health.as_ref().err().cloned();
     let datasets = health.map(|h| h.datasets).unwrap_or_default();
-    let logs_data = admin_api::audit_logs(&st.api, fwd, 1, 5, false).await;
     let logs_fetch_error = logs_data.as_ref().err().cloned();
     let logs = logs_data.map(|p| p.items).unwrap_or_default();
     // Only prompt when we positively know the catalog is empty (stats fetched
