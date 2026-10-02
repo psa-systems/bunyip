@@ -2995,6 +2995,7 @@ mod feature_toggle_page_tests {
             message: "Failed to list feature toggles".into(),
             retry_after: None,
             request_id: Some("req_feat001".into()),
+            bucket: None,
         }
     }
 
