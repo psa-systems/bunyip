@@ -122,7 +122,7 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
                     class="relative w-full h-full object-contain drop-shadow-2xl" {}
             }
             @if !tagline.is_empty() {
-                p class="absolute bottom-16 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full bg-white dark:bg-brand-primary-800 border border-brand-primary-100 dark:border-brand-primary-700 text-xs italic text-brand-primary-700 dark:text-brand-primary-200 shadow-lg whitespace-nowrap" {
+                p class="absolute bottom-16 left-1/2 -translate-x-1/2 w-max max-w-[85%] px-3 py-1 rounded-2xl bg-white dark:bg-brand-primary-800 border border-brand-primary-100 dark:border-brand-primary-700 text-xs italic text-center text-balance text-brand-primary-700 dark:text-brand-primary-200 shadow-lg" {
                     "\"" (tagline) "\""
                 }
             }
@@ -252,7 +252,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     }
                     div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-brand-primary-700 dark:text-brand-primary-300" {
                         @for t in ["No credit card required".to_string(), trial_chip(trial_days), "Cancel anytime".to_string()] {
-                            span class="flex items-center gap-2" { (icon("check", "h-4 w-4 text-brand-primary-600 dark:text-brand-primary-300")) (t) }
+                            span class="flex items-center justify-center gap-2" { (icon("check", "h-4 w-4 shrink-0 text-brand-primary-600 dark:text-brand-primary-300")) (t) }
                         }
                     }
                   }
