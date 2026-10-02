@@ -3523,6 +3523,7 @@ mod fetch_state_tests {
             message: "Failed to reach the API".into(),
             retry_after: None,
             request_id: Some("req_abc123".into()),
+            bucket: None,
         }
     }
 

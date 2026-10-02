@@ -183,6 +183,7 @@ mod dataset_card_tests {
             message: "Failed to load dataset health".into(),
             retry_after: None,
             request_id: Some("req_abc123".into()),
+            bucket: None,
         }
     }
 

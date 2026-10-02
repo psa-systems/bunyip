@@ -61,6 +61,11 @@ pub struct ApiError {
     /// surface can quote the one token that ties what the admin saw to the api
     /// log line. `None` for a transport failure, which never reached the api.
     pub request_id: Option<String>,
+    /// The rate-limit bucket that tripped, for a `RATE_LIMITED` 429 from the
+    /// per-IP/per-action floor (BUNYIP-865). Read from `error.details.bucket`,
+    /// so an admin can tell which bucket fired without reading bunyip-api's
+    /// logs. `None` for every other error.
+    pub bucket: Option<String>,
 }
 
 /// Standard human phrasing for a `Retry-After` duration in seconds
@@ -84,6 +89,7 @@ impl ApiError {
             message: msg.into(),
             retry_after: None,
             request_id: None,
+            bucket: None,
         }
     }
 
@@ -95,9 +101,15 @@ impl ApiError {
         }
         if self.status == 429 {
             if let Some(secs) = self.retry_after {
+                let bucket_suffix = self
+                    .bucket
+                    .as_deref()
+                    .map(|b| format!(" (bucket: {b})"))
+                    .unwrap_or_default();
                 return format!(
-                    "Too many attempts. Please try again {}.",
-                    humanize_retry_after(secs)
+                    "Too many attempts. Please try again {}.{}",
+                    humanize_retry_after(secs),
+                    bucket_suffix
                 );
             }
         }
@@ -381,6 +393,13 @@ pub fn error_from(resp: &Resp) -> ApiError {
             .and_then(|d| d.get("retry_after"))
             .and_then(Value::as_u64)
     });
+    // BUNYIP-865: the rate-limit floor's bucket name, so a 429 can say which
+    // bucket tripped without reading bunyip-api's logs.
+    let bucket = err
+        .and_then(|e| e.get("details"))
+        .and_then(|d| d.get("bucket"))
+        .and_then(|b| b.as_str())
+        .map(str::to_string);
     ApiError {
         status: resp.status,
         code,
@@ -389,6 +408,7 @@ pub fn error_from(resp: &Resp) -> ApiError {
         // BUNYIP-516: from the header, so the admin can quote an id that is
         // actually in the api log.
         request_id: resp.request_id.clone(),
+        bucket,
     }
 }
 
@@ -428,6 +448,7 @@ pub fn decode_error<T>(path: &str, e: &serde_json::Error) -> ApiError {
         // The caller attaches the response's id where it has one; a bare
         // `decode_error` (auth's hand-rolled parses) has no response to read.
         request_id: None,
+        bucket: None,
     }
 }
 
@@ -544,6 +565,33 @@ mod tests {
     }
 
     #[test]
+    fn error_from_decodes_floor_limiter_429_body() {
+        // The exact shape `rate_limit_floor.rs` emits (BUNYIP-865): the bare
+        // `"error": "rate limit exceeded"` string it used to send parsed to
+        // `code == "REQUEST_FAILED"` because `Value::get` on a JSON string
+        // always returns `None`.
+        let resp = err_resp(
+            429,
+            Some(30),
+            json!({
+                "success": false,
+                "error": {
+                    "code": "RATE_LIMITED",
+                    "message": "rate limit exceeded",
+                    "details": { "retry_after": 30, "bucket": "login" },
+                },
+            }),
+        );
+        let e = error_from(&resp);
+        assert_eq!(e.code, "RATE_LIMITED");
+        assert_eq!(e.bucket, Some("login".to_string()));
+        assert_eq!(
+            e.user_message(),
+            "Too many attempts. Please try again in about a minute. (bucket: login)"
+        );
+    }
+
+    #[test]
     fn error_from_falls_back_to_details_retry_after() {
         // No header: the body's `details.retry_after` is used instead.
         let resp = err_resp(
@@ -610,6 +658,7 @@ mod tests {
             message: "error sending request for url (http://bunyip-api:4401/v1/auth/login): connection refused".into(),
             retry_after: None,
             request_id: None,
+            bucket: None,
         };
         let tmsg = transport.user_message();
         assert!(

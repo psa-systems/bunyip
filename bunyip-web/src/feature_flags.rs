@@ -90,6 +90,7 @@ pub async fn load_at_startup(api: &Api) {
         ),
         retry_after: None,
         request_id: None,
+        bucket: None,
     };
     match tokio::time::timeout(
         Duration::from_secs(FLAGS_STARTUP_TIMEOUT_SECS),
