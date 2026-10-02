@@ -13,10 +13,13 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::AdminFeatureToggle;
+use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{rel_time, urlenc};
 use crate::views::layout::admin_block;
-use crate::views::ui::{badge, button_class, empty_state, error_box, icon, toggle_switch_field};
+use crate::views::ui::{
+    badge, button_class, empty_state, error_box_for, icon, toggle_switch_field,
+};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
@@ -62,7 +65,7 @@ fn feature_toggle_row(t: &AdminFeatureToggle, editable: bool) -> Markup {
 
 pub(super) fn feature_toggles_content(
     toggles: &[AdminFeatureToggle],
-    reachable: bool,
+    fetch_error: Option<&ApiError>,
     editable: bool,
 ) -> Markup {
     html! {
@@ -71,8 +74,8 @@ pub(super) fn feature_toggles_content(
                 h1 class="text-3xl font-bold" { "Feature Toggles" }
                 p class="mt-2 text-muted-foreground" { "Switch a whole feature on or off for this deployment. Off means hidden: its pages return 404 and its links are not shown. A change is live everywhere within a minute, with no restart." }
             }
-            @if !reachable {
-                (error_box("Could not reach the API to load the feature toggles."))
+            @if let Some(e) = fetch_error {
+                (error_box_for("Could not reach the API to load the feature toggles.", e))
             } @else if toggles.is_empty() {
                 (empty_state("sliders-horizontal", "No feature toggles.", None))
             } @else {
@@ -96,9 +99,9 @@ pub async fn feature_toggles(State(st): State<AppState>, headers: HeaderMap) -> 
             "feature toggles unavailable on the Feature Toggles page"
         );
     }
-    let reachable = data.is_ok();
+    let fetch_error = data.as_ref().err().cloned();
     let toggles = data.unwrap_or_default();
-    let content = feature_toggles_content(&toggles, reachable, user.is_super_admin);
+    let content = feature_toggles_content(&toggles, fetch_error.as_ref(), user.is_super_admin);
     admin_response(&c, &user, "/admin/features", "Feature Toggles", content)
 }
 

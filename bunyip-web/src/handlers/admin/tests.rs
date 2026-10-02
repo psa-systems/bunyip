@@ -2974,6 +2974,7 @@ mod tier_settings_partial_failure_tests {
 #[cfg(test)]
 mod feature_toggle_page_tests {
     use super::*;
+    use crate::api::ApiError;
 
     fn feature_toggle(key: &str, enabled: bool) -> AdminFeatureToggle {
         serde_json::from_value(json!({
@@ -2981,6 +2982,16 @@ mod feature_toggle_page_tests {
             "enabled": enabled
         }))
         .unwrap()
+    }
+
+    fn load_error() -> ApiError {
+        ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to list feature toggles".into(),
+            retry_after: None,
+            request_id: Some("req_feat001".into()),
+        }
     }
 
     /// The `<input>` tag of one toggle row, read by its id so other controls cannot match.
@@ -3002,7 +3013,7 @@ mod feature_toggle_page_tests {
             feature_toggle("tenant_hostnames", true),
             feature_toggle("second_feature", false),
         ];
-        let html = feature_toggles_content(&toggles, true, true).into_string();
+        let html = feature_toggles_content(&toggles, None, true).into_string();
         assert!(html.contains("Feature Toggles"), "heading present");
         assert_eq!(
             html.matches(r#"action="/admin/features""#).count(),
@@ -3028,12 +3039,14 @@ mod feature_toggle_page_tests {
     #[test]
     fn feature_toggles_page_is_read_only_below_super_admin_and_says_when_unreachable() {
         let toggles = [feature_toggle("tenant_hostnames", true)];
-        let html = feature_toggles_content(&toggles, true, false).into_string();
+        let html = feature_toggles_content(&toggles, None, false).into_string();
         assert!(!html.contains(r#"action="/admin/features""#));
         assert!(html.contains("Only the super admin can change this."));
-        let down = feature_toggles_content(&[], false, true).into_string();
+        let err = load_error();
+        let down = feature_toggles_content(&[], Some(&err), true).into_string();
         assert!(down.contains("Could not reach the API to load the feature toggles."));
-        let empty = feature_toggles_content(&[], true, true).into_string();
+        assert!(down.contains(&err.request_id.clone().unwrap()));
+        let empty = feature_toggles_content(&[], None, true).into_string();
         assert!(empty.contains("No feature toggles."));
     }
 }
