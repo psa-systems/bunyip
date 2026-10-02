@@ -1486,6 +1486,7 @@ mod docs_hub_tests {
             message: "boom".into(),
             retry_after: None,
             request_id: Some("req_abc123".into()),
+            bucket: None,
         };
         let html = docs_index_body(Err(&err)).into_string();
         assert!(html.contains("Could not reach the API to load application documentation."));

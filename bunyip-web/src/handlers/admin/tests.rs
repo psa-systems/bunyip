@@ -956,6 +956,7 @@ mod two_column_layout_tests {
             message: String::new(),
             retry_after: Some(120),
             request_id: None,
+            bucket: None,
         };
         let throttled_html = test_send_banner(Err(throttled)).into_string();
         assert!(
@@ -1523,6 +1524,7 @@ mod stripe_admin_tests {
             message: "Failed to list webhook endpoints".into(),
             retry_after: None,
             request_id: Some("req_abc123".into()),
+            bucket: None,
         }
     }
 
@@ -1537,6 +1539,7 @@ mod stripe_admin_tests {
             ),
             retry_after: None,
             request_id: Some("req_perm001".into()),
+            bucket: None,
         }
     }
 
@@ -2943,6 +2946,7 @@ mod tier_settings_partial_failure_tests {
             message: "boom".into(),
             retry_after: None,
             request_id: None,
+            bucket: None,
         };
         let msg = stripe_step_error_message(&stripe_err);
         let cfg = cfg();
@@ -2991,6 +2995,7 @@ mod feature_toggle_page_tests {
             message: "Failed to list feature toggles".into(),
             retry_after: None,
             request_id: Some("req_feat001".into()),
+            bucket: None,
         }
     }
 

@@ -211,6 +211,7 @@ mod tests {
             message: "Too Many Requests".into(),
             retry_after: Some(30),
             request_id: Some("req_test_1".into()),
+            bucket: None,
         }
     }
 

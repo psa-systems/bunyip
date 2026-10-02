@@ -107,6 +107,7 @@ mod tests {
             message: "Failed to load integration status".into(),
             retry_after: None,
             request_id: Some("req_abc123".into()),
+            bucket: None,
         }
     }
 

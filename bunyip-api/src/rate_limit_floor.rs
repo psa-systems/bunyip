@@ -178,14 +178,24 @@ where
                     // to be diagnosed from server logs; a caller (E2E, an admin
                     // reading a browser network tab) can now identify the
                     // tripped bucket from the response alone.
+                    // BUNYIP-865: use the standard dunite-core error envelope
+                    // (`{"error": {"code", "message", "details"}}`) so
+                    // bunyip-web's `error_from()` decodes `code` instead of
+                    // falling back to `REQUEST_FAILED`. The header is kept for
+                    // parity with any non-JSON caller.
                     let res = HttpResponse::TooManyRequests()
                         .insert_header(("Retry-After", retry_after.to_string()))
                         .insert_header(("X-RateLimit-Bucket", config.action))
                         .json(serde_json::json!({
-                            "error": "rate limit exceeded",
-                            "code": "RATE_LIMITED",
-                            "bucket": config.action,
-                            "retry_after": retry_after,
+                            "success": false,
+                            "error": {
+                                "code": "RATE_LIMITED",
+                                "message": "rate limit exceeded",
+                                "details": {
+                                    "retry_after": retry_after,
+                                    "bucket": config.action,
+                                },
+                            },
                         }));
                     Ok(req.into_response(res).map_into_right_body())
                 }

@@ -179,6 +179,7 @@ pub async fn load_at_startup(api: &Api) {
                 ),
                 retry_after: None,
                 request_id: None,
+                bucket: None,
             }),
         }
     };
@@ -231,6 +232,7 @@ pub async fn admin_upload_asset(
             message: format!("invalid brand asset mime: {e}"),
             retry_after: None,
             request_id: None,
+            bucket: None,
         })?;
     let form = reqwest::multipart::Form::new().part("asset", part);
     let r = api
@@ -428,6 +430,7 @@ mod tests {
             message: "connection refused".into(),
             retry_after: None,
             request_id: None,
+            bucket: None,
         }
     }
 
