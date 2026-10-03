@@ -65,13 +65,14 @@ just check-container   # fmt + clippy + workspace tests, inside the pinned build
 just install-hooks     # write the git pre-commit hook (once per fresh clone)
 just pre-commit        # what the hook runs: fmt + clippy + build + tests in the dev `api` container
 just create-release minor   # bump the workspace version, branch, push, open the release PR
+just publish-release         # after the release PR merges: push the release tag the workflow releases from
 ```
 
-`install-hooks`, `pre-commit` and `create-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
+`install-hooks`, `pre-commit`, `create-release`, and `publish-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
-The `common` submodule's own `dev-local` / `dev-local-detach` recipes are also imported and show up in `just --list`, but neither depends on `ensure-oidc-keys` the way bunyip's `dev`, `dev-detach`, and `dev-sso` do: running `just dev-local` on a fresh clone skips OIDC key provisioning and the api fails to boot for want of `secrets/oidc/dev-2026.pem`. Use `just dev` / `just dev-detach` instead, or, if you do use `dev-local`, run `just ensure-oidc-keys` manually first. This is a gap in `common` itself; it goes away once `common` gains the equivalent dependency.
+The `common` submodule's own `dev-local` / `dev-local-detach` recipes are also imported and show up in `just --list`, but neither depends on `ensure-oidc-keys` the way bunyip's `dev`, `dev-detach`, and `dev-sso` do: running `just dev-local` on a fresh clone skips OIDC key provisioning and the api fails to boot for want of `secrets/oidc/dev-2026.pem`. Use `just dev` / `just dev-detach` instead, or, if you do use `dev-local`, run `just ensure-oidc-keys` manually first. This is a gap in `common` itself, tracked as PC-75.
 
 ## Where things live
 
