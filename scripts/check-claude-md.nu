@@ -9,7 +9,9 @@
 #   - CLAUDE.md exceeds MAX_BYTES;
 #   - a line outside a fenced code block exceeds MAX_LINE_CHARS;
 #   - a `docs/` link from CLAUDE.md names a path that does not exist, or an
-#     anchor that matches no heading in the target file.
+#     anchor that matches no heading in the target file;
+#   - a non-private `[group: 'release']` recipe in `common/common.just` is
+#     named in neither CLAUDE.md nor a doc it links (BUNYIP-869).
 #
 # Usage:
 #   scripts/check-claude-md.nu
@@ -64,6 +66,76 @@ def anchors [path: string]: nothing -> list<string> {
     $out
 }
 
+# The name of every non-private recipe carrying `[group: 'release']` in a
+# common.just file, in declaration order. Attributes stack directly above the
+# recipe header they apply to, with blank or comment lines allowed between a
+# comment and its attributes but not between the last attribute and the
+# header.
+def release-recipe-names [path: string]: nothing -> list<string> {
+    let lines = (open --raw $path | into binary | decode utf-8 | lines)
+    mut pending_group = false
+    mut pending_private = false
+    mut names = []
+    for line in $lines {
+        let trimmed = ($line | str trim)
+        if ($trimmed | str starts-with "[") and ($trimmed | str ends-with "]") {
+            if $trimmed == "[private]" {
+                $pending_private = true
+            }
+            if ($trimmed | str contains "group: 'release'") {
+                $pending_group = true
+            }
+            continue
+        }
+        if ($trimmed | is-empty) or ($trimmed | str starts-with "#") {
+            continue
+        }
+        if ($line | str starts-with " ") or ($line | str starts-with "\t") {
+            continue
+        }
+        let is_header = (
+            ($trimmed =~ '^[a-zA-Z_][a-zA-Z0-9_\-]*(\s+[a-zA-Z_][a-zA-Z0-9_\-]*)*:')
+            and not ($trimmed | str contains ":=")
+        )
+        if $is_header {
+            let name = ($trimmed | split row ":" | first | split row " " | first)
+            if $pending_group and not $pending_private {
+                $names = ($names | append $name)
+            }
+        }
+        $pending_group = false
+        $pending_private = false
+    }
+    $names
+}
+
+# Every release recipe in `<root>/common/common.just` that is named in
+# neither CLAUDE.md nor a `docs/` file CLAUDE.md links, as human-readable
+# problem lines. Returns no problems when the common.just path does not exist
+# (an uninitialized submodule), since that is a separate, unrelated failure.
+def check-release-recipes [root: string]: nothing -> list<string> {
+    let just_path = ($root | path join "common/common.just")
+    let claude_path = ($root | path join "CLAUDE.md")
+    if not ($just_path | path exists) or not ($claude_path | path exists) {
+        return []
+    }
+    let claude_text = (open --raw $claude_path | into binary | decode utf-8)
+    mut haystacks = [$claude_text]
+    for row in (unfenced-lines $claude_text) {
+        let targets = ($row.line | parse --regex '\]\((?<t>[^)\s]+)\)' | get t)
+        for t in ($targets | where {|t| $t | str starts-with "docs/" }) {
+            let file = ($root | path join ($t | split row "#" | first))
+            if ($file | path exists) and ($file | path type) == "file" {
+                $haystacks = ($haystacks | append (open --raw $file | into binary | decode utf-8))
+            }
+        }
+    }
+    let text = ($haystacks | str join "\n")
+    release-recipe-names $just_path
+    | where {|n| not ($text | str contains $n) }
+    | each {|n| $"common/common.just: release recipe `($n)` is named in no bunyip doc \(CLAUDE.md or a doc it links)" }
+}
+
 # Every problem with `<root>/CLAUDE.md`, as human-readable lines.
 def check [root: string]: nothing -> list<string> {
     let path = ($root | path join "CLAUDE.md")
@@ -99,7 +171,38 @@ def check [root: string]: nothing -> list<string> {
             }
         }
     }
+    $problems = ($problems | append (check-release-recipes $root))
     $problems
+}
+
+def self-test-release-recipes []: nothing -> nothing {
+    let base = (mktemp --directory --tmpdir)
+
+    let cases = [
+        [name, just_body, claude_body, expect_ok];
+        ["a release recipe named in CLAUDE.md", "[group: 'release']\npublish-release:\n    true\n", "- `just publish-release` ships it.\n", true]
+        ["a release recipe named in no doc", "[group: 'release']\npublish-release:\n    true\n", "- nothing about releases here.\n", false]
+        ["a private release recipe is exempt", "[private]\n[group: 'release']\n_create-release manifest:\n    true\n", "- nothing about releases here.\n", true]
+    ]
+
+    mut ok = true
+    for c in ($cases | enumerate) {
+        let dir = ($base | path join $"case($c.index)")
+        mkdir ($dir | path join "common")
+        let item = $c.item
+        $item.just_body | save ($dir | path join "common/common.just")
+        $item.claude_body | save ($dir | path join "CLAUDE.md")
+        let problems = (check-release-recipes $dir)
+        let passed = ($problems | is-empty)
+        if $passed == $item.expect_ok {
+            print $"self-test ok: ($item.name)"
+        } else {
+            print --stderr $"self-test FAILED: ($item.name): ($problems | to nuon)"
+            $ok = false
+        }
+    }
+    rm --recursive $base
+    if not $ok { exit 1 }
 }
 
 def self-test []: nothing -> nothing {
@@ -140,6 +243,7 @@ def main [
 ]: nothing -> nothing {
     if $self_test {
         self-test
+        self-test-release-recipes
         return
     }
     let problems = (check ".")
@@ -148,5 +252,5 @@ def main [
         exit 1
     }
     let bytes = (open --raw CLAUDE.md | into binary | bytes length)
-    print $"check-claude-md: CLAUDE.md is ($bytes) bytes \(cap ($MAX_BYTES)\), every line within ($MAX_LINE_CHARS) characters, every docs/ link resolves"
+    print $"check-claude-md: CLAUDE.md is ($bytes) bytes \(cap ($MAX_BYTES)\), every line within ($MAX_LINE_CHARS) characters, every docs/ link resolves, every common.just release recipe is named"
 }

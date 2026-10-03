@@ -3,11 +3,12 @@
 # Create a Forgejo release when a release/v* tag is pushed, by
 # calling the reusable workflow in psa-systems/common.
 #
-# Everything the release does - deriving the tag from the branch name, building
-# the changelog, and posting to the releases API - lives in
-# psa-systems/common/.forgejo/workflows/create-release.yml. The caller keeps
-# only what Forgejo cannot read from the called workflow: the trigger,
-# `runs-on`, and `secrets: inherit`.
+# Everything the release does - deriving the version from the pushed
+# `release/v*` tag, building the changelog, and posting to the releases API -
+# lives in psa-systems/common/.forgejo/workflows/create-release.yml. The
+# caller keeps only what Forgejo cannot read from the called workflow: the
+# trigger and `secrets: inherit` (`runs-on` lives on the reusable job; see
+# below).
 #
 # Paired with the release recipes in common/common.just. `just create-release
 # <major|minor|hotfix>` pushes `release/v<version>` and opens the PR; after that
