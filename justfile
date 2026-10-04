@@ -35,7 +35,7 @@ dev_bind_sources := "secrets/oidc target bunyip-web/node_modules"
 # ahead of it.
 pre_commit_prepare := "ensure-oidc-keys"
 
-# Keep the containerized pre-commit steps identical to the ones
+# Keep the containerized pre-push steps identical to the ones
 # .forgejo/workflows/check.yml runs, so the hook and CI agree.
 clippy_args := "--workspace --all-targets -- -D warnings"
 compile_args := "--workspace --all-targets --locked"
