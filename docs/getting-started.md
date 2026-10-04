@@ -62,13 +62,14 @@ just dev-clean         # stop + drop volumes (fresh state)
 just dev-sso           # SSO overlay (real mokosh-server target)
 just dev-logs          # tail the container logs
 just check-container   # fmt + clippy + workspace tests, inside the pinned builder (no host toolchain)
-just install-hooks     # write the git pre-commit hook (once per fresh clone)
-just pre-commit        # what the hook runs: fmt + clippy + build + tests in the dev `api` container
+just install-hooks     # write the git pre-commit and pre-push hooks (re-run after a common bump to pick up a new hook)
+just pre-commit        # what the pre-commit hook runs: a fmt-only check
+just pre-push          # what the pre-push hook runs: fmt + clippy + build + tests in the dev `api` container
 just create-release minor   # bump the workspace version, branch, push, open the release PR
 just publish-release         # after the release PR merges: push the release tag the workflow releases from
 ```
 
-`install-hooks`, `pre-commit`, `create-release`, and `publish-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
+`install-hooks`, `pre-commit`, `pre-push`, `create-release`, and `publish-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
