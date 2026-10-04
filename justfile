@@ -43,6 +43,9 @@ compile_args := "--workspace --all-targets --locked"
 # bin-only and `--lib` skips its whole suite (BUNYIP-271).
 test_args := "--workspace --all-targets"
 
+# Migrations live under bunyip-api, not the repo root common defaults to.
+migrations_dir := "bunyip-api/migrations"
+
 # The root manifest is virtual and the single version lives at
 # [workspace.package] version, inherited by every member with
 # `version.workspace = true`; release_manifest stays the root default.
@@ -64,13 +67,6 @@ check: check-justfile check-migrations check-migration-immutability check-workfl
 [group: 'checks']
 check-migrations:
     ./scripts/check-migration-versions.nu
-
-# Gate migration immutability: reject edits/renames/deletes of already-committed
-# migrations, since sqlx checksums applied migrations and a deployed DB refuses
-# to boot if one changes (BUNYIP-293).
-[group: 'checks']
-check-migration-immutability:
-    ./scripts/check-migration-immutability.nu
 
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']

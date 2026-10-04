@@ -8,7 +8,7 @@ Full text of the build, CI and repo tooling conventions indexed in [`CLAUDE.md`]
 
 ## Migrations (BUNYIP-293)
 
-**Migrations** live in `bunyip-api/migrations/` and run on api startup. **Committed migrations are immutable.** sqlx checksums every applied migration in `_sqlx_migrations` and a deployed database refuses to boot once a migration's on-disk content disagrees with the recorded checksum (`migration <version> was previously applied but has been modified`). Never edit, rename, or delete a migration already on `main`: fix forward with a NEW migration file. CI enforces this via `scripts/check-migration-immutability.nu` (BUNYIP-293); `scripts/reconcile-sqlx-checksums.md` covers recovering a DB that was broken by an in-place edit.
+**Migrations** live in `bunyip-api/migrations/` and run on api startup. **Committed migrations are immutable.** sqlx checksums every applied migration in `_sqlx_migrations` and a deployed database refuses to boot once a migration's on-disk content disagrees with the recorded checksum (`migration <version> was previously applied but has been modified`). Never edit, rename, or delete a migration already on `main`: fix forward with a NEW migration file. CI and `just check` enforce this via common's shared `check-migration-immutability` recipe (PC-82), which replaced bunyip's own `scripts/check-migration-immutability.nu` (BUNYIP-293); it guards only `.sql` paths, so the migrations `README.md` can be edited (BUNYIP-458); `scripts/reconcile-sqlx-checksums.md` covers recovering a DB that was broken by an in-place edit.
 
 ## Images (BUNYIP-389, BUNYIP-558, BUNYIP-426, BUNYIP-534)
 
