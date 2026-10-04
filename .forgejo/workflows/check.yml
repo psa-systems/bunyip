@@ -103,8 +103,8 @@ jobs:
       - name: Check migration immutability
         # Reject edits/renames/deletes of already-committed migrations; sqlx
         # checksums applied migrations and a deployed DB refuses to boot if one
-        # changes. Add a new migration instead (BUNYIP-293).
-        run: ./scripts/check-migration-immutability.nu
+        # changes. Add a new migration instead. Shared recipe (PC-82).
+        run: just check-migration-immutability
 
       - name: Check PR-triggered workflows hold no credentials
         # A pull_request run executes the PR head's workflow, lifecycle scripts
