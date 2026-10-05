@@ -2798,6 +2798,37 @@ mod rate_limit_management_tests {
     }
 
     #[test]
+    fn config_row_label_wraps_at_word_boundaries_not_mid_word() {
+        // BUNYIP-873: `break-all` would split "OCI Token Throughput" mid-word
+        // under a narrow container; `break-words` only falls back to breaking
+        // a single too-long word.
+        let html =
+            rate_limit_config_card(&[cfg("oci_token_throughput", false)], None, true).into_string();
+        assert!(html.contains("OCI Token Throughput"));
+        assert!(
+            html.contains("break-words") && !html.contains("break-all"),
+            "the label wraps at word boundaries, not character-by-character: {html}"
+        );
+    }
+
+    #[test]
+    fn config_grid_and_rows_query_their_own_container_not_the_viewport() {
+        // BUNYIP-873: column count and the label/inputs split must follow the
+        // admin content area's rendered width (sidebar open or collapsed), so
+        // both use `@container` queries rather than viewport `lg:`/`md:`
+        // breakpoints.
+        let html = rate_limit_config_card(&[cfg("login", false)], None, true).into_string();
+        assert!(
+            html.contains("@5xl:grid-cols-2"),
+            "the grid switches columns by container width: {html}"
+        );
+        assert!(
+            html.contains("@container") && html.contains("@md:flex-row"),
+            "each row is its own container and reflows independently of the grid: {html}"
+        );
+    }
+
+    #[test]
     fn ban_add_card_posts_ip_reason_and_duration() {
         let html = ip_ban_add_card(None).into_string();
         assert!(html.contains(r#"action="/admin/ip-bans/add""#));

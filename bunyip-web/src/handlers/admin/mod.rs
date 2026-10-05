@@ -152,10 +152,27 @@ fn with_attachment_hardening(
         .header("Referrer-Policy", "no-referrer")
 }
 
+/// Casing overrides for words that title-case would otherwise mangle:
+/// all-caps acronyms, plus mixed-case terms like `OAuth`. Checked
+/// case-insensitively against each underscore-delimited word.
+///
+/// BUNYIP-873: shared by every `title_case` call site (rate limits, audit
+/// log, dashboard activity) so a new acronym only needs adding here.
+const WORD_CASING: &[(&str, &str)] = &[
+    ("api", "API"),
+    ("oci", "OCI"),
+    ("ip", "IP"),
+    ("smtp", "SMTP"),
+    ("oauth", "OAuth"),
+];
+
 fn title_case(action: &str) -> String {
     action
         .split('_')
         .map(|w| {
+            if let Some((_, cased)) = WORD_CASING.iter().find(|(k, _)| k.eq_ignore_ascii_case(w)) {
+                return cased.to_string();
+            }
             let mut ch = w.chars();
             match ch.next() {
                 Some(f) => f.to_uppercase().chain(ch).collect::<String>(),
@@ -164,4 +181,36 @@ fn title_case(action: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod title_case_tests {
+    use super::title_case;
+
+    #[test]
+    fn uppercases_known_acronyms() {
+        assert_eq!(title_case("api_unauth"), "API Unauth");
+        assert_eq!(title_case("oci_token_failures"), "OCI Token Failures");
+        assert_eq!(title_case("oci_token_throughput"), "OCI Token Throughput");
+        assert_eq!(title_case("oci_token_ip_failures"), "OCI Token IP Failures");
+        assert_eq!(title_case("smtp_test"), "SMTP Test");
+    }
+
+    #[test]
+    fn mixed_cases_oauth() {
+        assert_eq!(title_case("oauth_token"), "OAuth Token");
+        assert_eq!(title_case("oauth_userinfo"), "OAuth Userinfo");
+        assert_eq!(title_case("oauth_authorize"), "OAuth Authorize");
+        assert_eq!(title_case("oauth_revoke"), "OAuth Revoke");
+        assert_eq!(title_case("oauth_discovery"), "OAuth Discovery");
+    }
+
+    #[test]
+    fn leaves_plain_words_title_cased() {
+        assert_eq!(
+            title_case("two_factor_verify_failures"),
+            "Two Factor Verify Failures"
+        );
+        assert_eq!(title_case("login"), "Login");
+    }
 }
