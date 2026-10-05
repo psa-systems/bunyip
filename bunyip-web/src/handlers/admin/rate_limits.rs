@@ -106,11 +106,18 @@ pub(super) fn fmt_window_secs(secs: i64) -> String {
 /// `editable` is the super-admin flag: everybody else sees the same numbers as
 /// plain text, since the API would refuse their write anyway.
 fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
+    // BUNYIP-873: `@container` makes this row query its OWN rendered width
+    // rather than the viewport, so the label/inputs split reflows correctly
+    // whether the grid below is one or two columns wide and whatever the
+    // admin sidebar is doing. `break-words` (not `break-all`) only breaks a
+    // single word too long for the column; normal word-boundary wrapping
+    // handles everything else, and `min-w-[11rem]` keeps the label from
+    // being squeezed to a few characters per line beside the inputs.
     html! {
-        div class="flex items-start justify-between gap-4 py-4 border-b last:border-0" {
-            div class="min-w-0" {
+        div class="@container flex flex-col gap-3 py-4 border-b last:border-0 @md:flex-row @md:items-start @md:justify-between" {
+            div class="min-w-0 @md:min-w-[11rem] @md:flex-1" {
                 div class="flex items-center gap-2 flex-wrap" {
-                    p class="font-medium break-all" { (title_case(&cfg.action)) }
+                    p class="font-medium break-words" { (title_case(&cfg.action)) }
                     @if cfg.overridden { (badge("warning", "Overridden")) } @else { (badge("secondary", "Default")) }
                 }
                 p class="text-xs text-muted-foreground" {
@@ -122,8 +129,8 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
                 }
             }
             @if editable {
-                div class="flex items-end gap-2 shrink-0" {
-                    form method="post" action="/admin/rate-limits/config" class="flex items-end gap-2" {
+                div class="flex items-end gap-2 flex-wrap @md:shrink-0 @md:flex-nowrap" {
+                    form method="post" action="/admin/rate-limits/config" class="flex items-end gap-2 flex-wrap" {
                         input type="hidden" name="action" value=(cfg.action);
                         div class="space-y-1" { label for=(format!("max_requests-{}", cfg.action)) class="text-xs text-muted-foreground" { "Requests" } input id=(format!("max_requests-{}", cfg.action)) name="max_requests" type="number" min="1" max=(MAX_LIMIT_REQUESTS) value=(cfg.max_requests) class=(format!("{} w-28", dashboard_input())); }
                         div class="space-y-1" { label for=(format!("window_seconds-{}", cfg.action)) class="text-xs text-muted-foreground" { "Window (s)" } input id=(format!("window_seconds-{}", cfg.action)) name="window_seconds" type="number" min="1" max=(MAX_LIMIT_WINDOW_SECS) value=(cfg.window_seconds) class=(format!("{} w-28", dashboard_input())); }
@@ -167,7 +174,11 @@ pub(super) fn rate_limit_config_card(
                 @if let Some(e) = error {
                     (error_box_for("Could not reach the API to load the limit configuration.", e))
                 } @else {
-                    div class="grid gap-x-8 lg:grid-cols-2" { @for cfg in configs { (rate_limit_config_row(cfg, editable)) } }
+                    // BUNYIP-873: `@5xl` queries the page's content-area container
+                    // (declared in `rate_limits` below), not the viewport, so the
+                    // column count follows the main area's actual width whether
+                    // the admin sidebar is showing or not.
+                    div class="grid gap-x-8 @5xl:grid-cols-2" { @for cfg in configs { (rate_limit_config_row(cfg, editable)) } }
                 }
             }
         }
@@ -200,7 +211,11 @@ pub async fn rate_limits(
     };
 
     let content = html! {
-        div class="space-y-6" {
+        // BUNYIP-873: `@container` turns this into the query context both
+        // grids below size themselves against, so column counts follow the
+        // admin main area's actual rendered width (sidebar open or
+        // collapsed) rather than the raw viewport.
+        div class="@container space-y-6" {
             div { h1 class="text-3xl font-bold" { "Rate Limits" } p class="mt-2 text-muted-foreground" { "Entities currently throttled by a rate limit. Resetting a throttle lets the affected user or IP act again immediately." } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
@@ -214,9 +229,11 @@ pub async fn rate_limits(
                         (empty_state("gauge", "No active rate limits.", None))
                     } @else {
                         // BUNYIP-415: flow throttle rows into two columns (one
-                        // below lg) so a long list uses the width. Each row keeps
-                        // its own bottom-border separator.
-                        div class="grid gap-x-8 lg:grid-cols-2" { @for rl in &items { (rate_limit_row(rl, None)) } }
+                        // below the content area's width) so a long list uses the
+                        // width. Each row keeps its own bottom-border separator.
+                        // BUNYIP-873: `@5xl` queries the `@container` above, not
+                        // the viewport.
+                        div class="grid gap-x-8 @5xl:grid-cols-2" { @for rl in &items { (rate_limit_row(rl, None)) } }
                         (pager("/admin/rate-limits", "page", page, total_pages))
                     }
                 }
