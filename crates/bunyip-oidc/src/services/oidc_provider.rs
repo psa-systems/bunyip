@@ -1020,7 +1020,7 @@ impl OidcProvider {
             old.op_session_idle_expires_at,
             now,
         )
-        .map_err(|e| AppError::OidcInvalidGrant(e.to_string().into()))?;
+        .map_err(|e| AppError::OidcInvalidGrant(e.to_string()))?;
 
         // Scope narrowing only.
         let mut effective_scope: Vec<String> = match requested_scope {
