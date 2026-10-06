@@ -24,7 +24,11 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
     let apps = data.unwrap_or_default();
 
     let content = html! {
-        div class="space-y-6" {
+        // BUNYIP-873: `@container` turns this into the query context the
+        // grid below sizes itself against, so the column count follows the
+        // admin main area's actual rendered width (sidebar open or
+        // collapsed) rather than the raw viewport.
+        div class="@container space-y-6" {
             div { h1 class="text-3xl font-bold" { "Entitlements" } p class="mt-2 text-muted-foreground" { "Control which applications require a per-product entitlement to access." } }
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { "Products" } p class="text-sm text-muted-foreground" { "Restricted products are only available to users who have been granted an entitlement." } }
@@ -35,8 +39,10 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
                         (empty_state("package", "No applications.", None))
                     } @else {
                         // BUNYIP-415: flow product rows into two columns (one
-                        // below lg) so the catalog uses the width.
-                        div class="grid gap-x-8 lg:grid-cols-2" {
+                        // below the content area's width) so the catalog uses
+                        // the width. BUNYIP-873: `@5xl` queries the
+                        // `@container` above, not the viewport.
+                        div class="grid gap-x-8 @5xl:grid-cols-2" {
                             @for app in &apps {
                                 div class="py-3 flex items-center justify-between gap-4 border-b last:border-0" {
                                     div {
