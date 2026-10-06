@@ -360,7 +360,7 @@ pub(super) fn application_form(
                         div class="space-y-4" {
                             div class="flex items-start gap-3" {
                                 (toggle_switch_field("is_hosted", "is_hosted", is_hosted, "Hosted app"))
-                                div { span class="text-sm font-medium" { "Hosted app" } p class="text-xs font-normal text-muted-foreground" { "On: shows as a launchable hub tile. Off: catalog-only distribution product (downloads / OCI pulls only)." } }
+                                div { label for="is_hosted" class="text-sm font-medium" { "Hosted app" } p class="text-xs font-normal text-muted-foreground" { "On: shows as a launchable hub tile. Off: catalog-only distribution product (downloads / OCI pulls only)." } }
                             }
                             (details_fields(details))
                         }

@@ -288,7 +288,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
             }))
             div class="flex items-center space-x-2" {
                 (toggle_switch_field("remember", "remember", false, "Remember me for 30 days"))
-                span class="text-sm font-normal" { "Remember me for 30 days" }
+                label for="remember" class="text-sm font-normal" { "Remember me for 30 days" }
             }
             button type="submit" class=(button_class("default", "default", "w-full")) { "Sign in" }
         }
