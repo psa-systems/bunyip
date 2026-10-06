@@ -560,8 +560,8 @@ mod rate_limit_tests {
 
     #[test]
     fn users_panel_shows_count_filter_bar_and_sortable_headers() {
-        let panel =
-            super::users_panel(&q("active", "lifetime", "", ""), None, Some(13)).into_string();
+        let panel = super::users_panel(&q("active", "lifetime", "", ""), None, Some(13), None)
+            .into_string();
         // Panel is the htmx swap target.
         assert!(panel.contains(r#"id="users-panel""#));
         // Segmented control + sortable headers present.
@@ -570,6 +570,31 @@ mod rate_limit_tests {
         // An active tier filter renders a removable chip + Clear all.
         assert!(panel.contains("Tier: Lifetime"));
         assert!(panel.contains("Clear all"));
+    }
+
+    // BUNYIP-880: a failed list fetch renders the real `ApiError` through
+    // `error_box_for`, not a bare unstyled string.
+    #[test]
+    fn users_panel_shows_error_box_for_on_fetch_failure() {
+        let err = crate::api::ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "Failed to list users".into(),
+            retry_after: None,
+            request_id: Some("req_users123".into()),
+            bucket: None,
+        };
+        let panel =
+            super::users_panel(&q("active", "", "", ""), None, Some(13), Some(&err)).into_string();
+        assert!(
+            !panel.contains("Could not load users"),
+            "the old bare fallback strings must be gone"
+        );
+        assert!(
+            panel.contains("Could not reach the API to load users."),
+            "error_box_for headline shown"
+        );
+        assert!(panel.contains("req_users123"), "request id surfaced");
     }
 
     #[test]
