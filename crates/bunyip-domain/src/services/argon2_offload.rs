@@ -60,7 +60,10 @@ pub async fn hash_password(password: String) -> Result<String, AppError> {
 
 /// Verify a password against a stored hash on the blocking pool.
 pub async fn verify_password(password: String, hash: String) -> Result<bool, AppError> {
-    offload("verify", move || PasswordService::new().verify(&password, &hash)).await
+    offload("verify", move || {
+        PasswordService::new().verify(&password, &hash)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -75,15 +78,19 @@ mod tests {
 
     #[tokio::test]
     async fn offload_lets_the_inner_error_pass_through() {
-        let out: Result<u8, AppError> =
-            offload("test-err", || Err::<u8, AppError>(AppError::internal("boom"))).await;
+        let out: Result<u8, AppError> = offload("test-err", || {
+            Err::<u8, AppError>(AppError::internal("boom"))
+        })
+        .await;
         assert!(matches!(out, Err(AppError::InternalError { .. })));
     }
 
     #[tokio::test]
     async fn hash_and_verify_round_trip() {
         let hash = hash_password("pw".to_string()).await.unwrap();
-        assert!(verify_password("pw".to_string(), hash.clone()).await.unwrap());
+        assert!(verify_password("pw".to_string(), hash.clone())
+            .await
+            .unwrap());
         assert!(!verify_password("wrong".to_string(), hash).await.unwrap());
     }
 
