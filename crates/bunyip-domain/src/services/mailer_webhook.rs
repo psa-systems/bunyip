@@ -149,7 +149,7 @@ mod tests {
     const SECRET: &str = "shared-feedback-secret";
 
     // Test-local HMAC helper for building a valid signature. The production
-    // path never touches hmac directly — it goes through
+    // path never touches hmac directly: it goes through
     // `dunite_webhook::inbound::verify_signature` via the shim above.
     type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
