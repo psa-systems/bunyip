@@ -124,7 +124,9 @@ dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a
 # DEV-526: bunyip-api consumes dunite-core directly for the Origin/Referer CSRF
 # guard (`dunite_core::middleware::OriginGuard`), wired in main.rs. Same rev as
 # the dunite-core graph in bunyip-domain/oci/oidc.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# Wave 1 bump: moves with the dunite-core graph in bunyip-domain/oci/oidc so
+# every crate shares one AppError type after the bump.
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
 # DEV-530: the self-hosted update checker (polls Forgejo releases/latest, semver
 # compare, TTL cache), extracted from version.rs. Leaf crate, pins independently.
 dunite-update-check = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }

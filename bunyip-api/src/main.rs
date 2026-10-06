@@ -38,7 +38,7 @@ use bunyip_api::{
     version::UpdateChecker,
 };
 use bunyip_oci::{
-    middleware::OciWwwAuthenticate,
+    middleware::WwwAuthenticate,
     repositories::{OciBlobCacheRepository, OciPullDailyCountRepository},
     services::{BlobCache, ForgejoRegistryClient, ManifestCache, OciLimiter, OciTokenService},
 };
@@ -1431,9 +1431,12 @@ async fn main() -> anyhow::Result<()> {
                 // (no extra allowlist origins) is correct here.
                 .wrap(SecurityHeaders::new())
                 .wrap(RequestIdMiddleware)
-                .wrap(OciWwwAuthenticate {
-                    cfg: std::sync::Arc::new(cfg_oci.clone()),
-                })
+                // DUNITE-21: generic WWW-Authenticate middleware, driven
+                // directly off OciConfig's two interpolated strings.
+                .wrap(WwwAuthenticate::new(
+                    cfg_oci.realm_url(),
+                    cfg_oci.service.clone(),
+                ))
                 .app_data(web::Data::new(pool_oci.clone()))
                 // Raw Arc for the OciBearerUser extractor
                 .app_data(ots.clone())

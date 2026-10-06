@@ -13,7 +13,10 @@ workspace = true
 [dependencies]
 bunyip-domain = { path = "../bunyip-domain" }
 # Generic read-through OCI registry engine (consumer provides store traits + HTTP wiring).
-dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# Wave 1 bump: 8617fc8 adds `errors::context::{OciErrorContext, internal_fault}`
+# (DUNITE-19) and `middleware::WwwAuthenticate` (DUNITE-21), both of which this
+# crate used to carry locally. The local copies come out below.
+dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
 
 actix-web = "4"
 async-trait = "0.1"
