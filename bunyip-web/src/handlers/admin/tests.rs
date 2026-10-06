@@ -3120,3 +3120,62 @@ mod row_list_container_query_tests {
         );
     }
 }
+
+mod toggle_switch_field_label_tests {
+    // BUNYIP-882: these call sites paired toggle_switch_field with a bare
+    // text node or a non-label span/p, so clicking the visible name did not
+    // toggle the switch (unlike auto_ban_settings.rs and email_config.rs,
+    // which already wrap their companion text in label for=id). Source-scan
+    // (rather than the rendered HTML, which needs a mocked AppState for some
+    // of these async handlers) so a reintroduced bare text node fails the
+    // build.
+    const SYSTEM_CONFIG_SRC: &str = include_str!("system_config.rs");
+    const TIER_SETTINGS_SRC: &str = include_str!("tier_settings.rs");
+    const USERS_SRC: &str = include_str!("users.rs");
+    const BILLING_PAGE_SRC: &str = include_str!("stripe.rs");
+    const APPLICATIONS_SRC: &str = include_str!("applications.rs");
+
+    #[test]
+    fn system_config_toggle_field_helper_labels_its_text() {
+        assert!(
+            SYSTEM_CONFIG_SRC.contains(r#"label for=(id) class="text-sm font-medium" { (label) }"#),
+            "toggle_field's companion text must be a label for=(id), not a bare (label) node"
+        );
+    }
+
+    #[test]
+    fn tier_settings_orgs_toggle_text_is_labelled() {
+        assert!(
+            TIER_SETTINGS_SRC.contains(r#"label for="orgs_enabled""#),
+            "the organizations toggle's companion text must be a label for=\"orgs_enabled\""
+        );
+    }
+
+    #[test]
+    fn users_email_verified_toggle_text_is_labelled() {
+        assert!(
+            USERS_SRC.contains(r#"label for="admin-email-verified""#),
+            "the email-verified toggle's companion text must be a label for=\"admin-email-verified\""
+        );
+    }
+
+    #[test]
+    fn stripe_tier_visibility_and_pricing_toggle_text_is_labelled() {
+        assert!(
+            BILLING_PAGE_SRC.contains("label for=(visible_name)"),
+            "the per-tier visibility toggle's companion text must be a label for=(visible_name)"
+        );
+        assert!(
+            BILLING_PAGE_SRC.contains(r#"label for="pricing_enabled""#),
+            "the public pricing toggle's companion text must be a label for=\"pricing_enabled\""
+        );
+    }
+
+    #[test]
+    fn applications_hosted_toggle_text_is_labelled() {
+        assert!(
+            APPLICATIONS_SRC.contains(r#"label for="is_hosted""#),
+            "the hosted-app toggle's companion text must be a label for=\"is_hosted\", not a bare span"
+        );
+    }
+}

@@ -139,7 +139,7 @@ pub(super) fn tier_settings_content(
                             html! {
                                 div class="flex items-center gap-3 text-sm font-medium" {
                                     (toggle_switch_field("orgs_enabled", "orgs_enabled", values.orgs_enabled, "Enable organizations and teams"))
-                                    "Enable organizations and teams"
+                                    label for="orgs_enabled" class="text-sm font-medium" { "Enable organizations and teams" }
                                 }
                             },
                         ))

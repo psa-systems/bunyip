@@ -27,7 +27,7 @@ fn toggle_field(id: &str, label: &str, on: bool, provenance: Markup) -> Markup {
         div class="space-y-2" {
             div class="flex items-center gap-3 text-sm font-medium" {
                 (toggle_switch_field(id, id, on, label))
-                (label)
+                label for=(id) class="text-sm font-medium" { (label) }
             }
             (provenance)
         }
