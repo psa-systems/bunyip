@@ -1828,3 +1828,20 @@ mod autofocus_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod toggle_switch_field_label_tests {
+    // BUNYIP-882: the "Remember me" toggle paired toggle_switch_field with a
+    // bare span, so clicking the word did nothing. Source-scan (rather than
+    // the rendered HTML, since login_content needs a mocked request) so a
+    // regression back to a non-label wrapper fails the build.
+    const SRC: &str = include_str!("auth_pages.rs");
+
+    #[test]
+    fn remember_me_text_is_wrapped_in_a_label_for_the_toggle() {
+        assert!(
+            SRC.contains(r#"label for="remember""#),
+            "the \"Remember me\" toggle's companion text must be a label for=\"remember\", not a bare span"
+        );
+    }
+}
