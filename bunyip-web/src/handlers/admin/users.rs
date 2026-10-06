@@ -1188,7 +1188,7 @@ pub async fn user_detail(
                         }
                         div class="flex items-center gap-2 text-sm text-muted-foreground" {
                             (toggle_switch_field("admin-email-verified", "verified", false, "Mark this address verified"))
-                            "Mark this address verified (leave off to require the user to re-verify)"
+                            label for="admin-email-verified" { "Mark this address verified (leave off to require the user to re-verify)" }
                         }
                     }
                     div class="flex flex-wrap gap-2" {

@@ -712,7 +712,7 @@ pub(super) fn stripe_catalog_section(
                 // the public page even when mapped, under the global switch above.
                 div class="flex items-center gap-2 pt-1 text-sm font-medium" {
                     (toggle_switch_field(visible_name, visible_name, visible, "Show this tier on the pricing page"))
-                    "Show this tier on the pricing page"
+                    label for=(visible_name) class="text-sm font-medium" { "Show this tier on the pricing page" }
                 }
             }
         }
@@ -749,7 +749,7 @@ pub(super) fn stripe_catalog_section(
                                     (pricing_status_block(status))
                                     div class="flex items-center gap-3 text-sm font-medium" {
                                         (toggle_switch_field("pricing_enabled", "pricing_enabled", pricing_enabled, "Show pricing on the public page"))
-                                        "Show pricing on the public page"
+                                        label for="pricing_enabled" class="text-sm font-medium" { "Show pricing on the public page" }
                                     }
                                 }
                             },

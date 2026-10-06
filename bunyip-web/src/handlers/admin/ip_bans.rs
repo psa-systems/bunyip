@@ -180,7 +180,11 @@ pub async fn ip_bans(
     };
 
     let content = html! {
-        div class="space-y-6" {
+        // BUNYIP-873: `@container` turns this into the query context the
+        // grid below sizes itself against, so the column count follows the
+        // admin main area's actual rendered width (sidebar open or
+        // collapsed) rather than the raw viewport.
+        div class="@container space-y-6" {
             div { h1 class="text-3xl font-bold" { "IP Bans" } p class="mt-2 text-muted-foreground" { "IP addresses banned for abusive request patterns, automatically or by hand. Adding or lifting a ban takes effect on the address's next request." } }
             @if let (Some(ip), Some(e)) = (looked_up_ip, &enrichment) { (ip_enrichment_panel(ip, e)) }
             @if user.is_super_admin { (ip_ban_add_card(q.ip.as_deref())) }
@@ -195,10 +199,12 @@ pub async fn ip_bans(
                     } @else if bans.is_empty() {
                         (empty_state("shield-off", "No active IP bans.", None))
                     } @else {
-                        // BUNYIP-415: flow ban rows into two columns (one below
-                        // lg) so the list uses the width instead of a single
-                        // narrow stack.
-                        div class="grid gap-x-8 lg:grid-cols-2" { @for b in &bans { (ip_ban_row(b)) } }
+                        // BUNYIP-415: flow ban rows into two columns (one
+                        // below the content area's width) so the list uses
+                        // the width instead of a single narrow stack.
+                        // BUNYIP-873: `@5xl` queries the `@container` above,
+                        // not the viewport.
+                        div class="grid gap-x-8 @5xl:grid-cols-2" { @for b in &bans { (ip_ban_row(b)) } }
                     }
                 }
             }

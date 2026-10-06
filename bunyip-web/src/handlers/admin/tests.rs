@@ -781,8 +781,9 @@ mod two_column_layout_tests {
     // BUNYIP-415: the SSR analog of a wide/narrow visual-regression check is to
     // assert the responsive two-column grid class (two columns at `lg`, one
     // below) is present and that no fields were dropped when regrouping into
-    // blocks. The list-screen conversions (rate limits, IP bans, entitlements)
-    // reuse the same `lg:grid-cols-2` wrapper and are verified via screenshots.
+    // blocks. These `admin_block_grid` form-block conversions stay on `lg:`;
+    // the row-list-flow screens (rate limits, IP bans, entitlements) query
+    // their own `@container` instead (BUNYIP-873, BUNYIP-881).
     use super::*;
 
     #[test]
@@ -3109,5 +3110,97 @@ mod feature_toggle_page_tests {
         assert!(down.contains(&err.request_id.clone().unwrap()));
         let empty = feature_toggles_content(&[], None, true).into_string();
         assert!(empty.contains("No feature toggles."));
+    }
+}
+
+#[cfg(test)]
+mod row_list_container_query_tests {
+    // BUNYIP-881: entitlements and IP bans had the same row-list-flow grid
+    // role as rate limits (BUNYIP-873) but were left on viewport `lg:`,
+    // which does not track the admin content area's actual rendered width.
+    // Source-scan both files directly (rather than the rendered HTML, which
+    // needs a mocked AppState for these async handlers) so a reintroduced
+    // `lg:grid-cols-2` fails the build.
+    const ENTITLEMENTS_SRC: &str = include_str!("entitlements.rs");
+    const IP_BANS_SRC: &str = include_str!("ip_bans.rs");
+
+    #[test]
+    fn entitlements_and_ip_bans_row_grids_query_their_own_container_not_the_viewport() {
+        assert!(
+            !ENTITLEMENTS_SRC.contains("lg:grid-cols-2"),
+            "entitlements.rs must not reintroduce a viewport-gated row grid"
+        );
+        assert!(
+            ENTITLEMENTS_SRC.contains("@container")
+                && ENTITLEMENTS_SRC.contains("@5xl:grid-cols-2"),
+            "entitlements.rs's row grid must query its @container ancestor"
+        );
+        assert!(
+            !IP_BANS_SRC.contains("lg:grid-cols-2"),
+            "ip_bans.rs must not reintroduce a viewport-gated row grid"
+        );
+        assert!(
+            IP_BANS_SRC.contains("@container") && IP_BANS_SRC.contains("@5xl:grid-cols-2"),
+            "ip_bans.rs's row grid must query its @container ancestor"
+        );
+    }
+}
+
+mod toggle_switch_field_label_tests {
+    // BUNYIP-882: these call sites paired toggle_switch_field with a bare
+    // text node or a non-label span/p, so clicking the visible name did not
+    // toggle the switch (unlike auto_ban_settings.rs and email_config.rs,
+    // which already wrap their companion text in label for=id). Source-scan
+    // (rather than the rendered HTML, which needs a mocked AppState for some
+    // of these async handlers) so a reintroduced bare text node fails the
+    // build.
+    const SYSTEM_CONFIG_SRC: &str = include_str!("system_config.rs");
+    const TIER_SETTINGS_SRC: &str = include_str!("tier_settings.rs");
+    const USERS_SRC: &str = include_str!("users.rs");
+    const BILLING_PAGE_SRC: &str = include_str!("stripe.rs");
+    const APPLICATIONS_SRC: &str = include_str!("applications.rs");
+
+    #[test]
+    fn system_config_toggle_field_helper_labels_its_text() {
+        assert!(
+            SYSTEM_CONFIG_SRC.contains(r#"label for=(id) class="text-sm font-medium" { (label) }"#),
+            "toggle_field's companion text must be a label for=(id), not a bare (label) node"
+        );
+    }
+
+    #[test]
+    fn tier_settings_orgs_toggle_text_is_labelled() {
+        assert!(
+            TIER_SETTINGS_SRC.contains(r#"label for="orgs_enabled""#),
+            "the organizations toggle's companion text must be a label for=\"orgs_enabled\""
+        );
+    }
+
+    #[test]
+    fn users_email_verified_toggle_text_is_labelled() {
+        assert!(
+            USERS_SRC.contains(r#"label for="admin-email-verified""#),
+            "the email-verified toggle's companion text must be a label for=\"admin-email-verified\""
+        );
+    }
+
+    #[test]
+    fn stripe_tier_visibility_and_pricing_toggle_text_is_labelled() {
+        assert!(
+            BILLING_PAGE_SRC.contains("label for=(visible_name)"),
+            "the per-tier visibility toggle's companion text must be a label for=(visible_name)"
+        );
+        assert!(
+            BILLING_PAGE_SRC.contains(r#"label for="pricing_enabled""#),
+            "the public pricing toggle's companion text must be a label for=\"pricing_enabled\""
+        );
+    }
+
+    #[test]
+    fn applications_hosted_toggle_text_is_labelled() {
+        assert!(
+            APPLICATIONS_SRC.contains(r#"label for="is_hosted""#),
+            "the hosted-app toggle's companion text must be a label for=\"is_hosted\", not a bare span"
+        );
     }
 }
