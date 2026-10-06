@@ -8,220 +8,37 @@
 //!
 //! The suppression check runs BEFORE anything is handed to the transport. The
 //! list is the shared `mailer_suppressions` table ([`DbSuppressionList`]), fed
-//! by the bounce/complaint feedback webhook (BUNYIP-603). [`NoSuppression`] is
-//! kept for the deployments and tests that relay without a suppression store.
+//! by the bounce/complaint feedback webhook (BUNYIP-603).
+//!
+//! The suppression trait, the reason enum, the no-suppression zero-impl, the
+//! validated `RelayMessage` type and the outcome enum now live in the shared
+//! `dunite_mailer` leaf (DUNITE-24). This file keeps the two pieces that tie
+//! those generic primitives to bunyip's own transport and schema:
+//!
+//! - [`DbSuppressionList`] - adapter that implements `dunite_mailer::SuppressionList`
+//!   over `MailerSuppressionRepository` on the `mailer_suppressions` table.
+//! - [`MailerRelay`] - the three-line orchestration that composes the trait
+//!   with `EmailService::send_relay`.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dunite_mailer::{RelayMessage, RelayOutcome, SuppressionError, SuppressionList, SuppressionReason};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
 use crate::repositories::MailerSuppressionRepository;
 use crate::services::EmailService;
 
-/// Longest accepted subject. RFC 5322 §2.1.1 caps an unfolded header line at
-/// 998 octets; the rest of the line is the `Subject: ` prefix.
-pub const MAX_SUBJECT_LEN: usize = 900;
-
-/// Longest accepted body, per part. Bounds what one relayed request can push
-/// through the transport; well above any transactional message.
-pub const MAX_BODY_LEN: usize = 256 * 1024;
-
-/// Longest accepted recipient address (RFC 5321 §4.5.3.1.3).
-pub const MAX_ADDRESS_LEN: usize = 256;
-
-/// A validated, compose-ready message accepted by the relay.
-///
-/// Constructing one is the only way to reach [`MailerRelay::relay`], so every
-/// relayed message has been through [`RelayMessage::new`]'s checks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RelayMessage {
-    pub to: String,
-    pub subject: String,
-    pub text: String,
-    pub html: Option<String>,
-}
-
-impl RelayMessage {
-    /// Validate a caller-supplied message.
-    ///
-    /// Rejects header injection outright: a CR or LF anywhere in the recipient
-    /// or the subject would let a caller append its own headers (a second
-    /// `Bcc:`, a forged `From:`) to a message sent from Bunyip's own verified
-    /// domain, so those characters are refused rather than stripped.
-    pub fn new(to: &str, subject: &str, text: &str, html: Option<&str>) -> Result<Self, AppError> {
-        let to = to.trim();
-        let subject = subject.trim();
-
-        if to.is_empty() {
-            return Err(AppError::validation(
-                "to",
-                "A recipient address is required",
-            ));
-        }
-        if to.len() > MAX_ADDRESS_LEN {
-            return Err(AppError::validation(
-                "to",
-                format!("Recipient address exceeds {MAX_ADDRESS_LEN} characters"),
-            ));
-        }
-        if has_header_break(to) {
-            return Err(AppError::validation(
-                "to",
-                "Recipient address must not contain line breaks",
-            ));
-        }
-        // One recipient per request: the relay is transactional, and a comma
-        // list would let one call fan out to an address set the audit line does
-        // not name.
-        if to.contains(',') {
-            return Err(AppError::validation(
-                "to",
-                "Exactly one recipient address per request",
-            ));
-        }
-
-        if subject.is_empty() {
-            return Err(AppError::validation("subject", "A subject is required"));
-        }
-        if subject.chars().count() > MAX_SUBJECT_LEN {
-            return Err(AppError::validation(
-                "subject",
-                format!("Subject exceeds {MAX_SUBJECT_LEN} characters"),
-            ));
-        }
-        if has_header_break(subject) {
-            return Err(AppError::validation(
-                "subject",
-                "Subject must not contain line breaks",
-            ));
-        }
-
-        if text.trim().is_empty() {
-            return Err(AppError::validation(
-                "text",
-                "A plain-text body is required",
-            ));
-        }
-        if text.len() > MAX_BODY_LEN {
-            return Err(AppError::validation(
-                "text",
-                format!("Body exceeds {MAX_BODY_LEN} bytes"),
-            ));
-        }
-        if let Some(html) = html {
-            if html.len() > MAX_BODY_LEN {
-                return Err(AppError::validation(
-                    "html",
-                    format!("HTML body exceeds {MAX_BODY_LEN} bytes"),
-                ));
-            }
-        }
-
-        Ok(Self {
-            to: to.to_string(),
-            subject: subject.to_string(),
-            text: text.to_string(),
-            html: html.filter(|h| !h.trim().is_empty()).map(str::to_string),
-        })
-    }
-}
-
-/// Whether `value` carries a CR or LF, i.e. can break out of its header.
-fn has_header_break(value: &str) -> bool {
-    value.contains('\r') || value.contains('\n')
-}
-
-/// What the relay did with a message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RelayOutcome {
-    /// Handed to the transport; carries the bare Message-ID.
-    Sent { message_id: String },
-    /// Not sent: the recipient is on the suppression list.
-    Suppressed,
-}
-
-/// Why a recipient address is on the suppression list. A hard bounce (the
-/// address does not exist / permanently rejected) and a spam complaint (the
-/// recipient marked the mail as junk) are the two feedback signals that must
-/// stop future sends to protect the shared sending domain's reputation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SuppressionReason {
-    Bounce,
-    Complaint,
-}
-
-impl SuppressionReason {
-    /// The stored / logged token. Also the wire value the feedback webhook
-    /// accepts, so the same word round-trips in and out.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SuppressionReason::Bounce => "bounce",
-            SuppressionReason::Complaint => "complaint",
-        }
-    }
-
-    /// Parse the webhook's `event` field. An unrecognised value is rejected
-    /// rather than defaulted, so a malformed feedback event never silently
-    /// suppresses an address under the wrong reason.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_lowercase().as_str() {
-            "bounce" => Some(SuppressionReason::Bounce),
-            "complaint" => Some(SuppressionReason::Complaint),
-            _ => None,
-        }
-    }
-}
-
-/// Addresses the relay must not send to, plus the write path that fills it.
-///
-/// The read half ([`Self::is_suppressed`]) runs on every relay; the write half
-/// ([`Self::suppress`]) is fed by the bounce/complaint webhook (BUNYIP-603).
-/// One trait so an in-memory fake can back both halves in a DB-free test.
-#[async_trait]
-pub trait SuppressionList: Send + Sync {
-    /// Whether `address` must not be relayed to. An error here is NOT a
-    /// suppression decision: the caller surfaces it rather than guessing, so a
-    /// broken list never silently turns into "send everything".
-    async fn is_suppressed(&self, address: &str) -> Result<bool, AppError>;
-
-    /// Record `address` as suppressed for `reason`, keeping the provider's own
-    /// `detail` for later inspection. Idempotent on the address.
-    async fn suppress(
-        &self,
-        address: &str,
-        reason: SuppressionReason,
-        detail: Option<&str>,
-    ) -> Result<(), AppError>;
-}
-
-/// A relay with no suppression store: nothing is suppressed and a recorded
-/// suppression is a no-op. Kept for tests and for a deployment that relays
-/// without wiring the shared list.
-pub struct NoSuppression;
-
-#[async_trait]
-impl SuppressionList for NoSuppression {
-    async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
-        Ok(false)
-    }
-
-    async fn suppress(
-        &self,
-        _address: &str,
-        _reason: SuppressionReason,
-        _detail: Option<&str>,
-    ) -> Result<(), AppError> {
-        Ok(())
-    }
-}
-
 /// The production suppression list: the shared `mailer_suppressions` table.
 ///
-/// Both halves delegate to [`MailerSuppressionRepository`], which normalizes the
-/// address, so the read on the send path and the write on the webhook path fold
-/// case identically and can never disagree on what "the same address" is.
+/// Thin adapter around [`MailerSuppressionRepository`]. The repository returns
+/// `AppError` for its own admin-surface uses (`count`, `list`, `delete`), and
+/// its `is_suppressed` / `upsert` methods stay returning `AppError` because
+/// bunyip's own code paths want them that way; this impl adapts those to the
+/// leaf-owned [`SuppressionError`] the trait requires (DEV-515). Both halves
+/// go through the repository's `normalize_address` so the send-path read and
+/// the webhook-path write fold case identically.
 pub struct DbSuppressionList {
     pool: PgPool,
 }
@@ -234,8 +51,10 @@ impl DbSuppressionList {
 
 #[async_trait]
 impl SuppressionList for DbSuppressionList {
-    async fn is_suppressed(&self, address: &str) -> Result<bool, AppError> {
-        MailerSuppressionRepository::is_suppressed(&self.pool, address).await
+    async fn is_suppressed(&self, address: &str) -> Result<bool, SuppressionError> {
+        MailerSuppressionRepository::is_suppressed(&self.pool, address)
+            .await
+            .map_err(|e| SuppressionError::Unavailable(e.to_string()))
     }
 
     async fn suppress(
@@ -243,8 +62,10 @@ impl SuppressionList for DbSuppressionList {
         address: &str,
         reason: SuppressionReason,
         detail: Option<&str>,
-    ) -> Result<(), AppError> {
-        MailerSuppressionRepository::upsert(&self.pool, address, reason.as_str(), detail).await
+    ) -> Result<(), SuppressionError> {
+        MailerSuppressionRepository::upsert(&self.pool, address, reason.as_str(), detail)
+            .await
+            .map_err(|e| SuppressionError::Unavailable(e.to_string()))
     }
 }
 
@@ -261,12 +82,23 @@ impl MailerRelay {
 
     /// Relay `message` on behalf of `client_name`, which is logged so a
     /// delivery can be attributed to the app that asked for it.
+    ///
+    /// A broken suppression store surfaces as [`AppError::internal`]: this is
+    /// the invariant [`SuppressionList::is_suppressed`] documents (never
+    /// silently turn a store failure into "not suppressed"). The three
+    /// classified `SuppressionError` variants are collapsed to one internal
+    /// error here so no store-shape detail leaks to the caller.
     pub async fn relay(
         &self,
         message: &RelayMessage,
         client_name: &str,
     ) -> Result<RelayOutcome, AppError> {
-        if self.suppression.is_suppressed(&message.to).await? {
+        let is_suppressed = self
+            .suppression
+            .is_suppressed(&message.to)
+            .await
+            .map_err(|e| AppError::internal(format!("Suppression store unavailable: {e}")))?;
+        if is_suppressed {
             tracing::warn!(
                 client = %client_name,
                 "mailer relay skipped: recipient is suppressed"
@@ -297,6 +129,7 @@ impl MailerRelay {
 mod tests {
     use super::*;
     use crate::config::{EmailConfig, SmtpTls};
+    use dunite_mailer::NoSuppression;
 
     fn relay_config() -> EmailConfig {
         EmailConfig {
@@ -328,7 +161,7 @@ mod tests {
 
     #[async_trait]
     impl SuppressionList for SuppressAll {
-        async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
+        async fn is_suppressed(&self, _address: &str) -> Result<bool, SuppressionError> {
             Ok(true)
         }
 
@@ -337,7 +170,7 @@ mod tests {
             _address: &str,
             _reason: SuppressionReason,
             _detail: Option<&str>,
-        ) -> Result<(), AppError> {
+        ) -> Result<(), SuppressionError> {
             Ok(())
         }
     }
@@ -347,8 +180,10 @@ mod tests {
 
     #[async_trait]
     impl SuppressionList for BrokenList {
-        async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
-            Err(AppError::internal("suppression store unavailable"))
+        async fn is_suppressed(&self, _address: &str) -> Result<bool, SuppressionError> {
+            Err(SuppressionError::Unavailable(
+                "suppression store unavailable".to_string(),
+            ))
         }
 
         async fn suppress(
@@ -356,8 +191,10 @@ mod tests {
             _address: &str,
             _reason: SuppressionReason,
             _detail: Option<&str>,
-        ) -> Result<(), AppError> {
-            Err(AppError::internal("suppression store unavailable"))
+        ) -> Result<(), SuppressionError> {
+            Err(SuppressionError::Unavailable(
+                "suppression store unavailable".to_string(),
+            ))
         }
     }
 
@@ -394,8 +231,6 @@ mod tests {
             "the envelope carries the one recipient"
         );
         assert_eq!(envelope.to()[0].to_string(), "member@customer.test");
-        // The envelope sender is Bunyip's verified sending address, never
-        // anything the calling app supplied.
         assert_eq!(
             envelope.from().map(|a| a.to_string()).as_deref(),
             Some("noreply@mail.a8n.systems")
@@ -467,68 +302,6 @@ mod tests {
             .await
             .expect_err("an unconfigured relay must not answer success");
         assert!(matches!(err, AppError::Upstream { .. }));
-    }
-
-    #[test]
-    fn header_injection_is_refused_in_the_recipient_and_the_subject() {
-        for to in [
-            "victim@customer.test\nBcc: everyone@customer.test",
-            "victim@customer.test\r\nBcc: everyone@customer.test",
-        ] {
-            assert!(
-                RelayMessage::new(to, "Subject", "Body", None).is_err(),
-                "a line break in the recipient must be refused: {to:?}"
-            );
-        }
-        assert!(RelayMessage::new(
-            "member@customer.test",
-            "Hello\r\nBcc: everyone@customer.test",
-            "Body",
-            None,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn empty_and_oversized_fields_are_refused() {
-        assert!(RelayMessage::new("  ", "Subject", "Body", None).is_err());
-        assert!(RelayMessage::new("member@customer.test", " ", "Body", None).is_err());
-        assert!(RelayMessage::new("member@customer.test", "Subject", "  ", None).is_err());
-        assert!(RelayMessage::new(
-            "member@customer.test",
-            &"s".repeat(MAX_SUBJECT_LEN + 1),
-            "Body",
-            None,
-        )
-        .is_err());
-        assert!(RelayMessage::new(
-            "member@customer.test",
-            "Subject",
-            &"b".repeat(MAX_BODY_LEN + 1),
-            None,
-        )
-        .is_err());
-        assert!(RelayMessage::new(
-            "member@customer.test",
-            "Subject",
-            "Body",
-            Some(&"h".repeat(MAX_BODY_LEN + 1)),
-        )
-        .is_err());
-        assert!(RelayMessage::new(
-            "one@customer.test,two@customer.test",
-            "Subject",
-            "Body",
-            None,
-        )
-        .is_err());
-    }
-
-    #[test]
-    fn a_blank_html_body_is_treated_as_absent() {
-        let message =
-            RelayMessage::new("member@customer.test", "Subject", "Body", Some("   ")).expect("ok");
-        assert_eq!(message.html, None);
     }
 
     #[tokio::test]

@@ -15,7 +15,7 @@ bunyip-domain = { path = "../bunyip-domain" }
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
 # Wave 1 bump: moves with dunite-core so the whole graph pins one rev and
 # `dunite_oidc` + `dunite_core` + `dunite_oci` all share the same AppError.
-dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
+dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 
 actix-web = "4"
 async-trait = "0.1"

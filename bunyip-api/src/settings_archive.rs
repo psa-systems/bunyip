@@ -1076,12 +1076,7 @@ pub async fn seal(
     let plaintext = serde_json::to_vec(snapshot).map_err(|e| {
         AppError::internal(format!("could not serialise the settings archive: {e}"))
     })?;
-    let (ciphertext, nonce, _version) = EncryptionKeySet {
-        current: key,
-        current_version: 1,
-        previous: None,
-    }
-    .encrypt(&plaintext)?;
+    let (ciphertext, nonce, _version) = EncryptionKeySet::new(key, 1).encrypt(&plaintext)?;
 
     let envelope = Envelope {
         format: ARCHIVE_FORMAT.to_string(),
