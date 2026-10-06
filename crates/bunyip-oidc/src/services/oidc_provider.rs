@@ -115,6 +115,25 @@ impl AtClaims {
         if let (Some(name), Some(tid)) = (client.tenant_claim_name.as_deref(), selected_tenant_id) {
             extra.insert(name.to_string(), serde_json::Value::String(tid.to_string()));
         }
+        // BUNYIP-879: standard OIDC profile claims on the at+jwt, mirroring
+        // what `IdTokenClaims::build` already emits. A resource server
+        // verifying only the at+jwt (mokosh does this on every request)
+        // now sees the current first_name / last_name without the
+        // `/oauth2/userinfo` round-trip, so a profile edit on bunyip
+        // propagates to RPs within one access-token lifetime instead of
+        // never (for an RP that skips userinfo on the fast path, mokosh's
+        // PMS-713 case). Same two gates as the id_token: the `profile`
+        // scope must be granted AND the source column must be non-empty.
+        // NULL / empty values stay absent so a cleared name does NOT ride
+        // as an empty string.
+        if scope.iter().any(|s| s == "profile") {
+            if let Some(v) = user.first_name.as_deref().filter(|s| !s.is_empty()) {
+                extra.insert("given_name".into(), serde_json::Value::String(v.into()));
+            }
+            if let Some(v) = user.last_name.as_deref().filter(|s| !s.is_empty()) {
+                extra.insert("family_name".into(), serde_json::Value::String(v.into()));
+            }
+        }
         AtClaims {
             iss: issuer.to_string(),
             sub: user.id.to_string(),
@@ -2084,6 +2103,70 @@ mod tests {
         });
         let claims: AtClaims = serde_json::from_value(legacy).unwrap();
         assert_eq!(claims.sid, None);
+    }
+
+    // BUNYIP-879: the at+jwt emits `given_name` and `family_name` under the
+    // `profile` scope (same gate as the id_token side) so a resource server
+    // verifying only the at+jwt (mokosh's PMS-713 fast path) sees a profile
+    // edit on bunyip without the `/oauth2/userinfo` round-trip.
+    fn user_with_names(first: Option<&str>, last: Option<&str>) -> User {
+        let mut u = test_user("subscriber");
+        u.first_name = first.map(str::to_string);
+        u.last_name = last.map(str::to_string);
+        u
+    }
+
+    fn at_claims_with(user: &User, scope: &[String]) -> AtClaims {
+        let now = Utc::now();
+        AtClaims::build(
+            "https://issuer.example.com",
+            user,
+            &test_client(),
+            scope,
+            now,
+            now + Duration::seconds(600),
+            now,
+            "urn:mace:incommon:iap:silver",
+            &["pwd".to_string()],
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn at_claims_emit_profile_names_under_the_profile_scope() {
+        let user = user_with_names(Some("Ada"), Some("Lovelace"));
+        let claims = at_claims_with(&user, &["openid".to_string(), "profile".to_string()]);
+        assert_eq!(
+            claims.extra.get("given_name").and_then(|v| v.as_str()),
+            Some("Ada"),
+        );
+        assert_eq!(
+            claims.extra.get("family_name").and_then(|v| v.as_str()),
+            Some("Lovelace"),
+        );
+    }
+
+    #[test]
+    fn at_claims_omit_profile_names_without_the_profile_scope() {
+        let user = user_with_names(Some("Ada"), Some("Lovelace"));
+        let claims = at_claims_with(&user, &["openid".to_string()]);
+        assert!(!claims.extra.contains_key("given_name"));
+        assert!(!claims.extra.contains_key("family_name"));
+    }
+
+    #[test]
+    fn at_claims_omit_an_empty_profile_name_rather_than_emitting_an_empty_string() {
+        // A user with first_name set and last_name NULL emits only
+        // given_name; the family_name key is absent, never present with an
+        // empty value. Same rule as the id_token side.
+        let user = user_with_names(Some("Ada"), None);
+        let claims = at_claims_with(&user, &["openid".to_string(), "profile".to_string()]);
+        assert_eq!(
+            claims.extra.get("given_name").and_then(|v| v.as_str()),
+            Some("Ada"),
+        );
+        assert!(!claims.extra.contains_key("family_name"));
     }
 
     fn build_id_claims_for(role: &str, scope: &[String]) -> IdTokenClaims {
