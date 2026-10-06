@@ -12,9 +12,8 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, Header};
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -24,6 +23,17 @@ use crate::config::OidcConfig;
 use crate::errors::AppError;
 use crate::models::User;
 use crate::services::oidc_keys::OidcKeySet;
+
+// Wave 4 adoption: the OP-session row + sliding-idle predicate + rotated
+// refresh-token deadlines + opaque-token generator + at_hash_eddsa now live
+// upstream in `dunite_oidc_op` (DUNITE-26..29). Re-exported so call sites
+// in this crate and the one external caller
+// (`bunyip-api/src/machine_client.rs::generate_opaque_token`) resolve
+// unchanged.
+pub use dunite_oidc_op::{
+    at_hash_eddsa, check_op_session_alive, generate_opaque_token, rotated_refresh_deadlines,
+    OpSession, RotatedRefreshDeadlines,
+};
 
 // ── Access token claims (RFC 9068) ────────────────────────────────────────────
 
@@ -999,12 +1009,18 @@ impl OidcProvider {
         // rather than only refusing the hub. `check_op_session_alive` is a
         // pure function of the four inputs so the three refusal arms are
         // unit-testable without a live database.
+        // DUNITE-26: the kernel's `check_op_session_alive` returns a
+        // classified `OpSessionError` (revoked / absolute-expired /
+        // idle-expired). Collapse all three to one `invalid_grant` on the
+        // wire so the client cannot distinguish them; the variant stays
+        // in the operator-facing log line via `e.to_string()`.
         check_op_session_alive(
             old.op_session_revoked_at,
             old.op_session_expires_at,
             old.op_session_idle_expires_at,
             now,
-        )?;
+        )
+        .map_err(|e| AppError::OidcInvalidGrant(e.to_string()))?;
 
         // Scope narrowing only.
         let mut effective_scope: Vec<String> = match requested_scope {
@@ -1559,82 +1575,6 @@ pub struct OAuthClient {
 /// A session is alive when it is not revoked AND both deadlines are in the
 /// future; the predicate for that lives in [`op_session_is_alive`] so no
 /// second copy of it can drift.
-pub struct OpSession {
-    pub id: Uuid,
-    pub sid: String,
-    pub user_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub last_active_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub idle_expires_at: DateTime<Utc>,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub user_agent: Option<String>,
-    pub ip: Option<String>,
-    pub acr: Option<String>,
-    pub amr: Option<Vec<String>>,
-}
-
-impl OpSession {
-    /// BUNYIP-636: one definition of "this session is alive", used by every
-    /// caller that has an [`OpSession`] in hand. The SQL twin lives beside
-    /// [`OidcProvider::load_op_session`]; `op_session_predicate_has_one_home`
-    /// in this module fails the build if a second copy appears.
-    pub fn is_alive(&self, now: DateTime<Utc>) -> bool {
-        self.revoked_at.is_none() && self.expires_at > now && self.idle_expires_at > now
-    }
-}
-
-/// BUNYIP-636 PR 2: pure predicate that maps the three refusal arms of an
-/// OP session (revoked, past absolute deadline, past idle deadline) to
-/// `invalid_grant`. Extracted from `rotate_refresh_token` so each arm is
-/// unit-testable without a live database. Same semantics as the negation
-/// of [`OpSession::is_alive`].
-fn check_op_session_alive(
-    revoked_at: Option<DateTime<Utc>>,
-    expires_at: DateTime<Utc>,
-    idle_expires_at: DateTime<Utc>,
-    now: DateTime<Utc>,
-) -> Result<(), AppError> {
-    if revoked_at.is_some() || now >= expires_at || now >= idle_expires_at {
-        return Err(AppError::OidcInvalidGrant(
-            "op session revoked or expired".into(),
-        ));
-    }
-    Ok(())
-}
-
-/// BUNYIP-636 PR 3: the (idle, absolute) deadlines a rotated refresh token
-/// receives, capped at both the client's configured TTLs and the owning
-/// op-session's clock so the token can never outlive the session.
-///
-/// Extracted from `rotate_refresh_token` so the two cap arms are
-/// unit-testable without a live database. `slid_session_idle` is what the
-/// slide below will roll the session's idle deadline to; the token's
-/// idle deadline is capped at that so it dies together with the session
-/// on the next idle window rather than one full RP idle-TTL after.
-struct RotatedRefreshDeadlines {
-    idle_expires_at: DateTime<Utc>,
-    absolute_expires_at: DateTime<Utc>,
-}
-
-fn rotated_refresh_deadlines(
-    now: DateTime<Utc>,
-    client_idle_ttl: Duration,
-    client_abs_ttl: Duration,
-    old_absolute_expires_at: DateTime<Utc>,
-    op_session_expires_at: DateTime<Utc>,
-    slid_session_idle: DateTime<Utc>,
-) -> RotatedRefreshDeadlines {
-    let idle = (now + client_idle_ttl).min(slid_session_idle);
-    let absolute = old_absolute_expires_at
-        .min(now + client_abs_ttl)
-        .min(op_session_expires_at);
-    RotatedRefreshDeadlines {
-        idle_expires_at: idle,
-        absolute_expires_at: absolute,
-    }
-}
-
 /// Authorization code row (consumed view). `sqlx::FromRow` so
 /// `consume_authorization_code` can pull every column with a runtime
 /// query without re-registering the struct in the workspace `.sqlx/`
@@ -1741,35 +1681,20 @@ struct RefreshTokenRotationRow {
 }
 
 // ── Crypto helpers ────────────────────────────────────────────────────────────
+//
+// `generate_opaque_token` and `at_hash_eddsa` moved upstream to
+// `dunite_oidc_op` (DUNITE-27). This crate re-exports them at the module
+// top so the ~10 call sites below (sid generation, auth-code raw, refresh
+// raw, machine-client secret, id_token `at_hash`) resolve unchanged.
+// `sha256_bytes` stays here because it is `&[u8] -> Vec<u8>`; the
+// dunite leaf's counterpart (`sha256_token_hash`) is `&str`-shaped for
+// refresh-raw hashing only.
 
-/// Generate a cryptographically random opaque token, base64url-encoded.
-pub fn generate_opaque_token(byte_len: usize) -> String {
-    let mut bytes = vec![0u8; byte_len];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(&bytes)
-}
-
-/// SHA-256 of bytes → raw bytes (stored in DB as BYTEA).
+/// SHA-256 of bytes to raw bytes (stored in DB as BYTEA).
 pub(crate) fn sha256_bytes(input: &[u8]) -> Vec<u8> {
     let mut h = Sha256::new();
     h.update(input);
     h.finalize().to_vec()
-}
-
-/// Compute the ID-token `at_hash` claim for an EdDSA (Ed25519) signature.
-///
-/// OIDC Core defines `at_hash` as base64url of the left half of the hash whose
-/// size matches the signing algorithm's internal digest. For Ed25519 that
-/// internal hash is SHA-512, so the value is base64url(left 32 bytes of
-/// SHA-512(ASCII(access_token))). Bunyip signs ID tokens with EdDSA only, so a
-/// conformant EdDSA relying party expects this construction; the earlier
-/// SHA-256-left-16 value (correct for RS256/ES256) would be rejected on
-/// mismatch. Kept identical to menkent's OP (BUNYIP-352 / MKT-60).
-pub(crate) fn at_hash_eddsa(access_token: &str) -> String {
-    let mut h = Sha512::new();
-    h.update(access_token.as_bytes());
-    let full_hash = h.finalize();
-    URL_SAFE_NO_PAD.encode(&full_hash[..32])
 }
 
 // ── at+jwt verification (BUNYIP-55) ──────────────────────────────────────────
@@ -1960,6 +1885,8 @@ impl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dunite_oidc_op::OpSessionError;
+    use sha2::Sha512;
 
     fn test_user(role: &str) -> User {
         User {
@@ -2332,10 +2259,11 @@ mod tests {
         );
     }
 
-    // BUNYIP-636 PR 2: `check_op_session_alive` is the tri-arm gate
-    // `rotate_refresh_token` runs on every rotation. Each arm returns the
-    // `invalid_grant` error the RP receives at `/oauth2/token`; the ok path
-    // proves a live session survives the check.
+    // BUNYIP-636 PR 2 / DUNITE-26: `check_op_session_alive` is the tri-arm
+    // gate `rotate_refresh_token` runs on every rotation. The three variants
+    // of the dunite `OpSessionError` are classified so the operator-facing
+    // log can name which arm fired; on the wire the consumer still collapses
+    // them to one `invalid_grant`. The ok path proves a live session passes.
     #[test]
     fn check_op_session_alive_refuses_a_revoked_session() {
         let now = Utc::now();
@@ -2346,15 +2274,7 @@ mod tests {
             now,
         )
         .expect_err("a revoked session refuses the rotation");
-        match err {
-            AppError::OidcInvalidGrant(msg) => {
-                assert!(
-                    msg.contains("op session"),
-                    "the error names the op session: {msg}",
-                );
-            }
-            other => panic!("expected OidcInvalidGrant, got {other:?}"),
-        }
+        assert!(matches!(err, OpSessionError::Revoked));
     }
 
     #[test]
@@ -2367,7 +2287,7 @@ mod tests {
             now,
         )
         .expect_err("an absolute-expired session refuses the rotation");
-        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(matches!(err, OpSessionError::AbsoluteExpired));
     }
 
     #[test]
@@ -2380,7 +2300,7 @@ mod tests {
             now,
         )
         .expect_err("an idle-expired session refuses the rotation");
-        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(matches!(err, OpSessionError::IdleExpired));
     }
 
     #[test]
@@ -2406,7 +2326,7 @@ mod tests {
         let idle_expires_at = now;
         let err = check_op_session_alive(None, now + Duration::hours(1), idle_expires_at, now)
             .expect_err("now == idle_expires_at refuses the rotation");
-        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(matches!(err, OpSessionError::IdleExpired));
         assert!(!OpSession {
             id: Uuid::new_v4(),
             sid: "sid".into(),
@@ -2430,7 +2350,7 @@ mod tests {
         let expires_at = now;
         let err = check_op_session_alive(None, expires_at, now + Duration::minutes(30), now)
             .expect_err("now == expires_at refuses the rotation");
-        assert!(matches!(err, AppError::OidcInvalidGrant(_)));
+        assert!(matches!(err, OpSessionError::AbsoluteExpired));
         assert!(!OpSession {
             id: Uuid::new_v4(),
             sid: "sid".into(),
