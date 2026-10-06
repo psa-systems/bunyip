@@ -16,6 +16,16 @@ bunyip-domain = { path = "../bunyip-domain" }
 # Wave 1 bump: moves with dunite-core so the whole graph pins one rev and
 # `dunite_oidc` + `dunite_core` + `dunite_oci` all share the same AppError.
 dunite-oidc = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+# Wave 4 bump: OIDC OP engine primitives (BUNYIP-636 PR 1-4 + the opaque-token
+# and at_hash helpers) extracted into their own leaf (DUNITE-26..29). This
+# crate adopts the OpSession row + sliding-idle predicate + rotated-refresh
+# deadline helper + opaque-token generator + at_hash_eddsa; the claim shapes
+# (AtClaims / IdTokenClaims / LogoutTokenClaims) stay bunyip-local because
+# they carry more top-level consumer vocabulary (bunyip_role, email, etc.)
+# than the leaf's shape, so a swap would churn ~15 test assertions without
+# a clear win. The SQL transactions, HTTP handlers, and
+# verify_at_jwt_claims policy stay on `OidcProvider` unchanged.
+dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 
 actix-web = "4"
 async-trait = "0.1"
