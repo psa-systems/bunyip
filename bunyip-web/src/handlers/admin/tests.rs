@@ -3132,7 +3132,7 @@ mod toggle_switch_field_label_tests {
     const SYSTEM_CONFIG_SRC: &str = include_str!("system_config.rs");
     const TIER_SETTINGS_SRC: &str = include_str!("tier_settings.rs");
     const USERS_SRC: &str = include_str!("users.rs");
-    const STRIPE_SRC: &str = include_str!("stripe.rs");
+    const BILLING_PAGE_SRC: &str = include_str!("stripe.rs");
     const APPLICATIONS_SRC: &str = include_str!("applications.rs");
 
     #[test]
@@ -3162,11 +3162,11 @@ mod toggle_switch_field_label_tests {
     #[test]
     fn stripe_tier_visibility_and_pricing_toggle_text_is_labelled() {
         assert!(
-            STRIPE_SRC.contains("label for=(visible_name)"),
+            BILLING_PAGE_SRC.contains("label for=(visible_name)"),
             "the per-tier visibility toggle's companion text must be a label for=(visible_name)"
         );
         assert!(
-            STRIPE_SRC.contains(r#"label for="pricing_enabled""#),
+            BILLING_PAGE_SRC.contains(r#"label for="pricing_enabled""#),
             "the public pricing toggle's companion text must be a label for=\"pricing_enabled\""
         );
     }
