@@ -756,8 +756,9 @@ mod two_column_layout_tests {
     // BUNYIP-415: the SSR analog of a wide/narrow visual-regression check is to
     // assert the responsive two-column grid class (two columns at `lg`, one
     // below) is present and that no fields were dropped when regrouping into
-    // blocks. The list-screen conversions (rate limits, IP bans, entitlements)
-    // reuse the same `lg:grid-cols-2` wrapper and are verified via screenshots.
+    // blocks. These `admin_block_grid` form-block conversions stay on `lg:`;
+    // the row-list-flow screens (rate limits, IP bans, entitlements) query
+    // their own `@container` instead (BUNYIP-873, BUNYIP-881).
     use super::*;
 
     #[test]
@@ -3084,5 +3085,38 @@ mod feature_toggle_page_tests {
         assert!(down.contains(&err.request_id.clone().unwrap()));
         let empty = feature_toggles_content(&[], None, true).into_string();
         assert!(empty.contains("No feature toggles."));
+    }
+}
+
+#[cfg(test)]
+mod row_list_container_query_tests {
+    // BUNYIP-881: entitlements and IP bans had the same row-list-flow grid
+    // role as rate limits (BUNYIP-873) but were left on viewport `lg:`,
+    // which does not track the admin content area's actual rendered width.
+    // Source-scan both files directly (rather than the rendered HTML, which
+    // needs a mocked AppState for these async handlers) so a reintroduced
+    // `lg:grid-cols-2` fails the build.
+    const ENTITLEMENTS_SRC: &str = include_str!("entitlements.rs");
+    const IP_BANS_SRC: &str = include_str!("ip_bans.rs");
+
+    #[test]
+    fn entitlements_and_ip_bans_row_grids_query_their_own_container_not_the_viewport() {
+        assert!(
+            !ENTITLEMENTS_SRC.contains("lg:grid-cols-2"),
+            "entitlements.rs must not reintroduce a viewport-gated row grid"
+        );
+        assert!(
+            ENTITLEMENTS_SRC.contains("@container")
+                && ENTITLEMENTS_SRC.contains("@5xl:grid-cols-2"),
+            "entitlements.rs's row grid must query its @container ancestor"
+        );
+        assert!(
+            !IP_BANS_SRC.contains("lg:grid-cols-2"),
+            "ip_bans.rs must not reintroduce a viewport-gated row grid"
+        );
+        assert!(
+            IP_BANS_SRC.contains("@container") && IP_BANS_SRC.contains("@5xl:grid-cols-2"),
+            "ip_bans.rs's row grid must query its @container ancestor"
+        );
     }
 }
