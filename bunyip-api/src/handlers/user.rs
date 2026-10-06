@@ -11,7 +11,9 @@ use tokio;
 use crate::config::TierConfig;
 use crate::errors::AppError;
 use crate::handlers::live_free_price_id;
-use crate::middleware::{extract_client_ip, request_user, AuthCookies, AuthenticatedUser};
+use crate::middleware::{
+    extract_client_ip, extract_token, request_user, AuthCookies, AuthenticatedUser,
+};
 use crate::models::{
     Application, AuditAction, CreateAuditLog, MembershipTier, TrustedDeviceInfo, User, UserResponse,
 };
@@ -48,7 +50,10 @@ pub(crate) async fn self_user(
     pool: &PgPool,
     id: Uuid,
 ) -> Result<User, AppError> {
-    if let Some(cached) = request_user(req).filter(|u| u.id == id) {
+    if let Some(cached) = extract_token(req)
+        .and_then(|t| request_user(req, &t))
+        .filter(|u| u.id == id)
+    {
         return Ok(cached);
     }
     UserRepository::find_by_id(pool, id)
@@ -1121,7 +1126,7 @@ pub async fn revoke_trusted_device(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::middleware::auth::AtJwtVerifier;
+    use crate::middleware::auth::{AtJwtVerifier, BunyipAtJwtVerifier};
     use crate::middleware::verify_once;
     use crate::services::{AccessTokenClaims, JwtConfig, JwtService};
     use actix_web::http::header;
@@ -1202,7 +1207,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl AtJwtVerifier for RecordingVerifier {
+    impl AtJwtVerifier<AccessTokenClaims, User> for RecordingVerifier {
         async fn verify_and_resolve(
             &self,
             _token: &str,
@@ -1228,7 +1233,7 @@ mod tests {
         let token = at_jwt_token();
         let req = TestRequest::default()
             .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
-            .app_data(verifier.clone() as Arc<dyn AtJwtVerifier>)
+            .app_data(verifier.clone() as Arc<BunyipAtJwtVerifier>)
             .to_http_request();
 
         // The rate-limit floor, underneath the route: one verification, one row.
@@ -1296,7 +1301,7 @@ mod tests {
         let token = at_jwt_token();
         let req = TestRequest::default()
             .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
-            .app_data(verifier as Arc<dyn AtJwtVerifier>)
+            .app_data(verifier as Arc<BunyipAtJwtVerifier>)
             .to_http_request();
         verify_once(&req, &token).await.expect("the token verifies");
 

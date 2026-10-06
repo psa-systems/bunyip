@@ -35,9 +35,9 @@ use actix_web::{
     cookie::{Cookie, SameSite},
     dev::Payload,
     http::header,
-    FromRequest, HttpMessage, HttpRequest,
+    FromRequest, HttpRequest,
 };
-use async_trait::async_trait;
+use dunite_core::middleware::at_jwt::{self as kernel_at_jwt, token_is_atjwt};
 use sqlx::PgPool;
 use std::future::Future;
 use std::pin::Pin;
@@ -46,50 +46,28 @@ use uuid::Uuid;
 
 /// Verifier for OIDC EdDSA `at+jwt` access tokens.
 ///
-/// Implemented by the OIDC vertical (`bunyip-oidc::OidcProvider`).
-/// Defined here in `bunyip-domain` so the extractor can call into it
-/// without `bunyip-domain` taking a dependency on `bunyip-oidc` (the
-/// dependency direction goes the other way).
-///
-/// Implementations are expected to:
-///
-/// 1. Verify the token's EdDSA signature against the OP's JWKS (no
-///    network round-trip; keys are in-process).
-/// 2. Validate `typ == "at+jwt"`, `iss == <this OP's issuer>`, and
-///    `exp > now` (with the standard ~30s leeway).
-/// 3. Look up the user identified by `sub` in the `users` table and
-///    populate `email`, `role`, `membership_status`, etc. The at+jwt
-///    payload itself is RFC 9068 minimal and does not carry profile
-///    claims, so the DB lookup is the only way to fill them in.
-///
-/// Returns the same [`AccessTokenClaims`] shape `JwtService` returns,
-/// so downstream extractors (`AdminUser`, `MemberUser`) are unchanged,
-/// paired with the `User` row step 3 read. Handing the row back lets
-/// [`verify_once`] cache it for the rest of the request instead of every
-/// later reader querying it again (BUNYIP-557).
-#[async_trait]
-pub trait AtJwtVerifier: Send + Sync {
-    async fn verify_and_resolve(&self, token: &str) -> Result<(AccessTokenClaims, User), AppError>;
-}
+/// Re-exported from `dunite_core::middleware::at_jwt` (DUNITE-25), where
+/// the trait is generic over the consumer's claim shape `C` and resolved
+/// user row shape `U`. Bunyip pins both parameters to its own
+/// `(AccessTokenClaims, User)` pair at impl and registration sites.
+/// This re-export keeps call sites that reference
+/// `middleware::auth::AtJwtVerifier` spelled the same.
+pub use kernel_at_jwt::AtJwtVerifier;
+
+/// Bunyip's concretization of the dunite trait. Call sites use this type
+/// alias wherever a dyn trait object is wanted, so the
+/// `<AccessTokenClaims, User>` type-parameters stay in one place.
+pub type BunyipAtJwtVerifier = dyn AtJwtVerifier<AccessTokenClaims, User>;
 
 /// Stub verifier that rejects every at+jwt with `Unauthorized`. Wired
 /// in by `bunyip-api`'s `main.rs` when the OIDC provider is disabled
 /// (no `OIDC_ISSUER` env), so the extractor logic can call
-/// `verify_and_resolve` unconditionally without a runtime branch. The
-/// observable behaviour matches the pre-BUNYIP-55 world: an `at+jwt`
-/// presented to a non-OIDC bunyip deployment is rejected, while HS256
-/// tokens are still accepted.
-pub struct DisabledAtJwtVerifier;
-
-#[async_trait]
-impl AtJwtVerifier for DisabledAtJwtVerifier {
-    async fn verify_and_resolve(
-        &self,
-        _token: &str,
-    ) -> Result<(AccessTokenClaims, User), AppError> {
-        Err(AppError::Unauthorized)
-    }
-}
+/// `verify_and_resolve` unconditionally without a runtime branch.
+///
+/// Type alias over the kernel's generic stub, concretized on bunyip's
+/// `(AccessTokenClaims, User)` pair so the main.rs wiring stays
+/// `DisabledAtJwtVerifier::new()`.
+pub type DisabledAtJwtVerifier = kernel_at_jwt::DisabledAtJwtVerifier<AccessTokenClaims, User>;
 
 impl AccessTokenClaims {
     /// Build the legacy [`AccessTokenClaims`] shape from a verified
@@ -134,19 +112,6 @@ pub async fn resolve_user_for_atjwt(pool: &PgPool, sub: &str) -> Result<User, Ap
         .ok_or(AppError::Unauthorized)
 }
 
-/// True when the JWT's header `typ` is `at+jwt`. Used by the extractors
-/// to route between the legacy HS256 verifier and the EdDSA verifier
-/// without needing to know either format ahead of time.
-fn token_is_atjwt(token: &str) -> bool {
-    jsonwebtoken::decode_header(token)
-        .ok()
-        .and_then(|h| h.typ)
-        // RFC 9068 media types are case-insensitive, so a mixed-case
-        // `At+JWT` must route to the EdDSA verifier, not silently fall
-        // back to the HS256 path.
-        .is_some_and(|typ| typ.eq_ignore_ascii_case("at+jwt"))
-}
-
 /// Type alias for the boxed-future shape every extractor in this
 /// module shares. Necessary because the at+jwt path does an async DB
 /// lookup; the HS256 path is sync but gets wrapped in the same future
@@ -166,72 +131,45 @@ pub struct VerifiedIdentity {
     pub user: Option<User>,
 }
 
-/// The verified identity stashed in the request extensions, tagged with the
-/// token it came from so a request presenting a different token can never be
-/// answered out of another token's verification.
-struct CachedIdentity {
-    token: String,
-    identity: VerifiedIdentity,
-}
-
 /// Verify `token` at most once per request (BUNYIP-557).
 ///
-/// The rate-limit floor resolves the caller's identity underneath every
-/// non-exempt route and the handler's extractor resolves it again. For an
-/// at+jwt that was two EdDSA verifications and two identical `users` reads
-/// before the handler even ran. The first verification stashes its result in
-/// the request extensions and every later call in the same request reads it
-/// back.
-///
-/// The fallback is not optional: the floor exempts some paths
-/// (`rate_limit_floor::EXEMPT_PATHS`) and never runs on them, so the extractor
-/// is the first caller there and must verify for itself.
-///
-/// Only successes are cached. A failed verification is cheap to repeat (the
-/// at+jwt path rejects before it reads any row) and caching it would mean
+/// Thin wrapper around `dunite_core::middleware::at_jwt::verify_once`
+/// (DUNITE-25) that supplies bunyip's two-path dispatcher
+/// ([`verify_either`]) as the closure the kernel helper memoizes.
+/// Scope and semantics are unchanged: the rate-limit floor resolves the
+/// caller's identity underneath every non-exempt route and the handler's
+/// extractor resolves it again; this helper caches the first success in
+/// the request extensions so the second call is a `Clone` out of there.
+/// Only successes are cached; a failure is cheap to repeat (the at+jwt
+/// path rejects before it reads any row) and caching it would mean
 /// deciding which error to replay.
 pub async fn verify_once(req: &HttpRequest, token: &str) -> Result<VerifiedIdentity, AppError> {
-    if let Some(hit) = cached_identity(req, token) {
-        return Ok(hit);
-    }
-
     let jwt_service = req.app_data::<Arc<JwtService>>().cloned();
-    let at_jwt_verifier = req.app_data::<Arc<dyn AtJwtVerifier>>().cloned();
-    let identity = verify_either(token, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await?;
-
-    // Take the extensions borrow only after the await; holding a `RefMut`
-    // across one would panic the worker on the next borrow.
-    req.extensions_mut().insert(CachedIdentity {
-        token: token.to_string(),
-        identity: identity.clone(),
-    });
-
-    Ok(identity)
-}
-
-/// The identity already verified for this request, if it came from `token`.
-fn cached_identity(req: &HttpRequest, token: &str) -> Option<VerifiedIdentity> {
-    req.extensions()
-        .get::<CachedIdentity>()
-        .filter(|cached| cached.token == token)
-        .map(|cached| cached.identity.clone())
+    let at_jwt_verifier = req.app_data::<Arc<BunyipAtJwtVerifier>>().cloned();
+    kernel_at_jwt::verify_once::<VerifiedIdentity, _, _>(req, token, move |t| async move {
+        verify_either(&t, jwt_service.as_ref(), at_jwt_verifier.as_ref()).await
+    })
+    .await
 }
 
 /// The caller's `users` row when a verification earlier in THIS request
 /// already read it, else `None` (BUNYIP-557).
 ///
-/// This does not weaken the freshness guarantee BUNYIP-229 added. The row is
-/// still read from the database on every request; the reader is just served
-/// the copy this request read microseconds earlier instead of issuing an
-/// identical `SELECT`. Nothing is carried across requests: actix clears the
-/// extensions when the request ends.
+/// Thin wrapper around `dunite_core::middleware::at_jwt::request_memo`
+/// (DUNITE-25). Does not weaken the BUNYIP-229 freshness guarantee: the
+/// row is still read from the database on every request; the reader is
+/// just served the copy this request read microseconds earlier instead
+/// of issuing an identical `SELECT`. Nothing is carried across requests:
+/// actix clears the extensions when the request ends.
 ///
-/// A reader that must observe a write made LATER in the same request must
-/// keep its own query; this snapshot predates the handler.
-pub fn request_user(req: &HttpRequest) -> Option<User> {
-    req.extensions()
-        .get::<CachedIdentity>()
-        .and_then(|cached| cached.identity.user.clone())
+/// A reader that must observe a write made LATER in the same request
+/// must keep its own query; this snapshot predates the handler.
+///
+/// The token argument matches the cache's key (the kernel helper
+/// deliberately keys by `(TypeId, token)` so a request presenting a
+/// different token cannot be served out of another token's result).
+pub fn request_user(req: &HttpRequest, token: &str) -> Option<User> {
+    kernel_at_jwt::request_memo::<VerifiedIdentity>(req, token).and_then(|v| v.user)
 }
 
 /// Extractor for authenticated users - returns 401 if not authenticated
@@ -508,7 +446,7 @@ impl FromRequest for MemberUser {
 async fn verify_either(
     token: &str,
     jwt_service: Option<&Arc<JwtService>>,
-    at_jwt_verifier: Option<&Arc<dyn AtJwtVerifier>>,
+    at_jwt_verifier: Option<&Arc<BunyipAtJwtVerifier>>,
 ) -> Result<VerifiedIdentity, AppError> {
     if token_is_atjwt(token) {
         match at_jwt_verifier {
@@ -870,6 +808,7 @@ pub fn extract_device_info(req: &HttpRequest) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
 
     /// BUNYIP-413: the super-admin gate needs BOTH the admin role and the
     /// persisted flag. An ordinary admin, a flagged non-admin (a demoted super
@@ -1164,7 +1103,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl AtJwtVerifier for RecordingOkVerifier {
+    impl AtJwtVerifier<AccessTokenClaims, User> for RecordingOkVerifier {
         async fn verify_and_resolve(
             &self,
             _token: &str,
@@ -1212,7 +1151,7 @@ mod tests {
 
     /// A request carrying `token` as a bearer credential, with `verifier`
     /// registered exactly as `main.rs` registers the OIDC provider.
-    fn atjwt_request(token: &str, verifier: Arc<dyn AtJwtVerifier>) -> HttpRequest {
+    fn atjwt_request(token: &str, verifier: Arc<BunyipAtJwtVerifier>) -> HttpRequest {
         actix_web::test::TestRequest::default()
             .app_data(verifier)
             .insert_header((header::AUTHORIZATION, format!("Bearer {token}")))
@@ -1243,7 +1182,7 @@ mod tests {
         // Same Arc behind both handles: the trait-object reference the
         // helper consumes, and the concrete-type reference the test
         // reads the counter through afterwards.
-        let verifier: Arc<dyn AtJwtVerifier> = recording.clone();
+        let verifier: Arc<BunyipAtJwtVerifier> = recording.clone();
         let token = jwt_with_typ("at+jwt");
         let identity = verify_either(&token, None, Some(&verifier))
             .await
@@ -1292,7 +1231,7 @@ mod tests {
 
     #[actix_rt::test]
     async fn disabled_atjwt_verifier_always_rejects() {
-        let v = DisabledAtJwtVerifier;
+        let v = DisabledAtJwtVerifier::new();
         let err = v
             .verify_and_resolve(&jwt_with_typ("at+jwt"))
             .await
@@ -1386,7 +1325,7 @@ mod tests {
         assert_eq!(claims.role, "member");
 
         // 3. the handler's own read of the caller's row
-        let user = request_user(&req).expect("the verified row is on the request");
+        let user = request_user(&req, &token).expect("the verified row is on the request");
         assert_eq!(user.id, claims.sub);
 
         assert_eq!(
@@ -1449,7 +1388,7 @@ mod tests {
             "an unverifiable token must fall back to the unauthenticated budget"
         );
         assert!(
-            request_user(&req).is_none(),
+            request_user(&req, &token).is_none(),
             "a failed verification must leave nothing on the request"
         );
         assert!(
@@ -1486,7 +1425,7 @@ mod tests {
         let claims = stub_claims("admin");
         let mut user = stub_user(&claims);
         user.is_super_admin = true;
-        let verifier: Arc<dyn AtJwtVerifier> = Arc::new(RecordingOkVerifier {
+        let verifier: Arc<BunyipAtJwtVerifier> = Arc::new(RecordingOkVerifier {
             claims,
             user,
             calls: std::sync::Mutex::new(0),
@@ -1539,6 +1478,6 @@ mod tests {
             identity.user.is_none(),
             "the HS256 path reads no users row, so it must not claim to have one"
         );
-        assert!(request_user(&req).is_none());
+        assert!(request_user(&req, &token).is_none());
     }
 }

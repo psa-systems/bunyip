@@ -82,8 +82,8 @@ pub use mailer_relay::{DbSuppressionList, MailerRelay};
 // in the shared `dunite-mailer` leaf (DUNITE-24). Re-exported here so call
 // sites that reference `services::SuppressionList` etc. stay unchanged.
 pub use dunite_mailer::{
-    NoSuppression, RelayMessage, RelayOutcome, SuppressionList, SuppressionReason,
-    MAX_ADDRESS_LEN, MAX_BODY_LEN, MAX_SUBJECT_LEN,
+    NoSuppression, RelayMessage, RelayOutcome, SuppressionList, SuppressionReason, MAX_ADDRESS_LEN,
+    MAX_BODY_LEN, MAX_SUBJECT_LEN,
 };
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,

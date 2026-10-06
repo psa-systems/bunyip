@@ -1542,8 +1542,8 @@ impl Default for EmailService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dunite_mailer::SuppressionReason;
     use async_trait::async_trait;
+    use dunite_mailer::SuppressionReason;
 
     /// Everything on the suppression list, mirroring `mailer_relay`'s own
     /// `SuppressAll` fake so both the relay's guard and `EmailService`'s guard

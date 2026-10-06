@@ -23,7 +23,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use dunite_mailer::{RelayMessage, RelayOutcome, SuppressionError, SuppressionList, SuppressionReason};
+use dunite_mailer::{
+    RelayMessage, RelayOutcome, SuppressionError, SuppressionList, SuppressionReason,
+};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
