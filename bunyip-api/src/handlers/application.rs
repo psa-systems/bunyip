@@ -6,7 +6,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;
 
 use crate::errors::AppError;
-use crate::middleware::{request_user, OptionalUser};
+use crate::middleware::{extract_token, request_user, OptionalUser};
 use crate::models::ApplicationResponse;
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, EntitlementRepository, UserRepository,
@@ -37,7 +37,7 @@ async fn resolve_has_member_access(req: &HttpRequest, pool: &PgPool, user: &Opti
     let Some(claims) = user.0.as_ref() else {
         return false;
     };
-    if let Some(u) = request_user(req) {
+    if let Some(u) = extract_token(req).and_then(|t| request_user(req, &t)) {
         return AccessTokenClaims::has_member_access_static(
             &u.role,
             u.lifetime_member,
@@ -188,7 +188,7 @@ pub async fn get_application(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::middleware::auth::{verify_once, AtJwtVerifier};
+    use crate::middleware::auth::{verify_once, AtJwtVerifier, BunyipAtJwtVerifier};
     use crate::models::User;
     use actix_web::http::header;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl AtJwtVerifier for CountingVerifier {
+    impl AtJwtVerifier<AccessTokenClaims, User> for CountingVerifier {
         async fn verify_and_resolve(
             &self,
             _token: &str,
@@ -306,7 +306,7 @@ mod tests {
             user,
             calls: Mutex::new(0),
         });
-        let verifier: Arc<dyn AtJwtVerifier> = counting.clone();
+        let verifier: Arc<BunyipAtJwtVerifier> = counting.clone();
         let token = atjwt();
         let req = actix_web::test::TestRequest::default()
             .app_data(verifier)

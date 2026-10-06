@@ -23,15 +23,12 @@ pub struct MailerSuppression {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Normalize a recipient address for suppression matching: trim surrounding
-/// whitespace and lowercase it. Suppression is deliberately case-insensitive
-/// across the whole address (the industry norm for a suppression list), so a
-/// bounce reported for `User@Example.com` also suppresses `user@example.com`.
-/// Every read and write goes through this so the stored key and the lookup key
-/// can never disagree.
-pub fn normalize_address(address: &str) -> String {
-    address.trim().to_lowercase()
-}
+/// Case-insensitive recipient-address folding, now in the shared
+/// `dunite_mailer` leaf (DUNITE-24). Re-exported from this module's old
+/// path so call sites that reference
+/// `crate::repositories::mailer_suppression::normalize_address` stay
+/// unchanged.
+pub use dunite_mailer::normalize_address;
 
 pub struct MailerSuppressionRepository;
 

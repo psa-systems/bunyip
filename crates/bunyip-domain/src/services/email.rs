@@ -19,7 +19,7 @@ use tera::{Context, Tera};
 use crate::config::{EmailConfig, SmtpTls};
 use crate::errors::AppError;
 use crate::models::Feedback;
-use crate::services::mailer_relay::SuppressionList;
+use dunite_mailer::SuppressionList;
 
 /// Where a built message is handed off.
 ///
@@ -319,7 +319,10 @@ impl EmailService {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         match list {
-            Some(list) => list.is_suppressed(address).await,
+            Some(list) => list
+                .is_suppressed(address)
+                .await
+                .map_err(|e| AppError::internal(format!("Suppression store unavailable: {e}"))),
             None => Ok(false),
         }
     }
@@ -1539,8 +1542,8 @@ impl Default for EmailService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::mailer_relay::SuppressionReason;
     use async_trait::async_trait;
+    use dunite_mailer::SuppressionReason;
 
     /// Everything on the suppression list, mirroring `mailer_relay`'s own
     /// `SuppressAll` fake so both the relay's guard and `EmailService`'s guard
@@ -1549,7 +1552,10 @@ mod tests {
 
     #[async_trait]
     impl SuppressionList for SuppressAll {
-        async fn is_suppressed(&self, _address: &str) -> Result<bool, AppError> {
+        async fn is_suppressed(
+            &self,
+            _address: &str,
+        ) -> Result<bool, dunite_mailer::SuppressionError> {
             Ok(true)
         }
 
@@ -1558,7 +1564,7 @@ mod tests {
             _address: &str,
             _reason: SuppressionReason,
             _detail: Option<&str>,
-        ) -> Result<(), AppError> {
+        ) -> Result<(), dunite_mailer::SuppressionError> {
             Ok(())
         }
     }

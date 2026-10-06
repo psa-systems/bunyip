@@ -6,7 +6,6 @@
 //! release/asset caches, download limiter) comes from dunite-download. Both
 //! are re-exported below.
 
-pub mod app_key;
 pub mod argon2_offload;
 pub mod auth;
 pub mod backup;
@@ -26,9 +25,11 @@ pub mod stripe;
 pub mod totp;
 pub mod webhook;
 
-// BUNYIP-483: the one at-rest key set (APP_ENCRYPTION_KEY). Wraps the kernel's
-// `EncryptionKeySet` to accept several previous keys.
-pub use app_key::AppKeySet;
+// BUNYIP-491 closes BUNYIP-483: `EncryptionKeySet` now owns multi-previous
+// key support upstream (DUNITE-23), so bunyip's `AppKeySet` wrapper is gone.
+// Kept as a type alias so call sites that reference `services::AppKeySet`
+// stay unchanged; new code should prefer the kernel name directly.
+pub use dunite_core::services::EncryptionKeySet as AppKeySet;
 
 // Generic kernel services (re-exported from dunite-core).
 pub use dunite_core::services::{EncryptionKeySet, JwtConfig, PasswordService};
@@ -76,9 +77,13 @@ pub use integration_status::{
 };
 pub use ip_enrich::{IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood};
 pub use jwt::{AccessTokenClaims, JwtService, RefreshTokenClaims, TwoFactorChallengeClaims};
-pub use mailer_relay::{
-    DbSuppressionList, MailerRelay, NoSuppression, RelayMessage, RelayOutcome, SuppressionList,
-    SuppressionReason, MAX_ADDRESS_LEN, MAX_BODY_LEN, MAX_SUBJECT_LEN,
+pub use mailer_relay::{DbSuppressionList, MailerRelay};
+// Mailer vocabulary + validator + no-suppression zero-impl now live upstream
+// in the shared `dunite-mailer` leaf (DUNITE-24). Re-exported here so call
+// sites that reference `services::SuppressionList` etc. stay unchanged.
+pub use dunite_mailer::{
+    NoSuppression, RelayMessage, RelayOutcome, SuppressionList, SuppressionReason, MAX_ADDRESS_LEN,
+    MAX_BODY_LEN, MAX_SUBJECT_LEN,
 };
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,

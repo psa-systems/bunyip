@@ -1925,7 +1925,12 @@ impl OidcProvider {
 }
 
 #[async_trait::async_trait]
-impl bunyip_domain::middleware::auth::AtJwtVerifier for OidcProvider {
+impl
+    bunyip_domain::middleware::auth::AtJwtVerifier<
+        bunyip_domain::services::AccessTokenClaims,
+        bunyip_domain::models::User,
+    > for OidcProvider
+{
     async fn verify_and_resolve(
         &self,
         token: &str,

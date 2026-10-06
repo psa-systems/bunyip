@@ -1191,7 +1191,7 @@ pub async fn userinfo(
     // route and read the row to do it. That copy is only there when the token
     // also passed the floor's stricter RS-audience check, so guard on the id
     // and keep the query for the cross-RP tokens userinfo must still accept.
-    let user = match crate::middleware::auth::request_user(&req) {
+    let user = match crate::middleware::auth::request_user(&req, &token_str) {
         Some(cached) if cached.id == user_id => cached,
         _ => UserRepository::find_by_id(&pool, user_id)
             .await?

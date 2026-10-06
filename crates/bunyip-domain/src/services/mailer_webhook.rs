@@ -18,9 +18,9 @@
 
 use serde::Deserialize;
 
+use dunite_mailer::{normalize_address, SuppressionList, SuppressionReason, MAX_ADDRESS_LEN};
+
 use crate::errors::AppError;
-use crate::repositories::mailer_suppression::normalize_address;
-use crate::services::mailer_relay::{SuppressionList, SuppressionReason, MAX_ADDRESS_LEN};
 
 /// Re-export the header name from the shared dunite leaf so this crate and
 /// the handler reading `req.headers().get(...)` reference one source of
@@ -101,7 +101,8 @@ pub async fn ingest_feedback(
 
     store
         .suppress(&address, reason, event.detail.as_deref())
-        .await?;
+        .await
+        .map_err(|e| AppError::internal(format!("Suppression store unavailable: {e}")))?;
 
     Ok(FeedbackOutcome { address, reason })
 }
@@ -109,8 +110,8 @@ pub async fn ingest_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::mailer_relay::NoSuppression;
     use async_trait::async_trait;
+    use dunite_mailer::{NoSuppression, SuppressionError};
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -124,7 +125,7 @@ mod tests {
 
     #[async_trait]
     impl SuppressionList for MemoryStore {
-        async fn is_suppressed(&self, address: &str) -> Result<bool, AppError> {
+        async fn is_suppressed(&self, address: &str) -> Result<bool, SuppressionError> {
             Ok(self
                 .entries
                 .lock()
@@ -137,7 +138,7 @@ mod tests {
             address: &str,
             reason: SuppressionReason,
             _detail: Option<&str>,
-        ) -> Result<(), AppError> {
+        ) -> Result<(), SuppressionError> {
             self.entries
                 .lock()
                 .unwrap()

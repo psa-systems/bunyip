@@ -184,7 +184,8 @@ pub async fn relay_send(
     )
     .await?;
 
-    let message = RelayMessage::new(&body.to, &body.subject, &body.text, body.html.as_deref())?;
+    let message = RelayMessage::new(&body.to, &body.subject, &body.text, body.html.as_deref())
+        .map_err(|e| AppError::validation(e.field, e.message))?;
     let outcome = relay.relay(&message, &client.name).await?;
 
     Ok(success(
