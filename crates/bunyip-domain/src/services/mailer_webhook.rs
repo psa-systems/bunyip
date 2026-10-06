@@ -16,19 +16,16 @@
 //! this shape, is deliberately out of scope here (the ticket leaves the provider
 //! "decided during implementation"); the trust boundary is the signed body.
 
-use hmac::{Hmac, Mac};
 use serde::Deserialize;
-use sha2::Sha256;
 
 use crate::errors::AppError;
 use crate::repositories::mailer_suppression::normalize_address;
 use crate::services::mailer_relay::{SuppressionList, SuppressionReason, MAX_ADDRESS_LEN};
 
-type HmacSha256 = Hmac<Sha256>;
-
-/// The header carrying the HMAC-SHA256 hex digest of the request body, matching
-/// the outbound `dunite_webhook` sender.
-pub const SIGNATURE_HEADER: &str = "X-Webhook-Signature";
+/// Re-export the header name from the shared dunite leaf so this crate and
+/// the handler reading `req.headers().get(...)` reference one source of
+/// truth (DUNITE-22). The value is still `"X-Webhook-Signature"`.
+pub use dunite_webhook::SIGNATURE_HEADER;
 
 /// A normalized bounce/complaint feedback event. `event` is `bounce` or
 /// `complaint`; `recipient` is the affected address; `detail` is the provider's
@@ -52,14 +49,13 @@ pub struct FeedbackOutcome {
 /// Verify an `X-Webhook-Signature` HMAC-SHA256 hex digest over the exact body
 /// bytes, in constant time.
 ///
-/// A missing, malformed, or wrong signature is [`AppError::Unauthorized`], never
-/// a decision to trust the body. `verify_slice` compares in constant time, so
-/// the check leaks nothing about how close a forged signature was.
+/// Thin AppError-shaped shim around `dunite_webhook::inbound::verify_signature`
+/// (DUNITE-22). The three classified refusal arms the leaf returns
+/// (`Missing`, `Malformed`, `Mismatch`) all collapse to
+/// [`AppError::Unauthorized`] here so the HTTP response wording stays
+/// uniform and the server leaks nothing about which branch tripped.
 pub fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> Result<(), AppError> {
-    let provided = hex::decode(signature_hex.trim()).map_err(|_| AppError::Unauthorized)?;
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
-    mac.update(body);
-    mac.verify_slice(&provided)
+    dunite_webhook::inbound::verify_signature(secret.as_bytes(), body, signature_hex)
         .map_err(|_| AppError::Unauthorized)
 }
 
@@ -152,7 +148,13 @@ mod tests {
 
     const SECRET: &str = "shared-feedback-secret";
 
+    // Test-local HMAC helper for building a valid signature. The production
+    // path never touches hmac directly — it goes through
+    // `dunite_webhook::inbound::verify_signature` via the shim above.
+    type HmacSha256 = hmac::Hmac<sha2::Sha256>;
+
     fn sign(body: &str) -> String {
+        use hmac::Mac;
         let mut mac = HmacSha256::new_from_slice(SECRET.as_bytes()).unwrap();
         mac.update(body.as_bytes());
         hex::encode(mac.finalize().into_bytes())

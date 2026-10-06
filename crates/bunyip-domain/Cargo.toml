@@ -20,10 +20,15 @@ workspace = true
 # resolver in dunite-core; they move as one rev to keep a single dunite-core.
 # The leaf crates below (stripe*, feedback, user-core, geoip, ipenrich, and
 # hibp/webhook) are independent and pin separately.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# Wave 1 bump: dunite-core itself was not touched between 82f9baa and 8617fc8
+# (A1/A3/A6/A7 only moved into dunite-oci, dunite-webhook, and a new leaf), but
+# the whole graph pins one rev so dunite-oci's `AppError` and bunyip-domain's
+# `AppError` are the same type after the bump.
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
-# rate limiting). Bunyip implements its store traits over Postgres.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# rate limiting). Bunyip implements its store traits over Postgres. Moves
+# with dunite-core.
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
@@ -70,7 +75,14 @@ dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # (own their types, no dunite-core dep), so they pin independently of the
 # dunite-core graph rev.
 dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
-dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+# Wave 1 bump: dunite-webhook moves to 8617fc8 for the new inbound HMAC
+# signature verifier (DUNITE-22, mirrors the outbound signing scheme).
+dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
+# BUNYIP-553/827: the semaphore-bounded blocking-pool wrapper that keeps a
+# ~100 ms / 64 MiB Argon2 hash off the request future. Extracted from
+# bunyip-domain into its own leaf (DUNITE-20); this crate's `argon2_offload`
+# module is now a thin shim mapping `OffloadError` to `AppError`.
+dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "8617fc85b16ebb4b53d3eed135fd1843fc7eb898" }
 # DEV-528: the in-process event bus + SSE framing (generic over the event type),
 # extracted from services/event_bus.rs + handlers/events.rs. Leaf crate.
 dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }

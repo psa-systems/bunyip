@@ -57,15 +57,16 @@ pub mod repositories {
 }
 
 pub mod middleware {
-    //! Domain middleware from bunyip-domain plus the OCI bearer-token extractor
-    //! and the `WWW-Authenticate` response middleware.
+    //! Domain middleware from bunyip-domain plus the OCI bearer-token extractor.
+    //! The `WWW-Authenticate` response middleware now lives upstream as
+    //! `dunite_oci::middleware::WwwAuthenticate` (DUNITE-21); re-exported
+    //! here so bunyip-api does not need its own `dunite-oci` dep.
     pub use bunyip_domain::middleware::*;
+    pub use dunite_oci::middleware::WwwAuthenticate;
 
     pub mod oci_auth;
-    pub mod oci_www_authenticate;
 
     pub use oci_auth::OciBearerUser;
-    pub use oci_www_authenticate::OciWwwAuthenticate;
 }
 
 pub mod handlers {
