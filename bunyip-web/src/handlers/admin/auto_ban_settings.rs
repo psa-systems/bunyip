@@ -66,7 +66,7 @@ pub(super) fn auto_ban_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Auto-ban Settings" } p class="mt-2 text-muted-foreground" { "Tune the automatic IP-ban thresholds. Changes apply immediately without a restart." } }
             @match cfg {
-                Err(e) => (error_box_for("Could not load auto-ban config.", e)),
+                Err(e) => (error_box_for("Could not reach the API to load the auto-ban config.", e)),
                 // BUNYIP-415: detection (when to strike/ban) and enforcement
                 // (the on/off switch and how long a ban lasts) sit in two
                 // side-by-side blocks, one column below lg, inside one form.
