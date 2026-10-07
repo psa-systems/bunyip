@@ -1,47 +1,55 @@
 ---
 
-# Create a Forgejo release when a release/v* tag is pushed, by
-# calling the reusable workflow in psa-systems/common.
+# Create a Forgejo release when a release PR is merged, by calling the reusable
+# workflow in psa-systems/common.
 #
-# Everything the release does - deriving the version from the pushed
-# `release/v*` tag, building the changelog, and posting to the releases API -
-# lives in psa-systems/common/.forgejo/workflows/create-release.yml. The
-# caller keeps only what Forgejo cannot read from the called workflow: the
-# trigger and `secrets: inherit` (`runs-on` lives on the reusable job; see
-# below).
+# Everything the release does - deriving the version from the merged
+# `release/v*` branch, building the changelog, and posting to the releases API -
+# lives in psa-systems/common/.forgejo/workflows/create-release.yml. The caller
+# keeps only what Forgejo cannot read from the called workflow: the trigger, the
+# merged/`release/v` gate, and `secrets: inherit` (`runs-on` lives on the
+# reusable job).
 #
-# Paired with the release recipes in common/common.just. `just create-release
-# <major|minor|hotfix>` pushes `release/v<version>` and opens the PR; after that
-# PR merges, `just publish-release` pushes the `release/v<version>` tag on the
-# merged commit, and that tag push is what triggers this workflow (BUNYIP-838 /
-# PC-68). The reusable workflow then creates the `vX.Y.Z` tag and release, which
+# Paired with `just create-release <major|minor|hotfix>` in common/common.just,
+# which pushes `release/v<version>` and opens the PR. MERGING that PR fires this
+# workflow; the reusable workflow creates the `vX.Y.Z` tag and release, which
 # re-triggers build-api.yml and build-web.yml (their `tags: ['v*']` triggers) to
-# publish the version-tagged OCI images.
+# publish the version-tagged OCI images. There is no `just publish-release`
+# step: bunyip releases on merge like every other consumer (PC-86, which removed
+# the tag-push manual step BUNYIP-721 / PC-68 had introduced).
+#
+# `pull_request_target`, NOT `pull_request` (BUNYIP-721 / PC-86): both fire when
+# the release PR closes, but `pull_request_target` runs THIS file from `main`,
+# not the PR head's editable copy, so the registry PAT below is never reachable
+# from a pushed branch's workflow, and `main`'s branch protection plus the
+# merged/`release/v` gate are real controls a PR author cannot edit. The job
+# never checks out PR code (the reusable workflow checks out `main` and reads the
+# merged PR payload), which is what keeps `pull_request_target` + secrets safe.
 #
 # Secret: the reusable workflow reads FORGEJO_PAT, which needs
 # `write:repository` scope to call the /api/v1/repos/.../releases endpoint.
 name: Create release
 
-# Not `pull_request` (BUNYIP-721): that trigger runs the PR head's copy of this
-# file, so the registry PAT passed below was reachable from any pushed branch.
-# A tag push runs the definition on the tagged commit, which a maintainer
-# created after review.
 on:
-  push:
-    tags:
-      - 'release/v*'
+  pull_request_target:
+    types:
+      - closed
+    branches:
+      - main
 
 jobs:
-  # A reusable-workflow caller is a PURE `uses:` job. Forgejo 16's schema accepts
-  # only uses / with / secrets / needs / if on such a job and rejects the whole
-  # workflow ("Unknown Property defaults", "Failed to match workflow-job") when a
-  # normal-job key like `runs-on` or `defaults` appears beside `uses` (BUNYIP-838;
-  # BUNYIP-721 added both and no release ran to catch it). So the runner label
-  # lives on the reusable workflow's own job (common sets
-  # RUNS_ON_OPENSUSE_BASE_MEDIUM there, resolved in this repo's context), and this
-  # job declares no `defaults` shell because it runs no step of its own.
-  # psa-systems/common is the org's own shared workflow repo; `@main` is how a
-  # shared-workflow fix reaches this caller, and a SHA pin is tracked separately.
+  # A reusable-workflow caller is a PURE `uses:` job (Forgejo 16 rejects a
+  # normal-job key like `defaults` beside `uses`, BUNYIP-838), so the runner
+  # label lives on the reusable workflow's own job. The `if:` gate is the one
+  # every pull_request consumer uses: release only a MERGED PR whose head branch
+  # is `release/v*`, so a closed-without-merge PR, or a merged non-release PR,
+  # releases nothing. Under `pull_request_target` the gate is evaluated from
+  # `main`'s copy, so a PR cannot edit it. psa-systems/common is the org's own
+  # shared workflow repo; `@main` is how a shared-workflow fix reaches this
+  # caller, and a SHA pin is tracked separately.
   create-release:
+    if: >-
+      github.event.pull_request.merged == true
+      && startsWith(github.event.pull_request.head.ref, 'release/v')
     uses: psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases API; this caller job runs no step and reads no secret itself
