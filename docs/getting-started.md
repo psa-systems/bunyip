@@ -68,7 +68,7 @@ just pre-push          # what the pre-push hook runs: fmt + clippy + build + tes
 just create-release minor   # bump the workspace version, branch, push, open the release PR; merging it releases
 ```
 
-`install-hooks`, `pre-commit`, `pre-push`, `create-release`, and `publish-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
+`install-hooks`, `pre-commit`, `pre-push`, and `create-release` come from the `common` submodule and are configured by the variables at the top of the root `justfile`; never copy one back into the justfile, `just check-justfile` fails the hook and CI when a shared recipe is shadowed.
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
