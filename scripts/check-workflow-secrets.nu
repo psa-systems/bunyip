@@ -58,6 +58,15 @@ def grep-tree [dir: string, pattern: string]: nothing -> table {
 # history recording it.
 const REUSABLE_WORKFLOW_PATTERN = '^\s*uses:\s*(?<target>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/\.(forgejo|github)/workflows/[A-Za-z0-9_.-]+\.ya?ml)@(?<ref>\S+)\s*$'
 
+# `pull_request:` only, NOT `pull_request_target:` (the `:` right after
+# `pull_request` is what excludes `_target`). This is deliberate (PC-86):
+# `pull_request` runs the PR head's editable copy of the workflow, so a job that
+# holds secrets there is the hole BUNYIP-425 / BUNYIP-721 close. `pull_request_target`
+# runs the BASE branch's copy (`main`), which a PR cannot edit, so holding the
+# PAT under it is safe AS LONG AS the workflow never checks out or runs PR code -
+# which bunyip's release caller does not (a pure `uses:` job whose reusable
+# workflow checks out `main`). Do not fold `pull_request_target` into this
+# pattern: it would flag the safe release trigger and force a false exemption.
 const PR_TRIGGER_PATTERN = '^\s{0,4}pull_request:'
 
 const COMMIT_SHA_PATTERN = '^[0-9a-f]{40}$'

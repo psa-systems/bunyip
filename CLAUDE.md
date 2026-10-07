@@ -46,7 +46,7 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 - `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top). Cross-repo (bunyip + mokosh-server + mokosh-apps), Nebula topology, OIDC client registration, and every spin-up obstacle are documented in `docs/dev-sso-three-repo-runbook.md` - read it before touching dev-sso infra or onboarding a dev box.
 - `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
 - `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
-- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR; after it merges, `just publish-release` pushes the `release/vX.Y.Z` tag that `.forgejo/workflows/create-release.yml` releases from (see README, Development notes).
+- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR; merging that PR releases on its own (`.forgejo/workflows/create-release.yml` fires on merge via `pull_request_target` and the reusable workflow creates the `vX.Y.Z` tag, release and images; PC-86 removed the old `publish-release` manual step).
   Comes from `common.just`; `release_layout := "virtual-workspace"` in the root justfile is what selects the `[workspace.package]` bump and the `cargo update --workspace` lock sync (workspace-scoped, so external dependencies including the dunite git dep are left where they are, per BUNYIP-426 F6).
   That `cargo` call runs on the HOST, so unlike the recipe it replaced it needs a host toolchain; moving it back into a container is BUNYIP-629.
 
