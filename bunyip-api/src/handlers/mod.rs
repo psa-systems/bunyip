@@ -221,7 +221,7 @@ pub use pricing::{
 };
 pub use totp::{
     begin_rekey, confirm_2fa, confirm_rekey, disable_2fa, get_2fa_status,
-    regenerate_recovery_codes, setup_2fa, verify_2fa,
+    regenerate_recovery_codes, resume_2fa_setup, setup_2fa, verify_2fa,
 };
 pub use user::{
     change_password, confirm_email_change, confirm_email_verification, delete_account,

@@ -13,6 +13,7 @@ use crate::repositories::{
     UserRepository,
 };
 use crate::responses::{get_request_id, success};
+use crate::services::totp::{setup_token_error, ALREADY_ENROLLED_MESSAGE};
 use crate::services::{argon2_offload, AuthService, TotpService};
 
 use super::check_rate_limit;
@@ -20,9 +21,27 @@ use super::user::self_user;
 
 // --- Request/Response types ---
 
+/// Body of `POST /v1/auth/2fa/setup` (BUNYIP-886). Defaulted so an older
+/// client gets a validation error on the field rather than a parse failure.
+#[derive(Debug, Deserialize)]
+pub struct SetupRequest {
+    #[serde(default)]
+    pub current_password: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ConfirmSetupRequest {
     pub code: String,
+    /// Required by `confirm_2fa` (BUNYIP-886); unused by `confirm_rekey`.
+    #[serde(default)]
+    pub setup_token: Option<String>,
+}
+
+/// Body of `POST /v1/auth/2fa/setup/resume` (BUNYIP-886).
+#[derive(Debug, Deserialize)]
+pub struct ResumeSetupRequest {
+    #[serde(default)]
+    pub setup_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +64,9 @@ pub struct PasswordConfirmRequest {
 pub struct SetupResponse {
     pub otpauth_uri: String,
     pub secret: String,
+    /// One-time token that confirm and resume require; only `setup_2fa` sets it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_token: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -66,28 +88,81 @@ struct AuthResponse {
 
 // --- Handlers ---
 
+/// A required, defaulted request field trimmed, or `None` when absent or blank.
+fn present(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|v| !v.is_empty())
+}
+
 /// POST /v1/auth/2fa/setup
-/// Begin 2FA setup (authenticated)
+/// Begin 2FA setup: 409 when enrolled, else password-gated key plus setup token (BUNYIP-886).
 pub async fn setup_2fa(
     req: HttpRequest,
+    pool: web::Data<PgPool>,
     user: AuthenticatedUser,
     totp_service: web::Data<Arc<TotpService>>,
+    body: Option<web::Json<SetupRequest>>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
-    let info = totp_service.begin_setup(user.0.sub, &user.0.email).await?;
+    // Before the password check, so an enrolled account is no password oracle.
+    if totp_service.is_enabled(user.0.sub).await? {
+        return Err(AppError::conflict(ALREADY_ENROLLED_MESSAGE));
+    }
+
+    // Not trimmed: a password may legitimately start or end with a space.
+    let password = body
+        .as_ref()
+        .and_then(|b| b.current_password.clone())
+        .filter(|p| !p.is_empty())
+        .ok_or_else(|| AppError::validation("current_password", "Enter your current password"))?;
+    let db_user = self_user(&req, &pool, user.0.sub).await?;
+    let password_hash = db_user.password_hash.clone().ok_or(AppError::validation(
+        "current_password",
+        "No password set for this account",
+    ))?;
+    if !argon2_offload::verify_password(password, password_hash).await? {
+        return Err(AppError::validation("current_password", "Invalid password"));
+    }
+
+    let started = totp_service.begin_setup(user.0.sub, &user.0.email).await?;
+
+    Ok(success(
+        SetupResponse {
+            otpauth_uri: started.otpauth_uri,
+            secret: started.secret,
+            setup_token: Some(started.setup_token),
+        },
+        request_id,
+    ))
+}
+
+/// POST /v1/auth/2fa/setup/resume
+/// Re-show an unfinished setup's key for its setup token, with no new secret (BUNYIP-886).
+pub async fn resume_2fa_setup(
+    req: HttpRequest,
+    user: AuthenticatedUser,
+    totp_service: web::Data<Arc<TotpService>>,
+    body: web::Json<ResumeSetupRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+
+    let token = present(body.setup_token.as_deref()).ok_or_else(setup_token_error)?;
+    let info = totp_service
+        .resume_setup(user.0.sub, &user.0.email, token)
+        .await?;
 
     Ok(success(
         SetupResponse {
             otpauth_uri: info.otpauth_uri,
             secret: info.secret,
+            setup_token: None,
         },
         request_id,
     ))
 }
 
 /// POST /v1/auth/2fa/confirm
-/// Confirm 2FA setup with TOTP code (authenticated)
+/// Confirm 2FA setup with the setup token and a TOTP code (authenticated)
 pub async fn confirm_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -98,7 +173,11 @@ pub async fn confirm_2fa(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
-    let codes = totp_service.confirm_setup(user.0.sub, &body.code).await?;
+    // BUNYIP-886: no live setup token, nothing is enrolled.
+    let token = present(body.setup_token.as_deref()).ok_or_else(setup_token_error)?;
+    let codes = totp_service
+        .confirm_setup(user.0.sub, token, &body.code)
+        .await?;
 
     // Audit log
     let ip = ip_address.map(ipnetwork::IpNetwork::from);
@@ -473,6 +552,7 @@ pub async fn begin_rekey(
         SetupResponse {
             otpauth_uri: info.otpauth_uri,
             secret: info.secret,
+            setup_token: None,
         },
         request_id,
     ))

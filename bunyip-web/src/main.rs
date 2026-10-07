@@ -317,6 +317,11 @@ async fn main() {
             "/settings/2fa/setup",
             get(dash::twofa_setup_get).post(dash::twofa_setup_post),
         )
+        // BUNYIP-886: the code plus the setup token the password step issued.
+        .route(
+            "/settings/2fa/setup/confirm",
+            axum::routing::post(dash::twofa_setup_confirm_post),
+        )
         .route(
             "/settings/2fa/recovery-codes",
             get(dash::twofa_recovery_get).post(dash::twofa_recovery_post),
