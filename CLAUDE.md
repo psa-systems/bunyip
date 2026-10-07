@@ -60,7 +60,7 @@ submodule and imported by the root `justfile` (`import 'common/common.just'`).
 It owns `pre-commit` and its two variants, `check-tree-ownership`,
 `ensure-bind-sources`, `install-hooks`, `create-release` (and its layout
 variants `create-release-generic`, `create-release-workspace`,
-`create-release-virtual-workspace`), `publish-release`, and `check-justfile`;
+`create-release-virtual-workspace`), and `check-justfile`;
 the root justfile configures them through
 variables (`app`, `compose_service`, `dev_bind_sources`, `pre_commit_prepare`,
 `clippy_args`, `compile_args`, `test_args`, `release_layout`) and must never
