@@ -4,25 +4,51 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2, Params,
 };
+use chrono::{DateTime, Duration, Utc};
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::time::{SystemTime, UNIX_EPOCH};
+use subtle::ConstantTimeEq;
 use totp_rs::{Algorithm, Secret, TOTP};
 use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::TotpRepository;
+use crate::services::auth::generate_secure_token;
 use crate::services::{argon2_offload, AppKeySet};
 
 /// RFC 6238 time step, in seconds. Also the size of the backward tolerance
 /// `match_step` applies.
 const TOTP_STEP_SECS: u64 = 30;
 
+/// How long a setup token stays usable (BUNYIP-886).
+const SETUP_TOKEN_TTL_MINUTES: i64 = 15;
+
+/// Refusal for starting setup on an account that already has two-factor (BUNYIP-886).
+pub const ALREADY_ENROLLED_MESSAGE: &str =
+    "Two-factor is already on. Use Reset authenticator app to change it.";
+
+/// Refusal for a missing, wrong or expired setup token (BUNYIP-886).
+pub const SETUP_EXPIRED_MESSAGE: &str = "This setup expired. Start again.";
+
+/// The validation error every setup-token refusal returns.
+pub fn setup_token_error() -> AppError {
+    AppError::validation("setup_token", SETUP_EXPIRED_MESSAGE)
+}
+
 /// Response from beginning 2FA setup
 pub struct TotpSetupInfo {
     pub otpauth_uri: String,
     pub secret: String,
+}
+
+/// A started setup: the key to show plus the one-time token that confirm and
+/// resume require (BUNYIP-886).
+pub struct TotpSetupStart {
+    pub otpauth_uri: String,
+    pub secret: String,
+    pub setup_token: String,
 }
 
 /// TOTP service for managing two-factor authentication
@@ -75,8 +101,13 @@ impl TotpService {
         &self.key_set
     }
 
-    /// Begin 2FA setup: generate a TOTP secret and return the otpauth URI
-    pub async fn begin_setup(&self, user_id: Uuid, email: &str) -> Result<TotpSetupInfo, AppError> {
+    /// Begin 2FA setup: a new secret plus a one-time setup token. The caller
+    /// checks the password first; an enrolled account gets 409 (BUNYIP-886).
+    pub async fn begin_setup(
+        &self,
+        user_id: Uuid,
+        email: &str,
+    ) -> Result<TotpSetupStart, AppError> {
         let secret = Secret::generate_secret();
         let secret_bytes = secret
             .to_bytes()
@@ -86,24 +117,86 @@ impl TotpService {
         let otpauth_uri = totp.get_url();
         let secret_base32 = data_encoding::BASE32_NOPAD.encode(&secret_bytes);
 
-        // Encrypt and store the secret
         let (encrypted, nonce, key_version) = self.key_set.encrypt(&secret_bytes)?;
-        TotpRepository::upsert_totp(&self.pool, user_id, &encrypted, &nonce, key_version).await?;
+        let setup_token = generate_secure_token(32);
+        let expires_at = Utc::now() + Duration::minutes(SETUP_TOKEN_TTL_MINUTES);
+        let stored = TotpRepository::upsert_totp(
+            &self.pool,
+            user_id,
+            &encrypted,
+            &nonce,
+            key_version,
+            &Self::hash_setup_token(&setup_token),
+            expires_at,
+        )
+        .await?;
+        if stored.is_none() {
+            return Err(AppError::conflict(ALREADY_ENROLLED_MESSAGE));
+        }
 
-        Ok(TotpSetupInfo {
+        Ok(TotpSetupStart {
             otpauth_uri,
             secret: secret_base32,
+            setup_token,
         })
     }
 
-    /// Confirm 2FA setup by verifying a TOTP code, then generate recovery codes
-    pub async fn confirm_setup(&self, user_id: Uuid, code: &str) -> Result<Vec<String>, AppError> {
+    /// Re-show an unfinished setup's key for its live setup token, without
+    /// minting a new secret (BUNYIP-886).
+    pub async fn resume_setup(
+        &self,
+        user_id: Uuid,
+        email: &str,
+        setup_token: &str,
+    ) -> Result<TotpSetupInfo, AppError> {
+        let record = TotpRepository::find_by_user_id(&self.pool, user_id)
+            .await?
+            .ok_or_else(setup_token_error)?;
+        if record.verified {
+            return Err(AppError::conflict(ALREADY_ENROLLED_MESSAGE));
+        }
+        if !Self::setup_token_live(
+            record.setup_token_hash.as_deref(),
+            record.setup_token_expires_at,
+            &Self::hash_setup_token(setup_token),
+            Utc::now(),
+        ) {
+            return Err(setup_token_error());
+        }
+
+        let secret =
+            self.key_set
+                .decrypt(&record.encrypted_secret, &record.nonce, record.key_version)?;
+        Ok(TotpSetupInfo {
+            otpauth_uri: self.build_totp(&secret, email)?.get_url(),
+            secret: data_encoding::BASE32_NOPAD.encode(&secret),
+        })
+    }
+
+    /// Confirm 2FA setup with its setup token and a TOTP code, then generate
+    /// recovery codes. A bad token enrolls nothing (BUNYIP-886).
+    pub async fn confirm_setup(
+        &self,
+        user_id: Uuid,
+        setup_token: &str,
+        code: &str,
+    ) -> Result<Vec<String>, AppError> {
         let totp_record = TotpRepository::find_by_user_id(&self.pool, user_id)
             .await?
-            .ok_or(AppError::not_found("TOTP configuration"))?;
+            .ok_or_else(setup_token_error)?;
 
         if totp_record.verified {
             return Err(AppError::conflict("2FA is already enabled"));
+        }
+
+        let token_hash = Self::hash_setup_token(setup_token);
+        if !Self::setup_token_live(
+            totp_record.setup_token_hash.as_deref(),
+            totp_record.setup_token_expires_at,
+            &token_hash,
+            Utc::now(),
+        ) {
+            return Err(setup_token_error());
         }
 
         // Decrypt secret and verify code
@@ -116,10 +209,11 @@ impl TotpService {
             return Err(AppError::validation("code", "Invalid verification code"));
         }
 
-        // Mark as verified
-        TotpRepository::mark_verified(&self.pool, user_id).await?;
+        // The guarded update burns the token, so a racing confirm cannot enroll twice.
+        if !TotpRepository::complete_setup(&self.pool, user_id, &token_hash).await? {
+            return Err(setup_token_error());
+        }
 
-        // Generate recovery codes
         let codes = self.generate_and_store_recovery_codes(user_id).await?;
         Ok(codes)
     }
@@ -129,10 +223,11 @@ impl TotpService {
     /// flow. For trusted NON-INTERACTIVE provisioning only (the E2E bootstrap,
     /// BUNYIP-359): a re-seeded test account keeps a STABLE, known TOTP secret,
     /// so the shared E2E TOTP secret need not be rotated on every re-seed. Uses
-    /// the SAME AES-256-GCM key set and repository writes as `begin_setup` +
-    /// `confirm_setup`, so the stored secret verifies through the normal login
-    /// path. NEVER call this from a request handler: it enables 2FA with no
-    /// possession proof.
+    /// the SAME AES-256-GCM key set as `begin_setup` + `confirm_setup`, so the
+    /// stored secret verifies through the normal login path. Unlike setup it
+    /// replaces a verified row (`replace_totp`), which is what keeps a re-seed
+    /// idempotent. NEVER call this from a request handler: it enables 2FA with
+    /// no possession proof.
     pub async fn enroll_preset(&self, user_id: Uuid, base32_secret: &str) -> Result<(), AppError> {
         // Normalize to the encoding `begin_setup` emits (upper-case, unpadded).
         let normalized: String = base32_secret
@@ -150,7 +245,7 @@ impl TotpService {
         self.build_totp(&secret_bytes, "e2e")?;
 
         let (encrypted, nonce, key_version) = self.key_set.encrypt(&secret_bytes)?;
-        TotpRepository::upsert_totp(&self.pool, user_id, &encrypted, &nonce, key_version).await?;
+        TotpRepository::replace_totp(&self.pool, user_id, &encrypted, &nonce, key_version).await?;
         TotpRepository::mark_verified(&self.pool, user_id).await?;
         Ok(())
     }
@@ -314,6 +409,28 @@ impl TotpService {
     }
 
     // --- Internal helpers ---
+
+    /// SHA-256 (hex) of a setup token; only this is stored (BUNYIP-886).
+    fn hash_setup_token(token: &str) -> String {
+        format!("{:x}", Sha256::digest(token.as_bytes()))
+    }
+
+    /// Whether a stored setup token hash matches `token_hash` and has not
+    /// expired at `now`. Constant-time on the hash comparison.
+    fn setup_token_live(
+        stored_hash: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+        token_hash: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
+        match (stored_hash, expires_at) {
+            (Some(stored), Some(expires_at)) => {
+                let matches: bool = stored.as_bytes().ct_eq(token_hash.as_bytes()).into();
+                matches && expires_at > now
+            }
+            _ => false,
+        }
+    }
 
     fn build_totp(&self, secret: &[u8], account_name: &str) -> Result<TOTP, AppError> {
         // skew = 0: totp_rs's skew is SYMMETRIC (each unit adds the step before
@@ -876,5 +993,85 @@ mod tests {
         let hash = TotpService::hash_code_argon2(code).unwrap();
         assert!(TotpService::verify_code_against_hash(code, &hash).unwrap());
         assert!(!TotpService::verify_code_against_hash("WRONG123", &hash).unwrap());
+    }
+
+    // -- BUNYIP-886: setup token --
+
+    fn live(
+        stored: Option<&str>,
+        expires_at: Option<DateTime<Utc>>,
+        token: &str,
+        now: DateTime<Utc>,
+    ) -> bool {
+        TotpService::setup_token_live(
+            stored,
+            expires_at,
+            &TotpService::hash_setup_token(token),
+            now,
+        )
+    }
+
+    #[test]
+    fn setup_token_hash_is_sha256_hex_and_never_the_token() {
+        let token = generate_secure_token(32);
+        // 32 bytes as unpadded base64url.
+        assert_eq!(token.len(), 43);
+        let hash = TotpService::hash_setup_token(&token);
+        assert_eq!(hash.len(), 64);
+        assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_ne!(hash, token);
+        assert_eq!(hash, TotpService::hash_setup_token(&token));
+    }
+
+    #[test]
+    fn fresh_matching_setup_token_is_live() {
+        let now = Utc::now();
+        let stored = TotpService::hash_setup_token("tok");
+        assert!(live(
+            Some(&stored),
+            Some(now + Duration::minutes(15)),
+            "tok",
+            now
+        ));
+    }
+
+    #[test]
+    fn wrong_setup_token_is_refused() {
+        let now = Utc::now();
+        let stored = TotpService::hash_setup_token("tok");
+        assert!(!live(
+            Some(&stored),
+            Some(now + Duration::minutes(15)),
+            "other",
+            now
+        ));
+        assert!(!live(
+            Some(&stored),
+            Some(now + Duration::minutes(15)),
+            "",
+            now
+        ));
+    }
+
+    #[test]
+    fn expired_setup_token_is_refused() {
+        let now = Utc::now();
+        let stored = TotpService::hash_setup_token("tok");
+        assert!(!live(Some(&stored), Some(now), "tok", now));
+        assert!(!live(
+            Some(&stored),
+            Some(now - Duration::seconds(1)),
+            "tok",
+            now
+        ));
+    }
+
+    #[test]
+    fn no_setup_in_progress_refuses_every_token() {
+        let now = Utc::now();
+        let stored = TotpService::hash_setup_token("tok");
+        assert!(!live(None, Some(now + Duration::minutes(15)), "tok", now));
+        assert!(!live(Some(&stored), None, "tok", now));
+        assert!(!live(None, None, "", now));
     }
 }

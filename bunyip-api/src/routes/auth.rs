@@ -42,6 +42,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 web::post().to(handlers::confirm_password_reset),
             )
             .route("/2fa/setup", web::post().to(handlers::setup_2fa))
+            // BUNYIP-886: redraw an unfinished setup's QR code from its setup token.
+            .route(
+                "/2fa/setup/resume",
+                web::post().to(handlers::resume_2fa_setup),
+            )
             .route("/2fa/confirm", web::post().to(handlers::confirm_2fa))
             .route("/2fa/verify", web::post().to(handlers::verify_2fa))
             .route("/2fa/disable", web::post().to(handlers::disable_2fa))

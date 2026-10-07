@@ -2354,7 +2354,7 @@ fn recovery_codes_panel(
                 div class="p-6 space-y-4" {
                     div class="rounded-lg border p-3 text-sm flex items-start gap-3" { (icon("alert-circle", "h-4 w-4 mt-0.5")) p class="text-sm" { "Save these codes now. You won't be able to see them again." } }
                     (sensitive_reveal(reveal_id, "recovery codes", html! {
-                        div class="grid grid-cols-2 gap-2 rounded-lg bg-muted p-4" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
+                        div class="grid gap-2 rounded-lg bg-muted p-4 sm:grid-cols-2" { @for code in codes { code class="text-center font-mono text-sm py-1" { (code) } } }
                     }))
                     // Copy + Download live side by side under
                     // `[data-saved-gate]`; either one flipping unlocks the
@@ -2420,19 +2420,19 @@ fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
 }
 
 /// Single Maud renderer for the 2FA enrollment view: QR + manual key + the
-/// verification-code form. Used by BOTH the GET handler (no error) and the
-/// POST error path (error banner above the code input). Keeping a single
+/// verification-code form. Used by BOTH the first render (no error) and the
+/// confirm error path (error banner above the code input). Keeping a single
 /// renderer means the QR / manual key / submit button are guaranteed to
 /// match across the entry render and any retry render, which is the whole
 /// point of audit finding 6: a wrong code MUST NOT make the QR disappear.
 ///
-/// Caller passes `setup` (the bunyip-api `/v1/auth/2fa/setup` response, which
-/// the upstream handler MUST return the SAME in-progress secret for during
-/// enrollment).
-/// QR + manual-key + verify-code page, shared by initial setup and the BUNYIP-355
-/// re-key (which points the confirm form at a different action and relabels it).
+/// Caller passes `setup` (the `/v1/auth/2fa/setup` response, or on a retry the
+/// `/v1/auth/2fa/setup/resume` one, which returns the SAME secret). Shared with
+/// the BUNYIP-355 re-key, which points the form at another action. `setup_token`
+/// rides along as a hidden field for the setup confirm (BUNYIP-886).
 fn twofa_qr_view(
     setup: &TwoFactorSetupResponse,
+    setup_token: Option<&str>,
     error: Option<&str>,
     heading: &str,
     subtitle: &str,
@@ -2452,7 +2452,7 @@ fn twofa_qr_view(
                             div class="flex justify-center rounded-lg bg-white p-4" { div class="[&_svg]:h-[200px] [&_svg]:w-[200px]" { (PreEscaped(qr_svg(&setup.otpauth_uri))) } }
                             div class="space-y-2" {
                                 label class="text-sm text-muted-foreground" { "Or enter this key manually:" }
-                                code class="block rounded bg-muted px-3 py-2 text-sm font-mono break-all" { (setup.secret) }
+                                code class="block rounded bg-muted px-3 py-2 text-xs sm:text-sm font-mono break-all" { (setup.secret) }
                             }
                         }
                     }))
@@ -2460,6 +2460,9 @@ fn twofa_qr_view(
                         (error_box(msg))
                     }
                     form method="post" action=(action) class="space-y-4" {
+                        @if let Some(token) = setup_token.filter(|t| !t.is_empty()) {
+                            input type="hidden" name="setup_token" value=(token);
+                        }
                         // BUNYIP-117: bound the TOTP edge before submit
                         // (maxlength + pattern). Authoritative check is
                         // still domain-side via `services::totp::verify_code`.
@@ -2474,22 +2477,62 @@ fn twofa_qr_view(
     }
 }
 
+/// Setup heading and QR-view copy, shared by the first render and every retry.
+const TWOFA_SETUP_HEADING: &str = "Set Up Two-Factor Authentication";
+const TWOFA_SETUP_SUBTITLE: &str = "Scan the QR code, then enter a code to confirm.";
+
+/// Password step that starts setup (BUNYIP-886): the key is shown only after it.
+/// `field_err` renders under the password; `general_err` (not about it) above the card.
+fn twofa_setup_password_form(field_err: Option<&str>, general_err: Option<&str>) -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) } p class="mt-2 text-muted-foreground" { "Confirm your password to see your setup key." } }
+            @if let Some(e) = general_err { (error_box(e)) }
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="p-6" {
+                    form method="post" action="/settings/2fa/setup" class="space-y-4" {
+                        div {
+                            (password_field("password", "current_password", "Password", PwRole::Current, PwField { required: true, autofocus: true, ..Default::default() }))
+                            @if let Some(e) = field_err { p class="text-sm text-destructive-text mt-1" role="alert" { (e) } }
+                        }
+                        div class="flex gap-2" {
+                            button type="submit" class=(button_class("default", "default", "")) { (icon("shield", "mr-2 h-4 w-4")) "Continue" }
+                            a href="/settings" class=(button_class("outline", "default", "")) { "Cancel" }
+                        }
+                    }
+                }
+            }
+            // Without the controller the eye button is dead markup.
+            (crate::views::password::script())
+        }
+    }
+}
+
+/// Shown instead of the password step when two-factor is already on: setup
+/// would be refused, and changing the app is the re-key flow (BUNYIP-886).
+fn twofa_setup_already_on() -> Markup {
+    html! {
+        div class="mx-auto max-w-lg space-y-6" {
+            div { h1 class="text-3xl font-bold" { "Two-Factor Authentication" } p class="mt-2 text-muted-foreground" { "Two-factor authentication is already on for this account. To move it to a new phone or app, reset your authenticator app." } }
+            div class="flex flex-wrap gap-2" {
+                a href="/settings/2fa/rekey" class=(button_class("default", "default", "")) { (icon("shield-check", "mr-2 h-4 w-4")) "Reset authenticator app" }
+                a href="/settings" class=(button_class("outline", "default", "")) { "Back to settings" }
+            }
+        }
+    }
+}
+
+/// GET /settings/2fa/setup - the password step only. Makes no setup call, so
+/// loading the URL can never touch an enrollment (BUNYIP-886).
 pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let fwd = c.forward.as_deref();
-    let content = match auth_api::setup_2fa(&st.api, fwd).await {
-        Ok(setup) => twofa_qr_view(
-            &setup,
-            None,
-            "Set Up Two-Factor Authentication",
-            "Scan the QR code, then enter a code to confirm.",
-            "/settings/2fa/setup",
-            "Verify & Enable",
-        ),
-        Err(e) => html! { div class="mx-auto max-w-lg" { (error_box(&e.user_message())) } },
+    let content = if user.two_factor_enabled {
+        twofa_setup_already_on()
+    } else {
+        twofa_setup_password_form(None, None)
     };
     dashboard_response(&c, &user, "/settings", "Two-factor setup", content)
 }
@@ -2498,17 +2541,70 @@ pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> 
 pub struct TwoFactorSetupForm {
     pub code: String,
 }
+
+/// The password step's form. Defaulted so a stale page posting another shape
+/// re-renders the password step instead of failing to parse.
+#[derive(Deserialize)]
+pub struct TwoFactorSetupStartForm {
+    #[serde(default)]
+    pub current_password: String,
+}
+
+/// POST /settings/2fa/setup - check the password via the API, then show the QR
+/// code with the setup token carried in a hidden field (BUNYIP-886).
 pub async fn twofa_setup_post(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Form(f): Form<TwoFactorSetupForm>,
+    Form(f): Form<TwoFactorSetupStartForm>,
+) -> Response {
+    let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let content = if f.current_password.is_empty() {
+        twofa_setup_password_form(Some("Enter your current password."), None)
+    } else {
+        match auth_api::setup_2fa(&st.api, c.forward.as_deref(), &f.current_password).await {
+            Ok(setup) => twofa_qr_view(
+                &setup,
+                setup.setup_token.as_deref(),
+                None,
+                TWOFA_SETUP_HEADING,
+                TWOFA_SETUP_SUBTITLE,
+                "/settings/2fa/setup/confirm",
+                "Verify & Enable",
+            ),
+            Err(e) if e.status == 409 => twofa_setup_already_on(),
+            // Setup's only validation errors are about `current_password`.
+            Err(e) if e.code == "VALIDATION_ERROR" => {
+                twofa_setup_password_form(Some(&e.user_message()), None)
+            }
+            Err(e) => twofa_setup_password_form(None, Some(&e.user_message())),
+        }
+    };
+    dashboard_response(&c, &user, "/settings", "Two-factor setup", content)
+}
+
+#[derive(Deserialize)]
+pub struct TwoFactorSetupConfirmForm {
+    pub code: String,
+    #[serde(default)]
+    pub setup_token: String,
+}
+
+/// POST /settings/2fa/setup/confirm - confirm with the code and the setup
+/// token. A wrong code redraws the SAME key via resume, never a new setup.
+pub async fn twofa_setup_confirm_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<TwoFactorSetupConfirmForm>,
 ) -> Response {
     let (user, c) = match guard(&st, &headers, "/settings/2fa/setup").await {
         Ok(v) => v,
         Err(r) => return r,
     };
     let fwd = c.forward.as_deref();
-    let content = match auth_api::confirm_2fa(&st.api, fwd, f.code.trim()).await {
+    let content = match auth_api::confirm_2fa(&st.api, fwd, f.code.trim(), &f.setup_token).await {
         Ok(codes) => recovery_codes_panel(
             "reveal-recovery-codes",
             "Two-Factor Authentication Enabled",
@@ -2517,26 +2613,23 @@ pub async fn twofa_setup_post(
             "/settings",
         ),
         Err(e) => {
-            // Re-fetch the in-progress secret so the QR + manual key render
-            // identically to what the user is currently scanning. bunyip-api
-            // returns the SAME pending secret while an enrollment is in
-            // flight. If that re-fetch itself fails (network blip, session
-            // timeout), fall through to the legacy banner-only error so the
-            // user can restart enrollment manually.
             let err_msg = e.user_message();
-            match auth_api::setup_2fa(&st.api, fwd).await {
+            // An expired or missing token cannot be resumed either; offer a restart.
+            match auth_api::resume_2fa_setup(&st.api, fwd, &f.setup_token).await {
                 Ok(setup) => twofa_qr_view(
                     &setup,
+                    Some(&f.setup_token),
                     Some(&err_msg),
-                    "Set Up Two-Factor Authentication",
-                    "Scan the QR code, then enter a code to confirm.",
-                    "/settings/2fa/setup",
+                    TWOFA_SETUP_HEADING,
+                    TWOFA_SETUP_SUBTITLE,
+                    "/settings/2fa/setup/confirm",
                     "Verify & Enable",
                 ),
                 Err(_) => html! {
-                    div class="mx-auto max-w-lg space-y-4" {
+                    div class="mx-auto max-w-lg space-y-6" {
+                        h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) }
                         (error_box(&err_msg))
-                        a href="/settings/2fa/setup" class=(button_class("outline", "default", "")) { "Try again" }
+                        a href="/settings/2fa/setup" class=(button_class("default", "default", "")) { "Start again" }
                     }
                 },
             }
@@ -2710,6 +2803,7 @@ pub async fn twofa_rekey_post(
     {
         Ok(setup) => twofa_qr_view(
             &setup,
+            None,
             None,
             "Reset authenticator app",
             "Scan this new QR code with your authenticator, then enter a code from it. Your old authenticator still works until you confirm.",
@@ -3331,6 +3425,10 @@ mod tests {
                 super::twofa_recovery_form(None).into_string(),
             ),
             ("rekey", super::twofa_rekey_stepup_form(None).into_string()),
+            (
+                "setup",
+                super::twofa_setup_password_form(None, None).into_string(),
+            ),
         ] {
             for marker in [
                 r#"data-pw-toggle="password""#,
@@ -3357,9 +3455,11 @@ mod tests {
         let setup = crate::api::types::TwoFactorSetupResponse {
             otpauth_uri: "otpauth://totp/Acme:u@x?secret=ABCD".into(),
             secret: "ABCDABCDABCD".into(),
+            setup_token: None,
         };
         let html = super::twofa_qr_view(
             &setup,
+            None,
             None,
             "Reset authenticator app",
             "sub",
@@ -3370,6 +3470,10 @@ mod tests {
         assert!(html.contains(r#"action="/settings/2fa/rekey/confirm""#));
         assert!(html.contains("Confirm new authenticator"));
         assert!(html.contains("ABCDABCDABCD")); // manual key rendered
+        assert!(
+            !html.contains(r#"name="setup_token""#),
+            "re-key has no setup token"
+        );
     }
 
     // BUNYIP-371: secrets/codes are masked (blurred) by default and revealed only
@@ -3395,14 +3499,62 @@ mod tests {
         let setup = crate::api::types::TwoFactorSetupResponse {
             otpauth_uri: "otpauth://totp/Acme:u@x?secret=JBSWY3DP".into(),
             secret: "JBSWY3DPEHPK3PXP".into(),
+            setup_token: None,
         };
-        let html = super::twofa_qr_view(&setup, None, "h", "s", "/a", "b").into_string();
+        let html = super::twofa_qr_view(&setup, None, None, "h", "s", "/a", "b").into_string();
         assert!(html.contains("data-sensitive-value"), "QR + key masked");
         assert!(html.contains("blur-xl"), "blurred by default");
         assert!(html.contains("peer-checked:blur-none"), "CSS-only reveal");
         assert!(
             html.contains("JBSWY3DPEHPK3PXP"),
             "key still present, masked"
+        );
+    }
+
+    /// BUNYIP-886: the setup page's first step asks for the current password
+    /// and posts it as `current_password`; it shows no key.
+    #[test]
+    fn setup_password_form_asks_for_the_current_password() {
+        let html = super::twofa_setup_password_form(Some("Invalid password"), None).into_string();
+        assert!(html.contains(r#"action="/settings/2fa/setup""#), "{html}");
+        assert!(html.contains(r#"name="current_password""#), "{html}");
+        // The password error sits under the field it is about, not above the card.
+        let field = html.find(r#"name="current_password""#).expect("field");
+        let error = html.find("Invalid password").expect("error");
+        assert!(error > field, "{html}");
+        assert!(html.contains(r#"role="alert""#), "{html}");
+        assert!(
+            !html.contains("Verification Code"),
+            "no code field yet: {html}"
+        );
+        assert!(!html.contains("data-sensitive-value"), "no key yet: {html}");
+    }
+
+    /// BUNYIP-886: the setup QR view posts the setup token with the code.
+    #[test]
+    fn setup_qr_view_carries_the_setup_token_to_confirm() {
+        let setup = crate::api::types::TwoFactorSetupResponse {
+            otpauth_uri: "otpauth://totp/Acme:u@x?secret=JBSWY3DP".into(),
+            secret: "JBSWY3DPEHPK3PXP".into(),
+            setup_token: Some("tok-123".into()),
+        };
+        let html = super::twofa_qr_view(
+            &setup,
+            setup.setup_token.as_deref(),
+            None,
+            "h",
+            "s",
+            "/settings/2fa/setup/confirm",
+            "Verify & Enable",
+        )
+        .into_string();
+        assert!(
+            html.contains(r#"action="/settings/2fa/setup/confirm""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<input type="hidden" name="setup_token" value="tok-123">"#),
+            "{html}"
         );
     }
 
@@ -3845,6 +3997,255 @@ mod recovery_codes_panel_tests {
         assert!(
             html.contains(&format!("-{today}.txt")),
             "filename dates the download to today's UTC date: {today}"
+        );
+    }
+}
+
+/// BUNYIP-886: the setup routes against a recording stand-in for bunyip-api, so
+/// each test can assert exactly which upstream calls a request made.
+#[cfg(test)]
+mod twofa_setup_flow_tests {
+    use std::sync::{Arc, Mutex};
+
+    use axum::body::{to_bytes, Body, Bytes};
+    use axum::http::{Request, StatusCode, Uri};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    type Calls = Arc<Mutex<Vec<(String, Value)>>>;
+
+    const KEY: &str = "JBSWY3DPEHPK3PXP";
+    const TOKEN: &str = "setup-token-1";
+
+    /// Serves `/v1/users/me` as `user`, answers the setup endpoints, and
+    /// records every request's path and JSON body.
+    async fn mock_api(user: Value) -> (String, Calls) {
+        let calls: Calls = Arc::default();
+        let rec = Arc::clone(&calls);
+        let router = Router::new().fallback(move |uri: Uri, body: Bytes| {
+            let rec = Arc::clone(&rec);
+            let user = user.clone();
+            async move {
+                let path = uri.path().to_string();
+                let sent = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                rec.lock().expect("calls lock").push((path.clone(), sent));
+                let key = json!({ "otpauth_uri": format!("otpauth://totp/Acme:u@x?secret={KEY}"), "secret": KEY });
+                match path.as_str() {
+                    "/v1/users/me" => (StatusCode::OK, Json(json!({ "data": user }))),
+                    "/v1/auth/2fa/setup" => {
+                        let mut started = key;
+                        started["setup_token"] = json!(TOKEN);
+                        (StatusCode::OK, Json(json!({ "data": started })))
+                    }
+                    "/v1/auth/2fa/setup/resume" => (StatusCode::OK, Json(json!({ "data": key }))),
+                    "/v1/auth/2fa/confirm" => (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({ "success": false, "error": { "code": "VALIDATION_ERROR", "message": "Invalid verification code" } })),
+                    ),
+                    _ => (
+                        StatusCode::NOT_FOUND,
+                        Json(json!({ "success": false, "error": { "code": "NOT_FOUND", "message": "Not found" } })),
+                    ),
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener.local_addr().expect("the mock API has an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        (format!("http://{addr}"), calls)
+    }
+
+    fn user(role: &str, two_factor_enabled: bool) -> Value {
+        json!({
+            "id": "u1",
+            "email": "member@example.com",
+            "role": role,
+            "email_verified": true,
+            "two_factor_enabled": two_factor_enabled,
+            "first_name": "Ada",
+            "last_name": "Lovelace"
+        })
+    }
+
+    fn app(api_url: &str) -> Router {
+        let state = crate::web::AppState {
+            api: crate::api::Api::new(api_url),
+            ..crate::handlers::unreachable_api_state()
+        };
+        Router::new()
+            .route(
+                "/settings/2fa/setup",
+                get(super::twofa_setup_get).post(super::twofa_setup_post),
+            )
+            .route(
+                "/settings/2fa/setup/confirm",
+                post(super::twofa_setup_confirm_post),
+            )
+            .with_state(state)
+    }
+
+    fn request(method: &str, uri: &str, form: Option<&str>) -> Request<Body> {
+        let builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(axum::http::header::COOKIE, "session=abc");
+        match form {
+            Some(f) => builder
+                .header(
+                    axum::http::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(Body::from(f.to_string())),
+            None => builder.body(Body::empty()),
+        }
+        .expect("request builds")
+    }
+
+    async fn body_of(res: axum::response::Response) -> String {
+        let bytes = to_bytes(res.into_body(), usize::MAX)
+            .await
+            .expect("the body reads");
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    fn twofa_calls(calls: &Calls) -> Vec<(String, Value)> {
+        calls
+            .lock()
+            .expect("calls lock")
+            .iter()
+            .filter(|(p, _)| p.starts_with("/v1/auth/2fa"))
+            .cloned()
+            .collect()
+    }
+
+    /// Loading the page (including the admin pinned there) shows the password
+    /// step and makes no setup call.
+    #[tokio::test]
+    async fn loading_the_setup_page_makes_no_setup_call() {
+        for role in ["subscriber", "admin"] {
+            let (url, calls) = mock_api(user(role, false)).await;
+            let res = app(&url)
+                .oneshot(request("GET", "/settings/2fa/setup", None))
+                .await
+                .expect("the route answers");
+            assert_eq!(res.status(), StatusCode::OK, "{role}");
+            let html = body_of(res).await;
+            assert!(
+                html.contains(r#"name="current_password""#),
+                "{role}: {html}"
+            );
+            assert!(!html.contains(KEY), "{role}: no key before the password");
+            assert!(
+                twofa_calls(&calls).is_empty(),
+                "{role}: {:?}",
+                twofa_calls(&calls)
+            );
+        }
+    }
+
+    /// An enrolled account is pointed at the re-key flow, still with no call.
+    #[tokio::test]
+    async fn an_enrolled_account_is_sent_to_reset_not_setup() {
+        let (url, calls) = mock_api(user("subscriber", true)).await;
+        let res = app(&url)
+            .oneshot(request("GET", "/settings/2fa/setup", None))
+            .await
+            .expect("the route answers");
+        let html = body_of(res).await;
+        assert!(html.contains(r#"href="/settings/2fa/rekey""#), "{html}");
+        assert!(!html.contains(r#"name="current_password""#), "{html}");
+        assert!(twofa_calls(&calls).is_empty(), "{:?}", twofa_calls(&calls));
+    }
+
+    /// The password step sends the password to setup and renders the key with
+    /// the setup token in a hidden field aimed at the confirm route.
+    #[tokio::test]
+    async fn the_password_step_starts_setup_and_carries_the_token() {
+        let (url, calls) = mock_api(user("subscriber", false)).await;
+        let res = app(&url)
+            .oneshot(request(
+                "POST",
+                "/settings/2fa/setup",
+                Some("current_password=hunter2%20x"),
+            ))
+            .await
+            .expect("the route answers");
+        let html = body_of(res).await;
+        assert!(html.contains(KEY), "{html}");
+        assert!(
+            html.contains(r#"action="/settings/2fa/setup/confirm""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(&format!(r#"name="setup_token" value="{TOKEN}""#)),
+            "{html}"
+        );
+        assert_eq!(
+            twofa_calls(&calls),
+            vec![(
+                "/v1/auth/2fa/setup".to_string(),
+                json!({ "current_password": "hunter2 x" })
+            )]
+        );
+    }
+
+    /// A blank password is refused here without any setup call.
+    #[tokio::test]
+    async fn a_blank_password_makes_no_setup_call() {
+        let (url, calls) = mock_api(user("subscriber", false)).await;
+        let res = app(&url)
+            .oneshot(request(
+                "POST",
+                "/settings/2fa/setup",
+                Some("current_password="),
+            ))
+            .await
+            .expect("the route answers");
+        let html = body_of(res).await;
+        assert!(html.contains("Enter your current password."), "{html}");
+        assert!(twofa_calls(&calls).is_empty(), "{:?}", twofa_calls(&calls));
+    }
+
+    /// A wrong code posts the token to confirm, then redraws the SAME key via
+    /// resume; setup is never called again, so the scanned secret survives.
+    #[tokio::test]
+    async fn a_wrong_code_redraws_the_same_key_via_resume() {
+        let (url, calls) = mock_api(user("subscriber", false)).await;
+        let res = app(&url)
+            .oneshot(request(
+                "POST",
+                "/settings/2fa/setup/confirm",
+                Some(&format!("code=000000&setup_token={TOKEN}")),
+            ))
+            .await
+            .expect("the route answers");
+        let html = body_of(res).await;
+        assert!(html.contains("Invalid verification code"), "{html}");
+        assert!(html.contains(KEY), "{html}");
+        assert!(
+            html.contains(&format!(r#"name="setup_token" value="{TOKEN}""#)),
+            "{html}"
+        );
+        assert_eq!(
+            twofa_calls(&calls),
+            vec![
+                (
+                    "/v1/auth/2fa/confirm".to_string(),
+                    json!({ "code": "000000", "setup_token": TOKEN })
+                ),
+                (
+                    "/v1/auth/2fa/setup/resume".to_string(),
+                    json!({ "setup_token": TOKEN })
+                ),
+            ]
         );
     }
 }

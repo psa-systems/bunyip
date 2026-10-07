@@ -417,22 +417,39 @@ pub async fn delete_account(
 
 // --- 2FA management ---------------------------------------------------------
 
+/// BUNYIP-886: start setup behind the current password; the response carries
+/// the one-time `setup_token` that confirm and resume require.
 pub async fn setup_2fa(
     api: &Api,
     cookie: Option<&str>,
+    current_password: &str,
 ) -> Result<TwoFactorSetupResponse, ApiError> {
-    parse(api.post("/auth/2fa/setup", cookie, None).await?)
+    let body = json!({ "current_password": current_password });
+    parse(api.post("/auth/2fa/setup", cookie, Some(body)).await?)
+}
+
+/// BUNYIP-886: the same key again for a live setup token, to redraw the QR code
+/// after a wrong code without minting a new secret.
+pub async fn resume_2fa_setup(
+    api: &Api,
+    cookie: Option<&str>,
+    setup_token: &str,
+) -> Result<TwoFactorSetupResponse, ApiError> {
+    let body = json!({ "setup_token": setup_token });
+    parse(
+        api.post("/auth/2fa/setup/resume", cookie, Some(body))
+            .await?,
+    )
 }
 
 pub async fn confirm_2fa(
     api: &Api,
     cookie: Option<&str>,
     code: &str,
+    setup_token: &str,
 ) -> Result<RecoveryCodesResponse, ApiError> {
-    parse(
-        api.post("/auth/2fa/confirm", cookie, Some(json!({ "code": code })))
-            .await?,
-    )
+    let body = json!({ "code": code, "setup_token": setup_token });
+    parse(api.post("/auth/2fa/confirm", cookie, Some(body)).await?)
 }
 
 pub async fn status_2fa(

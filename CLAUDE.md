@@ -156,6 +156,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Cookies](docs/invariants/api-web.md#cookies-bunyip-426) (BUNYIP-426): `Secure` comes from `Config::cookies_secure(&req)`, never `is_production()`.
 - [Single-use tokens](docs/invariants/api-web.md#single-use-tokens-bunyip-426) (BUNYIP-426): Consume with a guarded `UPDATE ... used_at IS NULL` and branch on the result.
 - [OCI errors log their cause](docs/invariants/api-web.md#oci-errors-log-their-cause-bunyip-565) (BUNYIP-565): Every `OciError::Internal` goes through `errors::context`, which logs first.
+- [Two-factor setup](docs/invariants/api-web.md#two-factor-setup-bunyip-886) (BUNYIP-886): Setup 409s an enrolled account, needs the password, and binds confirm to a one-time setup token.
 
 ### UI
 

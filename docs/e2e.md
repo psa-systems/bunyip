@@ -296,9 +296,12 @@ first; production is the same shape with `E2E_PRODUCTION_*` / `OIDC_ISSUER_PRODU
    `BUNYIP_E2E_TOTP_SECRET=<base32> just e2e-bootstrap --enable-2fa` (needs the
    same `APP_ENCRYPTION_KEY` the API uses, which the container already has); set
    `E2E_STAGING_TOTP_SECRET` to that same base32. Manual alternative: log into the
-   staging hub as the E2E user, go to `/settings/2fa/setup`, capture the base32
-   secret shown at enrollment, verify a code, and record it - but this mints a NEW
-   secret each time, so you must re-capture it after every account re-seed.
+   staging hub as the E2E user, go to `/settings/2fa/setup`, enter the account
+   password, capture the base32 secret shown at enrollment, verify a code, and
+   record it - but this mints a NEW secret each time, so you must re-capture it
+   after every account re-seed. It only works while 2FA is off: setup refuses an
+   enrolled account (BUNYIP-886), so a re-capture means disabling 2FA first or
+   using Reset authenticator app.
 
 4. **Pick a public PKCE OIDC client.** There is NO `bunyip-web` OIDC client to
    reuse: bunyip-web is the OP's own hub UI (it sets `bunyip_op_session`

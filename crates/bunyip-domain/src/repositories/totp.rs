@@ -1,5 +1,6 @@
 //! TOTP two-factor authentication repository
 
+use chrono::{DateTime, Utc};
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
@@ -9,8 +10,46 @@ use crate::models::{RecoveryCode, UserTotp};
 pub struct TotpRepository;
 
 impl TotpRepository {
-    /// Insert or update TOTP configuration for a user (upsert)
+    /// Store a new unverified secret plus the setup token hash (BUNYIP-886).
+    /// Never replaces a verified row: `None` means two-factor is already on.
     pub async fn upsert_totp(
+        pool: &PgPool,
+        user_id: Uuid,
+        encrypted_secret: &[u8],
+        nonce: &[u8],
+        key_version: i16,
+        setup_token_hash: &str,
+        setup_token_expires_at: DateTime<Utc>,
+    ) -> Result<Option<UserTotp>, AppError> {
+        let totp = sqlx::query_as::<_, UserTotp>(
+            r#"
+            INSERT INTO user_totp
+                (user_id, encrypted_secret, nonce, key_version,
+                 setup_token_hash, setup_token_expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (user_id) DO UPDATE
+            SET encrypted_secret = $2, nonce = $3, key_version = $4,
+                verified = FALSE, enabled_at = NULL,
+                setup_token_hash = $5, setup_token_expires_at = $6,
+                updated_at = NOW()
+            WHERE user_totp.verified = FALSE
+            RETURNING *
+            "#,
+        )
+        .bind(user_id)
+        .bind(encrypted_secret)
+        .bind(nonce)
+        .bind(key_version)
+        .bind(setup_token_hash)
+        .bind(setup_token_expires_at)
+        .fetch_optional(pool)
+        .await?;
+        Ok(totp)
+    }
+
+    /// Unconditional upsert for trusted provisioning only (`enroll_preset`, the
+    /// E2E bootstrap): replaces even a verified row. Never call from a handler.
+    pub async fn replace_totp(
         pool: &PgPool,
         user_id: Uuid,
         encrypted_secret: &[u8],
@@ -23,7 +62,9 @@ impl TotpRepository {
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (user_id) DO UPDATE
             SET encrypted_secret = $2, nonce = $3, key_version = $4,
-                verified = FALSE, enabled_at = NULL, updated_at = NOW()
+                verified = FALSE, enabled_at = NULL,
+                setup_token_hash = NULL, setup_token_expires_at = NULL,
+                updated_at = NOW()
             RETURNING *
             "#,
         )
@@ -34,6 +75,42 @@ impl TotpRepository {
         .fetch_one(pool)
         .await?;
         Ok(totp)
+    }
+
+    /// Mark verified, burn the setup token and enable 2FA in one transaction.
+    /// Guarded on the token hash, so `false` means the token was not live (BUNYIP-886).
+    pub async fn complete_setup(
+        pool: &PgPool,
+        user_id: Uuid,
+        setup_token_hash: &str,
+    ) -> Result<bool, AppError> {
+        let mut tx = pool.begin().await?;
+
+        let claimed = sqlx::query(
+            r#"
+            UPDATE user_totp
+            SET verified = TRUE, enabled_at = NOW(),
+                setup_token_hash = NULL, setup_token_expires_at = NULL,
+                updated_at = NOW()
+            WHERE user_id = $1 AND verified = FALSE AND setup_token_hash = $2
+            "#,
+        )
+        .bind(user_id)
+        .bind(setup_token_hash)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+        if claimed == 0 {
+            return Ok(false);
+        }
+
+        sqlx::query("UPDATE users SET two_factor_enabled = TRUE, updated_at = NOW() WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// Update encryption data for a specific TOTP record (used during key rotation).
