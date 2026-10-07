@@ -14,6 +14,7 @@
 /bunyip-api/tests/rls_isolation.rs
 /bunyip-api/tests/super_admin_gate.rs
 /bunyip-api/tests/support_tickets.rs
+/bunyip-api/tests/totp_setup_token.rs
 /bunyip-api/tests/totp_single_use.rs
 /bunyip-api/tests/verified_admin_gate.rs
 /compose.dev.yml
