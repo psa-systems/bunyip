@@ -158,19 +158,30 @@ impl RateLimitRepository {
         // over-cap or not; the counter is what "how much traffic hit this
         // action in the last 15 minutes" reads back as. Best-effort: a
         // failed INSERT is logged and swallowed so enforcement still fires.
-        if let Err(e) = super::rate_limit_traffic::RateLimitTrafficRepository::record(
-            pool,
-            config.action,
-            key,
-            Utc::now(),
-        )
-        .await
+        // Spawned off the request path (BUNYIP-898): this was the one
+        // unconditional, awaited round-trip in the function, doubling its
+        // DB latency on every call; detaching it costs the caller nothing
+        // since the result was already discarded.
         {
-            tracing::warn!(
-                error = %e,
-                action = config.action,
-                "rate_limit_traffic: failed to record request"
-            );
+            let pool = pool.clone();
+            let action = config.action;
+            let key = key.to_string();
+            tokio::spawn(async move {
+                if let Err(e) = super::rate_limit_traffic::RateLimitTrafficRepository::record(
+                    &pool,
+                    action,
+                    &key,
+                    Utc::now(),
+                )
+                .await
+                {
+                    tracing::warn!(
+                        error = %e,
+                        action = %action,
+                        "rate_limit_traffic: failed to record request"
+                    );
+                }
+            });
         }
 
         // Record one history row per throttle event: the first request that
