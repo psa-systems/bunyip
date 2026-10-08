@@ -93,10 +93,14 @@ pub struct RateLimitConfig {
 }
 
 impl RateLimitConfig {
-    /// Login: 5 requests per minute per email
+    /// Login: 10 requests per minute per email. The per-account 2FA failure
+    /// cap (`TWO_FACTOR_VERIFY_FAILURES`, 5 per 15 minutes) is the
+    /// independent brake against guessing, so this cap sits where a few
+    /// fat-finger retries plus the TOTP submit are not refused. Tunable per
+    /// deployment through the standard rate-limit env vars.
     pub const LOGIN: Self = Self {
         action: "login",
-        max_requests: 5,
+        max_requests: 10,
         window_seconds: 60,
         key_kind: KeyKind::Email,
     };
@@ -125,27 +129,30 @@ impl RateLimitConfig {
         key_kind: KeyKind::UserId,
     };
 
-    /// API (unauthenticated): 20 requests per minute per IP
+    /// API (unauthenticated): 60 requests per minute per IP. One request
+    /// per second matches a page load with its chrome from behind a NAT or
+    /// a shared egress, without the budget collapsing to a few browser
+    /// refreshes. Tunable per deployment through the standard env.
     pub const API_UNAUTH: Self = Self {
         action: "api_unauth",
-        max_requests: 20,
+        max_requests: 60,
         window_seconds: 60,
         key_kind: KeyKind::Ip,
     };
 
-    /// Registration: 3 requests per hour per IP.
+    /// Registration: 10 requests per hour per IP.
     ///
-    /// One cap for every environment (BUNYIP-601): the enforcement path resolves
-    /// the value actually in force through the declared configuration providers
+    /// One cap for every environment: the enforcement path resolves the
+    /// value actually in force through the declared configuration providers
     /// (see [`Self::resolve`] / `RateLimitConfigRepository::effective`), so a
-    /// non-production instance loosens it by setting
-    /// `RATE_LIMIT_REGISTRATION_MAX_REQUESTS` (the deployed-instance e2e suite
-    /// self-provisions disposable accounts from one CI egress IP and would trip
-    /// the 3/hour production cap). The handler no longer branches on
-    /// `Config::is_production()` to pick a second preset; there is only this one.
+    /// specific deployment loosens or tightens it by setting
+    /// `RATE_LIMIT_REGISTRATION_MAX_REQUESTS`. 10 per hour covers a shared
+    /// NAT or a CI runner without opening a signup floodgate; abuse at
+    /// higher rates would spray IPs, where the honeypot + submit-timing
+    /// guard on `POST /v1/auth/register` is the stronger brake.
     pub const REGISTRATION: Self = Self {
         action: "registration",
-        max_requests: 3,
+        max_requests: 10,
         window_seconds: 3600,
         key_kind: KeyKind::Ip,
     };
@@ -721,7 +728,7 @@ mod tests {
     #[test]
     fn overrides_layer_over_the_const_default() {
         let base = RateLimitConfig::LOGIN;
-        assert_eq!((base.max_requests, base.window_seconds), (5, 60));
+        assert_eq!((base.max_requests, base.window_seconds), (10, 60));
 
         // Env layer: cap only.
         let env = base.with_overrides(Some(25), None);
@@ -788,31 +795,31 @@ mod tests {
     #[test]
     fn active_retry_after_gates_on_window_and_count() {
         let now = DateTime::from_timestamp(1_000_000, 0).unwrap();
-        let cfg = RateLimitConfig::LOGIN; // cap 5, window 60s
+        let cfg = RateLimitConfig::LOGIN; // cap 10, window 60s
 
         // In-window, at the cap -> active, retry_after = remaining window.
         let start = now - Duration::seconds(20);
         assert_eq!(
-            row("login", "e", 5, start).active_retry_after(&cfg, now),
+            row("login", "e", 10, start).active_retry_after(&cfg, now),
             Some(40)
         );
 
         // In-window, over the cap -> still active.
         assert_eq!(
-            row("login", "e", 9, start).active_retry_after(&cfg, now),
+            row("login", "e", 14, start).active_retry_after(&cfg, now),
             Some(40)
         );
 
         // In-window but under the cap -> not active.
         assert_eq!(
-            row("login", "e", 4, start).active_retry_after(&cfg, now),
+            row("login", "e", 9, start).active_retry_after(&cfg, now),
             None
         );
 
         // Window already elapsed -> not active even at the cap.
         let stale = now - Duration::seconds(120);
         assert_eq!(
-            row("login", "e", 5, stale).active_retry_after(&cfg, now),
+            row("login", "e", 10, stale).active_retry_after(&cfg, now),
             None
         );
     }
