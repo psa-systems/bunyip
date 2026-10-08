@@ -56,6 +56,34 @@ pub async fn begin_with_user(
     Ok(tx)
 }
 
+/// Idempotently create the `bunyip_app` role as a GRANT-only shell, BEFORE
+/// migrations run. Any migration that names the role in a `GRANT ... TO
+/// bunyip_app` statement needs it to exist by the time `sqlx::migrate!` fires;
+/// `provision_app_role` below cannot do that job because it runs AFTER
+/// migrations and is gated on `BUNYIP_APP_PASSWORD`, which deployments can
+/// legitimately leave unset.
+///
+/// The shell has no password and `NOLOGIN`: a role nothing can connect as is
+/// just a GRANT target. When `BUNYIP_APP_PASSWORD` is set, the post-migration
+/// `provision_app_role` reconciles the role to `LOGIN` with the password and
+/// adds the wider privileges.
+pub async fn ensure_app_role_shell(pool: &PgPool) -> Result<(), AppError> {
+    sqlx::query(shell_role_statement())
+        .execute(pool)
+        .await
+        .map_err(|e| AppError::internal(format!("bunyip_app shell-role bootstrap failed: {e}")))?;
+    Ok(())
+}
+
+/// The idempotent `DO` block used by [`ensure_app_role_shell`]. Factored out so
+/// the shape can be pinned in a unit test without a running database.
+fn shell_role_statement() -> &'static str {
+    "DO $do$ BEGIN \
+     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bunyip_app') \
+     THEN CREATE ROLE bunyip_app NOLOGIN NOSUPERUSER NOBYPASSRLS; \
+     END IF; END $do$"
+}
+
 /// Idempotently provision the unprivileged `bunyip_app` role that activates the
 /// per-user RLS policies (BUNYIP-360).
 ///
@@ -171,7 +199,27 @@ fn quote_ident(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{provisioning_error, provisioning_statements, quote_ident, sql_quote};
+    use super::{
+        provisioning_error, provisioning_statements, quote_ident, shell_role_statement, sql_quote,
+    };
+
+    /// BUNYIP-899: the pre-migration shell bootstrap is a no-op when the role
+    /// already exists and never alters the role's login / password state. Those
+    /// stay the job of `provision_app_role`.
+    #[test]
+    fn shell_role_statement_is_idempotent_and_login_free() {
+        let stmt = shell_role_statement();
+        assert!(stmt.contains("IF NOT EXISTS"));
+        assert!(stmt.contains("rolname = 'bunyip_app'"));
+        assert!(stmt.contains("CREATE ROLE bunyip_app"));
+        assert!(stmt.contains("NOLOGIN"));
+        assert!(stmt.contains("NOBYPASSRLS"));
+        assert!(!stmt.contains("PASSWORD"), "shell role carries no password");
+        assert!(
+            !stmt.contains("ALTER"),
+            "shell role never alters an existing role: {stmt}"
+        );
+    }
 
     #[test]
     fn sql_quote_doubles_embedded_single_quotes() {

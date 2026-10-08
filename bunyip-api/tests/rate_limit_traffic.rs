@@ -20,6 +20,9 @@ async fn setup() -> Option<sqlx::PgPool> {
         .connect(&url)
         .await
         .ok()?;
+    bunyip_api::db::ensure_app_role_shell(&pool)
+        .await
+        .expect("ensure bunyip_app role shell");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
