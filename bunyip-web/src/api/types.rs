@@ -875,6 +875,24 @@ pub struct AdminRateLimitTrafficPoint {
     pub count: i64,
 }
 
+/// One row returned by `GET /v1/admin/rate-limits/approaching`
+/// (BUNYIP-897): a key whose count is approaching the configured cap.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitApproaching {
+    pub action: String,
+    pub key: String,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub user_email: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    #[serde(default)]
+    pub count: i64,
+    #[serde(default)]
+    pub max_requests: i32,
+}
+
 /// Response from `GET /v1/admin/rate-limits/traffic` (BUNYIP-893). Carries
 /// the configured limit alongside the counts so the admin page's sparkline
 /// does not need a second resolver read.

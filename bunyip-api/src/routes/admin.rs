@@ -212,6 +212,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/rate-limits/traffic",
                 web::get().to(handlers::list_rate_limit_traffic),
             )
+            // Top-N rows close to the cap for each action (BUNYIP-897).
+            .route(
+                "/rate-limits/approaching",
+                web::get().to(handlers::list_rate_limit_approaching),
+            )
             // Reset an active rate limit (BUNYIP-316)
             .route(
                 "/rate-limits/reset",

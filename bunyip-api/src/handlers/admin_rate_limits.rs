@@ -683,6 +683,99 @@ pub async fn list_rate_limit_traffic(
     Ok(success(body, request_id))
 }
 
+/// One row of the "close to the limit" admin view: `(action, key)` with its
+/// current count against the configured cap, resolved to the subject the
+/// active-throttles view resolves (user / IP / oauth client).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RateLimitApproachingEntry {
+    pub action: String,
+    pub key: String,
+    pub user_id: Option<Uuid>,
+    pub user_email: Option<String>,
+    pub ip: Option<String>,
+    pub count: i64,
+    pub max_requests: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApproachingQuery {
+    pub action: String,
+    /// Default 0.7, clamped to [0.1, 1.0].
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    /// Default 10, clamped to [1, 100].
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+/// GET /v1/admin/rate-limits/approaching?action=<name>&threshold=<r>&limit=<n>
+///
+/// Top-N rows for `action` whose current count is close to the cap (ratio
+/// defaults to 0.7), under-cap only; over-cap rows are the active-throttles
+/// view. AdminUser-gated. Rate-limited through ADMIN_DIAGNOSTICS.
+pub async fn list_rate_limit_approaching(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    query: web::Query<ApproachingQuery>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    RateLimitRepository::check_rate_limit(
+        pool.get_ref(),
+        &admin.0.sub.to_string(),
+        &RateLimitConfig::ADMIN_DIAGNOSTICS,
+    )
+    .await?;
+
+    let Some(cfg) = RateLimitConfig::by_action(&query.action) else {
+        return Err(AppError::ValidationError {
+            field: "action".to_string(),
+            message: format!("unknown rate-limit action: {}", query.action),
+        });
+    };
+    let threshold = query.threshold.unwrap_or(0.7);
+    if !(0.1..=1.0).contains(&threshold) {
+        return Err(AppError::ValidationError {
+            field: "threshold".to_string(),
+            message: "`threshold` must be between 0.1 and 1.0".to_string(),
+        });
+    }
+    let limit = query.limit.unwrap_or(10);
+
+    let rows =
+        RateLimitRepository::list_approaching(pool.get_ref(), &query.action, threshold, limit)
+            .await?;
+
+    let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let subject = cfg.subject(&row.key);
+        let (user_id, user_email, ip) = match &subject {
+            KeySubject::Email(email) => {
+                let u = UserRepository::find_by_email(pool.get_ref(), email).await?;
+                (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+            }
+            KeySubject::UserId(id) => {
+                let u = UserRepository::find_by_id(pool.get_ref(), *id).await?;
+                (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+            }
+            KeySubject::Ip(ip) => (None, None, Some(ip.clone())),
+            KeySubject::ClientId(_) | KeySubject::Unknown(_) => (None, None, None),
+        };
+        entries.push(RateLimitApproachingEntry {
+            action: row.action,
+            key: row.key,
+            user_id,
+            user_email,
+            ip,
+            count: row.count as i64,
+            max_requests: effective.max_requests,
+        });
+    }
+
+    Ok(success(entries, request_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

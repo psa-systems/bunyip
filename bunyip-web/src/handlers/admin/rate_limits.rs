@@ -9,7 +9,8 @@ use serde::Deserialize;
 
 use crate::api::admin as admin_api;
 use crate::api::types::{
-    AdminRateLimit, AdminRateLimitConfig, AdminRateLimitHistory, AdminRateLimitTraffic,
+    AdminRateLimit, AdminRateLimitApproaching, AdminRateLimitConfig, AdminRateLimitHistory,
+    AdminRateLimitTraffic,
 };
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -250,10 +251,20 @@ pub async fn rate_limits(
     // move to `futures::join_all` without changing the render.
     let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
         Vec::with_capacity(configs.len());
+    let mut approaching: Vec<(String, Vec<AdminRateLimitApproaching>)> =
+        Vec::with_capacity(configs.len());
     for cfg in &configs {
         let r =
             admin_api::rate_limit_traffic(&st.api, c.forward.as_deref(), &cfg.action, window).await;
         traffic.push((cfg.action.clone(), r));
+        if let Ok(rows) =
+            admin_api::rate_limit_approaching(&st.api, c.forward.as_deref(), &cfg.action, 0.7, 5)
+                .await
+        {
+            if !rows.is_empty() {
+                approaching.push((cfg.action.clone(), rows));
+            }
+        }
     }
 
     let content = html! {
@@ -288,6 +299,8 @@ pub async fn rate_limits(
             (past_throttles_card(&history, history_error.as_ref()))
             // Traffic + sparkline per bucket (BUNYIP-892).
             (traffic_card(&traffic, window))
+            // Close to the Limit: top-N rows approaching each cap (BUNYIP-897).
+            (close_to_limit_card(&approaching))
             (rate_limit_config_card(&configs, configs_error.as_ref(), user.is_super_admin))
         }
     };
@@ -643,4 +656,62 @@ pub async fn rate_limit_config_reset(
             Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
         };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+/// Close to the Limit card: for each action with at least one row near the
+/// cap, show a subheading and up to five "subject - count/cap" rows. An
+/// empty approaching list across every action still renders the card with
+/// a single empty-state line so the operator sees the check ran.
+fn close_to_limit_card(approaching: &[(String, Vec<AdminRateLimitApproaching>)]) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" {
+                    (icon("activity", "h-5 w-5 text-primary-text"))
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Close to the Limit" }
+                }
+                p class="text-sm text-muted-foreground" {
+                    "Subjects whose current window is at 70% of the cap or over, under-cap only."
+                }
+            }
+            div class="p-6 pt-0 space-y-4" {
+                @if approaching.is_empty() {
+                    (empty_state("activity", "No throttles are approaching right now.", None))
+                } @else {
+                    @for (action, rows) in approaching {
+                        div class="space-y-1" {
+                            p class="text-sm font-medium" { (title_case(action)) }
+                            div class="divide-y rounded-md border" {
+                                @for row in rows {
+                                    (close_to_limit_row(row))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One row of the Close to the Limit list: subject + count/cap.
+fn close_to_limit_row(row: &AdminRateLimitApproaching) -> Markup {
+    let (subject, icon_name) = if let Some(email) = &row.user_email {
+        (email.clone(), "user")
+    } else if let Some(ip) = &row.ip {
+        (ip.clone(), "globe")
+    } else {
+        (row.key.clone(), "help-circle")
+    };
+    html! {
+        div class="flex items-center justify-between py-2 px-3 text-sm" {
+            div class="flex items-center gap-2 min-w-0" {
+                (icon(icon_name, "h-4 w-4 text-muted-foreground shrink-0"))
+                span class="truncate" { (subject) }
+            }
+            span class="font-mono text-xs text-muted-foreground" {
+                (row.count) "/" (row.max_requests)
+            }
+        }
+    }
 }
