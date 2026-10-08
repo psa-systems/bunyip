@@ -32,6 +32,9 @@ async fn maybe_pool() -> Option<PgPool> {
         .or_else(|_| std::env::var("BUNYIP_TEST_DATABASE_URL"))
         .ok()?;
     let pool = PgPoolOptions::new().connect(&url).await.ok()?;
+    bunyip_api::db::ensure_app_role_shell(&pool)
+        .await
+        .expect("ensure bunyip_app role shell");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
