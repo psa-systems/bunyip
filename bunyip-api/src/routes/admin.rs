@@ -202,6 +202,16 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // Active rate limits (BUNYIP-315)
             .route("/rate-limits", web::get().to(handlers::list_rate_limits))
+            // Past throttle events for the admin page (BUNYIP-893).
+            .route(
+                "/rate-limits/history",
+                web::get().to(handlers::list_rate_limit_history),
+            )
+            // Per-bucket traffic rollup feeding the admin sparkline (BUNYIP-893).
+            .route(
+                "/rate-limits/traffic",
+                web::get().to(handlers::list_rate_limit_traffic),
+            )
             // Reset an active rate limit (BUNYIP-316)
             .route(
                 "/rate-limits/reset",

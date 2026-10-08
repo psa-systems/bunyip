@@ -503,6 +503,172 @@ pub async fn delete_rate_limit_config(
     Ok(success_no_data(request_id))
 }
 
+// ============================================================================
+// Past-throttles history and traffic rollups.
+//
+// The two endpoints below answer the two questions the admin page can't ask
+// today: has a throttle fired recently (even though its window has elapsed),
+// and how much traffic is each action seeing in a rolling day. The write side
+// lives in `RateLimitRepository::check_and_increment`, which populates both
+// `rate_limit_history` and `rate_limit_traffic` on every call.
+// ============================================================================
+
+/// One row returned by GET /v1/admin/rate-limits/history.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RateLimitHistoryEntry {
+    pub action: String,
+    pub key: String,
+    pub user_id: Option<Uuid>,
+    pub user_email: Option<String>,
+    pub ip: Option<String>,
+    pub fired_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HistoryQuery {
+    /// ISO-8601 instant, clamped to 24h ago. Default: 24h ago.
+    pub since: Option<DateTime<Utc>>,
+    /// Max rows to return. Default 100, clamped to 1000.
+    pub limit: Option<i64>,
+}
+
+/// GET /v1/admin/rate-limits/history
+///
+/// Past throttle events in a `[since, now]` window, newest first. Resolves
+/// each key the same way list_rate_limits does: email / user id lookup,
+/// IP exposure, oauth client id left as-is.
+pub async fn list_rate_limit_history(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    query: web::Query<HistoryQuery>,
+) -> Result<HttpResponse, AppError> {
+    use crate::repositories::RateLimitHistoryRepository;
+    let request_id = get_request_id(&req);
+    let now = Utc::now();
+    let floor = now - Duration::seconds(86400);
+    let since = query.since.unwrap_or(floor).max(floor);
+    let limit = query.limit.unwrap_or(100).clamp(1, 1000);
+
+    let rows = RateLimitHistoryRepository::list(pool.get_ref(), since, limit).await?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let (user_id, user_email, ip) = match RateLimitConfig::by_action(&row.action) {
+            Some(cfg) => match cfg.subject(&row.key) {
+                KeySubject::Email(email) => {
+                    let u = UserRepository::find_by_email(pool.get_ref(), &email).await?;
+                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+                }
+                KeySubject::UserId(id) => {
+                    let u = UserRepository::find_by_id(pool.get_ref(), id).await?;
+                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+                }
+                KeySubject::Ip(ip) => (None, None, Some(ip)),
+                KeySubject::ClientId(_) | KeySubject::Unknown(_) => (None, None, None),
+            },
+            None => (None, None, None),
+        };
+        entries.push(RateLimitHistoryEntry {
+            action: row.action,
+            key: row.key,
+            user_id,
+            user_email,
+            ip,
+            fired_at: row.fired_at,
+            expires_at: row.expires_at,
+        });
+    }
+
+    Ok(success(entries, request_id))
+}
+
+/// One point in the per-bucket traffic read.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrafficPointEntry {
+    pub bucket_start: DateTime<Utc>,
+    pub count: i64,
+}
+
+/// GET /v1/admin/rate-limits/traffic response.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TrafficResponse {
+    pub action: String,
+    pub max_requests: i32,
+    pub window_seconds: i64,
+    pub bucket_width_seconds: i64,
+    pub points: Vec<TrafficPointEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrafficQuery {
+    pub action: String,
+    /// `1h`, `6h`, or `1d`. Default `1h`.
+    #[serde(default)]
+    pub window: Option<String>,
+}
+
+fn parse_traffic_window(raw: Option<&str>) -> Option<Duration> {
+    match raw.unwrap_or("1h") {
+        "1h" => Some(Duration::hours(1)),
+        "6h" => Some(Duration::hours(6)),
+        "1d" => Some(Duration::days(1)),
+        _ => None,
+    }
+}
+
+/// GET /v1/admin/rate-limits/traffic?action=<name>&window=1h|6h|1d
+///
+/// Per-15-minute-bucket counts summed across every key_hash for the action,
+/// newest bucket first. `max_requests` and `window_seconds` are the
+/// configured limit for the sparkline's threshold line; the client never has
+/// to re-resolve them separately.
+pub async fn list_rate_limit_traffic(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+    query: web::Query<TrafficQuery>,
+) -> Result<HttpResponse, AppError> {
+    use crate::repositories::{RateLimitConfigRepository, RateLimitTrafficRepository};
+    use bunyip_domain::repositories::rate_limit_traffic::BUCKET_WIDTH_SECS;
+    let request_id = get_request_id(&req);
+    let now = Utc::now();
+
+    let Some(window) = parse_traffic_window(query.window.as_deref()) else {
+        return Err(AppError::ValidationError {
+            field: "window".to_string(),
+            message: "`window` must be one of `1h`, `6h`, `1d`".to_string(),
+        });
+    };
+    let Some(cfg) = RateLimitConfig::by_action(&query.action) else {
+        return Err(AppError::ValidationError {
+            field: "action".to_string(),
+            message: format!("unknown rate-limit action: {}", query.action),
+        });
+    };
+    let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
+
+    let since = now - window;
+    let points = RateLimitTrafficRepository::read(pool.get_ref(), &query.action, since).await?;
+
+    let body = TrafficResponse {
+        action: query.action.clone(),
+        max_requests: effective.max_requests,
+        window_seconds: effective.window_seconds,
+        bucket_width_seconds: BUCKET_WIDTH_SECS,
+        points: points
+            .into_iter()
+            .map(|p| TrafficPointEntry {
+                bucket_start: p.bucket_start,
+                count: p.count,
+            })
+            .collect(),
+    };
+
+    Ok(success(body, request_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

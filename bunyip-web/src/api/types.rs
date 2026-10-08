@@ -846,6 +846,48 @@ pub struct AdminRateLimit {
     pub retry_after: u64,
 }
 
+/// One past throttle event as returned by
+/// `GET /v1/admin/rate-limits/history` (BUNYIP-893). The row survives the
+/// window reset the enforcement row does not, so the admin page can still
+/// surface a throttle that fired forty minutes ago.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitHistory {
+    pub action: String,
+    pub key: String,
+    #[serde(default)]
+    pub user_id: Option<String>,
+    #[serde(default)]
+    pub user_email: Option<String>,
+    #[serde(default)]
+    pub ip: Option<String>,
+    pub fired_at: String,
+    pub expires_at: String,
+}
+
+/// One point in `GET /v1/admin/rate-limits/traffic` (BUNYIP-893).
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitTrafficPoint {
+    pub bucket_start: String,
+    #[serde(default)]
+    pub count: i64,
+}
+
+/// Response from `GET /v1/admin/rate-limits/traffic` (BUNYIP-893). Carries
+/// the configured limit alongside the counts so the admin page's sparkline
+/// does not need a second resolver read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitTraffic {
+    pub action: String,
+    #[serde(default)]
+    pub max_requests: i32,
+    #[serde(default)]
+    pub window_seconds: i64,
+    #[serde(default)]
+    pub bucket_width_seconds: i64,
+    #[serde(default)]
+    pub points: Vec<AdminRateLimitTrafficPoint>,
+}
+
 /// The configured cap/window for one rate-limit action as returned by
 /// `GET /v1/admin/rate-limit-configs` (BUNYIP-413). Mirrors
 /// `bunyip_api::handlers::admin_rate_limits::RateLimitConfigEntry`:
