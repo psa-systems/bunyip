@@ -46,6 +46,16 @@ test_args := "--workspace --all-targets"
 # Migrations live under bunyip-api, not the repo root common defaults to.
 migrations_dir := "bunyip-api/migrations"
 
+# Non-Rust files Rust tests read with `include_str!` so a commit that only
+# touches these runs the full cargo legs rather than skipping under GOV-55's
+# staged-path guard. The CSS token / asset guards in `bunyip-web/src/views/ui.rs`
+# and `password.rs` include `assets/styles.css`, `assets/js/password-field.js`
+# and `input.css`; `bunyip-web/src/skin/content.rs` includes the markdown under
+# `src/skin/docs/`; `crates/bunyip-domain/src/services/email.rs` includes the
+# email templates under `crates/bunyip-domain/templates/`; `bunyip-api/src/seed.rs`
+# includes the JSON seeds under `bunyip-api/seed/`.
+pre_commit_extra_paths := "bunyip-web/assets/ bunyip-web/input.css bunyip-web/src/skin/docs/ crates/bunyip-domain/templates/ bunyip-api/seed/"
+
 # The root manifest is virtual and the single version lives at
 # [workspace.package] version, inherited by every member with
 # `version.workspace = true`; release_manifest stays the root default.
