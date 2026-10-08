@@ -61,6 +61,8 @@ const ESSENTIAL_FIELDS = [
     {field: "AdminRateLimitHistory.expires_at", reason: "when the throttle was released; shown beside fired_at"}
     {field: "AdminRateLimitTraffic.action", reason: "identifies the sparkline the points belong to"}
     {field: "AdminRateLimitTrafficPoint.bucket_start", reason: "a point without its bucket is a count against no x-axis"}
+    {field: "AdminRateLimitApproaching.action", reason: "identifies the throttle the row is approaching"}
+    {field: "AdminRateLimitApproaching.key", reason: "identifies the subject near the limit"}
     {field: "AdminFeatureToggle.key", reason: "identifies the toggle a save targets"}
     {field: "AdminApplication.id", reason: "target of every admin action on the row"}
     {field: "UserEntitlement.application_id", reason: "the revoke target"}

@@ -34,6 +34,46 @@ impl RateLimitRepository {
         Ok(rows)
     }
 
+    /// Rows for `action` whose current count is within `threshold_ratio..=1.0`
+    /// of the effective cap and whose window is still open. The admin page's
+    /// Close to the Limit section reads this; rows strictly over the cap are
+    /// the active-throttles view and are excluded here. Ordered by `count DESC`
+    /// so the first row is the one about to trip.
+    pub async fn list_approaching(
+        pool: &PgPool,
+        action: &str,
+        threshold_ratio: f64,
+        limit: i64,
+    ) -> Result<Vec<RateLimit>, AppError> {
+        let Some(cfg) = RateLimitConfig::by_action(action) else {
+            return Ok(Vec::new());
+        };
+        let effective = RateLimitConfigRepository::effective(pool, &cfg).await?;
+        let ratio = threshold_ratio.clamp(0.1, 1.0);
+        let floor = (effective.max_requests as f64 * ratio).ceil() as i32;
+        let window_opens_after = Utc::now() - Duration::seconds(effective.window_seconds);
+        let rows = sqlx::query_as::<_, RateLimit>(
+            r#"
+            SELECT id, key, action, count, window_start
+            FROM rate_limits
+            WHERE action = $1
+              AND window_start > $2
+              AND count >= $3
+              AND count <= $4
+            ORDER BY count DESC, window_start DESC
+            LIMIT $5
+            "#,
+        )
+        .bind(action)
+        .bind(window_opens_after)
+        .bind(floor)
+        .bind(effective.max_requests)
+        .bind(limit.clamp(1, 100))
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// The longest window in force across every known action, as the declared
     /// configuration providers resolve it (BUNYIP-413/645). The retention
     /// horizon for the `rate_limits` table: a row older than this cannot belong
