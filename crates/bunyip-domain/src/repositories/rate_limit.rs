@@ -113,6 +113,26 @@ impl RateLimitRepository {
         let (count, resolved_window_start) = result;
         let exceeded = count > config.max_requests;
 
+        // Record this request on the per-bucket rollup so the admin page's
+        // sparkline has a cheap pre-aggregated read. Every call lands here,
+        // over-cap or not; the counter is what "how much traffic hit this
+        // action in the last 15 minutes" reads back as. Best-effort: a
+        // failed INSERT is logged and swallowed so enforcement still fires.
+        if let Err(e) = super::rate_limit_traffic::RateLimitTrafficRepository::record(
+            pool,
+            config.action,
+            key,
+            Utc::now(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                action = config.action,
+                "rate_limit_traffic: failed to record request"
+            );
+        }
+
         // Record one history row per throttle event: the first request that
         // crosses the cap. Later over-cap requests in the same window keep
         // incrementing `count` but add no row, so a burst does not inflate
