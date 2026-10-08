@@ -436,17 +436,19 @@ fn header(
                         }
                     }
                 }
-                div class="flex items-center gap-4" {
+                div class="flex items-center gap-2 sm:gap-4" {
                     (theme_controls("h-5 w-5"))
                     @if let Some(u) = user {
                         a href="/dashboard" class=(button_class("ghost", "sm", "")) { "Dashboard" }
                         @if is_admin { a href="/admin" class=(button_class("ghost", "sm", "")) { "Admin" } }
-                        // BUNYIP-408: same profile menu as the app shells, so the
-                        // documentation / marketing pages reach profile + logout
-                        // through the identical affordance.
+                        // Same profile menu as the app shells, so the documentation and
+                        // marketing pages reach profile + logout through the identical
+                        // affordance.
                         (profile_menu(u))
                     } @else {
-                        a href="/register" class=(button_class("default", "sm", "")) { "Sign up" }
+                        // Sign up is hidden on narrow screens so the header fits
+                        // a 390 px phone viewport; /login's own card links to it.
+                        a href="/register" class=(format!("{} hidden sm:inline-flex", button_class("default", "sm", ""))) { "Sign up" }
                         a href="/login" class=(button_class("outline", "sm", "")) { "Sign in" }
                     }
                 }
@@ -1624,6 +1626,33 @@ mod tests {
         // dark-mode treatment of its own, unlike the glyph it replaces
         // (drawn in `currentColor`), so it needs a themed surface behind it.
         assert!(uploaded.contains("bg-card"), "{uploaded}");
+    }
+
+    /// The public header fits a 390 px viewport: the right-hand control group
+    /// uses `gap-2` below `sm`, and the signed-out "Sign up" button is hidden
+    /// below `sm` so brand + two theme controls + "Sign in" sit on the row.
+    /// Above `sm` both buttons are visible on the same row they were before.
+    #[test]
+    fn public_header_fits_a_narrow_viewport() {
+        let cfg = Config::from_env();
+        let signed_out = public_shell(&cfg, None, true, false, false, html! {}).into_string();
+        assert!(
+            signed_out.contains("gap-2 sm:gap-4"),
+            "the right-hand group needs the responsive gap: {signed_out}"
+        );
+        assert!(
+            signed_out.contains("hidden sm:inline-flex"),
+            "the signed-out Sign up button is hidden below sm: {signed_out}"
+        );
+        // Sign in has no hidden-below-sm class; it is visible at every width.
+        let sign_in_idx = signed_out
+            .find(r#"href="/login""#)
+            .expect("the Sign in link renders");
+        let sign_in_chunk = &signed_out[sign_in_idx..sign_in_idx + 200];
+        assert!(
+            !sign_in_chunk.contains("hidden sm:"),
+            "the Sign in link is never hidden: {sign_in_chunk}"
+        );
     }
 
     /// BUNYIP-487: `/pricing` 404s unless an admin published it, so the nav and
