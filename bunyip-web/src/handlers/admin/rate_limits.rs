@@ -487,7 +487,7 @@ fn traffic_card(
                                         }
                                     }
                                     Err(_) => {
-                                        p class="text-xs text-amber-600 dark:text-amber-400" {
+                                        p class="text-xs text-amber-800 dark:text-amber-400" {
                                             "Traffic unavailable."
                                         }
                                     }
