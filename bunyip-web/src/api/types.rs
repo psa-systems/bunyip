@@ -410,6 +410,9 @@ impl AsRef<str> for FeedbackStatus {
 pub struct TwoFactorSetupResponse {
     pub otpauth_uri: String,
     pub secret: String,
+    /// One-time token confirm and resume require; set only by setup (BUNYIP-886).
+    #[serde(default)]
+    pub setup_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

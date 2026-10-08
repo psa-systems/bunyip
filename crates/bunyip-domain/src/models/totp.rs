@@ -28,6 +28,10 @@ pub struct UserTotp {
     /// verification, NULL until the first one. Per user, monotonic; a code
     /// whose step is at or below this value is refused as a replay.
     pub last_used_step: Option<i64>,
+    /// BUNYIP-886: SHA-256 (hex) of the one-time setup token `begin_setup`
+    /// returned; NULL when no setup is in progress.
+    pub setup_token_hash: Option<String>,
+    pub setup_token_expires_at: Option<DateTime<Utc>>,
 }
 
 /// Recovery code for 2FA backup

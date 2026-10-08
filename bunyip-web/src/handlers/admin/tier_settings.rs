@@ -100,7 +100,7 @@ pub(super) fn tier_settings_content(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Pricing Tiers" } p class="mt-2 text-muted-foreground" { "Slot limits, trial lengths, the tier -> Stripe price mapping, and the public pricing switch. Raw Stripe products, prices and webhooks live on the " a href="/admin/stripe" class="text-primary-text hover:underline" { "Stripe" } " page." } }
             @match cfg {
-                Err(err) => (error_box_for("Could not load tier config.", err)),
+                Err(err) => (error_box_for("Could not reach the API to load the tier config.", err)),
                 Ok(c) => {
                     form method="post" action="/admin/tier-settings" class="space-y-6" {
                         @if let Some(e) = error { (error_box(e)) }
@@ -139,7 +139,7 @@ pub(super) fn tier_settings_content(
                             html! {
                                 div class="flex items-center gap-3 text-sm font-medium" {
                                     (toggle_switch_field("orgs_enabled", "orgs_enabled", values.orgs_enabled, "Enable organizations and teams"))
-                                    "Enable organizations and teams"
+                                    label for="orgs_enabled" class="text-sm font-medium" { "Enable organizations and teams" }
                                 }
                             },
                         ))
@@ -155,7 +155,7 @@ pub(super) fn tier_settings_content(
     }
 }
 
-/// Tier config for the page. `Err` renders "Could not load tier config." with
+/// Tier config for the page. `Err` renders "Could not reach the API to load the tier config." with
 /// the failure's message and request id (BUNYIP-844); the log is what names
 /// its cause for the operator.
 async fn tier_config(st: &AppState, cookie: Option<&str>) -> Result<TierConfigResponse, ApiError> {

@@ -27,7 +27,7 @@ fn toggle_field(id: &str, label: &str, on: bool, provenance: Markup) -> Markup {
         div class="space-y-2" {
             div class="flex items-center gap-3 text-sm font-medium" {
                 (toggle_switch_field(id, id, on, label))
-                (label)
+                label for=(id) class="text-sm font-medium" { (label) }
             }
             (provenance)
         }
@@ -146,7 +146,7 @@ pub(super) fn system_settings_content(
                 }
             }
             @match cfg {
-                Err(err) => (error_box_for("Could not load the system config.", err)),
+                Err(err) => (error_box_for("Could not reach the API to load the system config.", err)),
                 Ok(e) => div class="space-y-6" {
                     div class="rounded-md border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground" {
                         "Directory: " code { (e.path) } ". Changes take effect after the next restart."

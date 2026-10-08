@@ -11,7 +11,9 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminRateLimit, AdminUser};
 use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{back_link, badge, button_class, empty_state, icon, toggle_switch_field};
+use crate::views::ui::{
+    back_link, badge, button_class, empty_state, error_box_for, icon, toggle_switch_field,
+};
 use crate::web::{redirect_cookies, AppState};
 
 use super::rate_limits::rate_limit_row;
@@ -237,6 +239,7 @@ pub async fn users(
         &uq.dir,
     )
     .await;
+    let fetch_error = data.as_ref().err().cloned();
     // Denominator for "N of M users". stats.total_users counts live accounts;
     // good enough for the common Active view and only ever a hint.
     let total_all = admin_api::stats(&st.api, c.forward.as_deref())
@@ -244,7 +247,7 @@ pub async fn users(
         .map(|s| s.total_users)
         .ok();
 
-    let panel = users_panel(&uq, data.as_ref().ok(), total_all);
+    let panel = users_panel(&uq, data.as_ref().ok(), total_all, fetch_error.as_ref());
 
     // BUNYIP-410 overhaul: htmx swaps just the panel (search-as-you-type, sort,
     // filter, page) so focus and scroll survive and there is no full reload. A
@@ -511,6 +514,7 @@ pub(super) fn users_panel(
     uq: &UsersQ,
     data: Option<&crate::api::types::PaginatedResponse<crate::api::types::AdminUser>>,
     total_all: Option<i64>,
+    fetch_error: Option<&crate::api::ApiError>,
 ) -> Markup {
     let heading = match uq.status.as_str() {
         "suspended" => "Suspended accounts",
@@ -520,9 +524,11 @@ pub(super) fn users_panel(
     let filtered_total = data.map(|p| p.total).unwrap_or(0);
     let total_pages = data.map(|p| p.total_pages).unwrap_or(1);
     let count_text = match (data, total_all) {
-        (Some(_), Some(all)) if uq.is_filtered() => format!("{filtered_total} of {all} users"),
-        (Some(_), _) => format!("{filtered_total} users"),
-        (None, _) => "Could not load users".to_string(),
+        (Some(_), Some(all)) if uq.is_filtered() => {
+            Some(format!("{filtered_total} of {all} users"))
+        }
+        (Some(_), _) => Some(format!("{filtered_total} users")),
+        (None, _) => None,
     };
 
     // Verification dropdown options.
@@ -583,7 +589,9 @@ pub(super) fn users_panel(
                 // Heading + live result count (announced on swap).
                 div class="flex items-end justify-between gap-4 flex-wrap" {
                     h3 class="text-2xl font-semibold leading-none tracking-tight" { (heading) }
-                    span aria-live="polite" class="text-sm text-muted-foreground" { (count_text) }
+                    @if let Some(count_text) = &count_text {
+                        span aria-live="polite" class="text-sm text-muted-foreground" { (count_text) }
+                    }
                 }
                 // Filter bar: search grows, dropdowns + segmented at content width.
                 div class="flex flex-wrap items-center gap-2" {
@@ -642,11 +650,8 @@ pub(super) fn users_panel(
                             }
                         }
                         None => {
-                            div class="py-10 text-center" {
-                                p class="text-destructive-text" { "Could not load users." }
-                                @let href = uq.href();
-                                a href=(href) hx-get=(href) hx-target="#users-panel" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#users-loading"
-                                  class=(button_class("outline", "sm", "mt-3")) { "Retry" }
+                            @if let Some(e) = fetch_error {
+                                (error_box_for("Could not reach the API to load users.", e))
                             }
                         }
                     }
@@ -1183,7 +1188,7 @@ pub async fn user_detail(
                         }
                         div class="flex items-center gap-2 text-sm text-muted-foreground" {
                             (toggle_switch_field("admin-email-verified", "verified", false, "Mark this address verified"))
-                            "Mark this address verified (leave off to require the user to re-verify)"
+                            label for="admin-email-verified" { "Mark this address verified (leave off to require the user to re-verify)" }
                         }
                     }
                     div class="flex flex-wrap gap-2" {

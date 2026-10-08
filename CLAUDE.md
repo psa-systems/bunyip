@@ -46,8 +46,8 @@ is also bunyip's OIDC issuer (it serves `/.well-known/*` + `/oauth2/*`).
 - `just dev-sso` - Traefik-routed stack on `*.a8n.run` (layers `compose.dev-sso.yml` on top). Cross-repo (bunyip + mokosh-server + mokosh-apps), Nebula topology, OIDC client registration, and every spin-up obstacle are documented in `docs/dev-sso-three-repo-runbook.md` - read it before touching dev-sso infra or onboarding a dev box.
 - `just check` - fmt + clippy + build + docker builder stage. `just test`, `just typecheck`, `just lint`, `just fmt`.
 - `just build-docker` - both production images (`build-docker-export` extracts the api static binary). `just migrate` / `migrate-revert`.
-- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR; after it merges, `just publish-release` pushes the `release/vX.Y.Z` tag that `.forgejo/workflows/create-release.yml` releases from (see README, Development notes).
-  Comes from `common.just`; `release_layout := "virtual-workspace"` in the root justfile is what selects the `[workspace.package]` bump and the `cargo update --workspace --offline` lock sync (workspace-scoped, so external dependencies including the dunite git dep are left where they are, per BUNYIP-426 F6).
+- `just create-release <major|minor|hotfix>` - bump `[workspace.package].version`, push the branch, open the release PR; merging that PR releases on its own (`.forgejo/workflows/create-release.yml` fires on merge via `pull_request_target` and the reusable workflow creates the `vX.Y.Z` tag, release and images; PC-86 removed the old `publish-release` manual step).
+  Comes from `common.just`; `release_layout := "virtual-workspace"` in the root justfile is what selects the `[workspace.package]` bump and the `cargo update --workspace` lock sync (workspace-scoped, so external dependencies including the dunite git dep are left where they are, per BUNYIP-426 F6).
   That `cargo` call runs on the HOST, so unlike the recipe it replaced it needs a host toolchain; moving it back into a container is BUNYIP-629.
 
 Production runs the published images via `compose.yml` (api + web + postgres,
@@ -60,7 +60,7 @@ submodule and imported by the root `justfile` (`import 'common/common.just'`).
 It owns `pre-commit` and its two variants, `check-tree-ownership`,
 `ensure-bind-sources`, `install-hooks`, `create-release` (and its layout
 variants `create-release-generic`, `create-release-workspace`,
-`create-release-virtual-workspace`), `publish-release`, and `check-justfile`;
+`create-release-virtual-workspace`), and `check-justfile`;
 the root justfile configures them through
 variables (`app`, `compose_service`, `dev_bind_sources`, `pre_commit_prepare`,
 `clippy_args`, `compile_args`, `test_args`, `release_layout`) and must never
@@ -156,6 +156,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Cookies](docs/invariants/api-web.md#cookies-bunyip-426) (BUNYIP-426): `Secure` comes from `Config::cookies_secure(&req)`, never `is_production()`.
 - [Single-use tokens](docs/invariants/api-web.md#single-use-tokens-bunyip-426) (BUNYIP-426): Consume with a guarded `UPDATE ... used_at IS NULL` and branch on the result.
 - [OCI errors log their cause](docs/invariants/api-web.md#oci-errors-log-their-cause-bunyip-565) (BUNYIP-565): Every `OciError::Internal` goes through `errors::context`, which logs first.
+- [Two-factor setup](docs/invariants/api-web.md#two-factor-setup-bunyip-886) (BUNYIP-886): Setup 409s an enrolled account, needs the password, and binds confirm to a one-time setup token.
 
 ### UI
 
