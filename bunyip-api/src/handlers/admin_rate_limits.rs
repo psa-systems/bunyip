@@ -540,12 +540,20 @@ pub struct HistoryQuery {
 /// IP exposure, oauth client id left as-is.
 pub async fn list_rate_limit_history(
     req: HttpRequest,
-    _admin: AdminUser,
+    admin: AdminUser,
     pool: web::Data<PgPool>,
     query: web::Query<HistoryQuery>,
 ) -> Result<HttpResponse, AppError> {
     use crate::repositories::RateLimitHistoryRepository;
     let request_id = get_request_id(&req);
+    // Per-admin cap over the generic API_AUTH floor: a browser-refresh
+    // loop by one admin cannot exhaust their shared API budget.
+    RateLimitRepository::check_rate_limit(
+        pool.get_ref(),
+        &admin.0.sub.to_string(),
+        &RateLimitConfig::ADMIN_DIAGNOSTICS,
+    )
+    .await?;
     let now = Utc::now();
     let floor = now - Duration::seconds(86400);
     let since = query.since.unwrap_or(floor).max(floor);
@@ -626,13 +634,19 @@ fn parse_traffic_window(raw: Option<&str>) -> Option<Duration> {
 /// to re-resolve them separately.
 pub async fn list_rate_limit_traffic(
     req: HttpRequest,
-    _admin: AdminUser,
+    admin: AdminUser,
     pool: web::Data<PgPool>,
     query: web::Query<TrafficQuery>,
 ) -> Result<HttpResponse, AppError> {
     use crate::repositories::{RateLimitConfigRepository, RateLimitTrafficRepository};
     use bunyip_domain::repositories::rate_limit_traffic::BUCKET_WIDTH_SECS;
     let request_id = get_request_id(&req);
+    RateLimitRepository::check_rate_limit(
+        pool.get_ref(),
+        &admin.0.sub.to_string(),
+        &RateLimitConfig::ADMIN_DIAGNOSTICS,
+    )
+    .await?;
     let now = Utc::now();
 
     let Some(window) = parse_traffic_window(query.window.as_deref()) else {
