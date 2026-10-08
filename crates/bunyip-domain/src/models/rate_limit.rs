@@ -312,6 +312,20 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
+    /// Admin diagnostics (the past-throttles history and traffic-rollup
+    /// read endpoints): 60 per minute per admin user. The generic
+    /// authenticated floor (`API_AUTH`, 100/min) already covers these
+    /// routes; this preset sits over it so a browser-refresh loop by one
+    /// admin cannot poison the aggregated data by exhausting the user's
+    /// shared API budget. Keyed by user id, so a second admin on the same
+    /// IP is unaffected.
+    pub const ADMIN_DIAGNOSTICS: Self = Self {
+        action: "admin_diagnostics",
+        max_requests: 60,
+        window_seconds: 60,
+        key_kind: KeyKind::UserId,
+    };
+
     /// Every preset, so the admin read path can look one up by its stored
     /// `action` string (BUNYIP-315). Keep in lock-step with the consts above.
     pub const ALL: &'static [Self] = &[
@@ -334,6 +348,7 @@ impl RateLimitConfig {
         Self::SMTP_TEST,
         Self::MAILER_SEND,
         Self::MAILER_AUTH_FAILURES,
+        Self::ADMIN_DIAGNOSTICS,
     ];
 
     /// Look up the preset for a stored `rate_limits.action` string. Returns

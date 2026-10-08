@@ -25,7 +25,8 @@ use bunyip_api::{
     mokosh_backup::MokoshHttpBackupAdapter,
     repositories::{
         AuditLogRepository, DownloadCacheRepository, DownloadDailyCountRepository,
-        FeedbackRepository, RateLimitRepository, UserRepository,
+        FeedbackRepository, RateLimitHistoryRepository, RateLimitRepository,
+        RateLimitTrafficRepository, UserRepository,
     },
     routes,
     services::{
@@ -1075,6 +1076,49 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     error!(error = %e, "Failed to cleanup expired rate limit entries");
+                }
+            }
+        }
+    });
+
+    // Sweep rate_limit_history on the same cadence. Retention is 24 hours:
+    // past throttles answer the admin page's "has a rate limit fired
+    // recently" question, older rows add nothing.
+    let history_pool = pool.clone();
+    tokio::spawn(async move {
+        info!("Rate limit history retention task started");
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            match RateLimitHistoryRepository::sweep(&history_pool, 86400).await {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        info!(deleted, "Swept expired rate_limit_history rows");
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to sweep rate_limit_history");
+                }
+            }
+        }
+    });
+
+    // Sweep rate_limit_traffic on the same cadence. The admin page's
+    // maximum window is 1 day, so a 24h retention floor is enough.
+    let traffic_pool = pool.clone();
+    tokio::spawn(async move {
+        info!("Rate limit traffic retention task started");
+        let mut interval = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            match RateLimitTrafficRepository::sweep(&traffic_pool, 86400).await {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        info!(deleted, "Swept expired rate_limit_traffic rows");
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to sweep rate_limit_traffic");
                 }
             }
         }

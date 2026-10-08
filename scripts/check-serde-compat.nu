@@ -55,6 +55,12 @@ const ESSENTIAL_FIELDS = [
     {field: "AdminRateLimit.action", reason: "identifies the throttle to the reset endpoint"}
     {field: "AdminRateLimit.key", reason: "identifies the throttle to the reset endpoint"}
     {field: "AdminRateLimitConfig.action", reason: "identifies the config row being edited"}
+    {field: "AdminRateLimitHistory.action", reason: "identifies the throttle event"}
+    {field: "AdminRateLimitHistory.key", reason: "identifies the subject whose request was refused"}
+    {field: "AdminRateLimitHistory.fired_at", reason: "when the throttle fired; the row is unreadable without it"}
+    {field: "AdminRateLimitHistory.expires_at", reason: "when the throttle was released; shown beside fired_at"}
+    {field: "AdminRateLimitTraffic.action", reason: "identifies the sparkline the points belong to"}
+    {field: "AdminRateLimitTrafficPoint.bucket_start", reason: "a point without its bucket is a count against no x-axis"}
     {field: "AdminFeatureToggle.key", reason: "identifies the toggle a save targets"}
     {field: "AdminApplication.id", reason: "target of every admin action on the row"}
     {field: "UserEntitlement.application_id", reason: "the revoke target"}

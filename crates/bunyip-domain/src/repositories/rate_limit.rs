@@ -83,8 +83,11 @@ impl RateLimitRepository {
         let config = &RateLimitConfigRepository::effective(pool, config).await?;
         let window_start = Utc::now() - Duration::seconds(config.window_seconds);
 
-        // Try to insert or update the rate limit entry
-        let result = sqlx::query_as::<_, (i32,)>(
+        // RETURN count AND the row's resolved window_start so the
+        // history-record branch below can compute expires_at from the exact
+        // moment this window opened, not a second clock read that could
+        // disagree with it.
+        let result = sqlx::query_as::<_, (i32, chrono::DateTime<Utc>)>(
             r#"
             INSERT INTO rate_limits (key, action, count, window_start)
             VALUES ($1, $2, 1, NOW())
@@ -98,7 +101,7 @@ impl RateLimitRepository {
                     WHEN rate_limits.window_start < $3 THEN NOW()
                     ELSE rate_limits.window_start
                 END
-            RETURNING count
+            RETURNING count, window_start
             "#,
         )
         .bind(key)
@@ -107,8 +110,51 @@ impl RateLimitRepository {
         .fetch_one(pool)
         .await?;
 
-        let count = result.0;
+        let (count, resolved_window_start) = result;
         let exceeded = count > config.max_requests;
+
+        // Record this request on the per-bucket rollup so the admin page's
+        // sparkline has a cheap pre-aggregated read. Every call lands here,
+        // over-cap or not; the counter is what "how much traffic hit this
+        // action in the last 15 minutes" reads back as. Best-effort: a
+        // failed INSERT is logged and swallowed so enforcement still fires.
+        if let Err(e) = super::rate_limit_traffic::RateLimitTrafficRepository::record(
+            pool,
+            config.action,
+            key,
+            Utc::now(),
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                action = config.action,
+                "rate_limit_traffic: failed to record request"
+            );
+        }
+
+        // Record one history row per throttle event: the first request that
+        // crosses the cap. Later over-cap requests in the same window keep
+        // incrementing `count` but add no row, so a burst does not inflate
+        // the admin page's past-throttles list. Best-effort: a failed INSERT
+        // is logged and swallowed so the 429 still fires.
+        if count == config.max_requests + 1 {
+            if let Err(e) = super::rate_limit_history::RateLimitHistoryRepository::record(
+                pool,
+                config.action,
+                key,
+                config,
+                resolved_window_start,
+            )
+            .await
+            {
+                tracing::warn!(
+                    error = %e,
+                    action = config.action,
+                    "rate_limit_history: failed to record throttle event"
+                );
+            }
+        }
 
         Ok((count, exceeded))
     }

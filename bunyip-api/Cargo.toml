@@ -152,3 +152,6 @@ wiremock = "0.6"
 # wants to submit.
 totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
 data-encoding = "2"
+# tests/rate_limit_traffic.rs hashes rate-limit keys the same way
+# RateLimitTrafficRepository::record does so it can look up rows by key_hash.
+sha2 = "0.10"

@@ -5,13 +5,14 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
-    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
-    ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
-    FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
-    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
-    TestEmailResult, TierConfigResponse, UserEntitlement,
+    AdminRateLimitHistory, AdminRateLimitTraffic, AdminStatsResponse, AdminUser, AppDoc,
+    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
+    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, IntegrationStatus,
+    IntegrationStatusResponse, IpEnrichment, MailerSuppression, PaginatedResponse, PricingStatus,
+    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -758,6 +759,46 @@ pub async fn reset_rate_limit(
         )
         .await?;
     ok_data(&r).map(|_| ())
+}
+
+/// Past throttle events the admin page shows beside the active list. Wraps
+/// `GET /v1/admin/rate-limits/history`; `since` is clamped to the 24h
+/// retention floor on the API, so an older value is quietly bounded.
+pub async fn rate_limit_history(
+    api: &Api,
+    cookie: Option<&str>,
+    since: Option<&str>,
+    limit: Option<u32>,
+) -> Result<Vec<AdminRateLimitHistory>, ApiError> {
+    let mut path = String::from("/admin/rate-limits/history?");
+    if let Some(s) = since {
+        path.push_str(&format!("since={}&", urlenc(s)));
+    }
+    if let Some(l) = limit {
+        path.push_str(&format!("limit={l}&"));
+    }
+    parse(api.get(&path, cookie).await?)
+}
+
+/// Per-bucket traffic rollup feeding the admin sparkline. Wraps
+/// `GET /v1/admin/rate-limits/traffic`; `window` is one of `1h`, `6h`, `1d`.
+pub async fn rate_limit_traffic(
+    api: &Api,
+    cookie: Option<&str>,
+    action: &str,
+    window: &str,
+) -> Result<AdminRateLimitTraffic, ApiError> {
+    parse(
+        api.get(
+            &format!(
+                "/admin/rate-limits/traffic?action={}&window={}",
+                urlenc(action),
+                urlenc(window)
+            ),
+            cookie,
+        )
+        .await?,
+    )
 }
 
 // --- rate-limit configuration (BUNYIP-413) ----------------------------------

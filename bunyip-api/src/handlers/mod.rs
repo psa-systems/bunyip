@@ -262,8 +262,8 @@ pub use admin_mailer_suppressions::{delete_mailer_suppression, list_mailer_suppr
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
 pub use admin_provider_status::get_provider_status;
 pub use admin_rate_limits::{
-    delete_rate_limit_config, list_rate_limit_configs, list_rate_limits, reset_rate_limit,
-    upsert_rate_limit_config,
+    delete_rate_limit_config, list_rate_limit_configs, list_rate_limit_history,
+    list_rate_limit_traffic, list_rate_limits, reset_rate_limit, upsert_rate_limit_config,
 };
 pub use admin_stripe::{
     archive_stripe_price, archive_stripe_product, check_stripe_permissions, create_stripe_price,

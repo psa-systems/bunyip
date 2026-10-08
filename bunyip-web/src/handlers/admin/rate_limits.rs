@@ -4,11 +4,13 @@ use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::Form;
-use maud::{html, Markup};
+use maud::{html, Markup, PreEscaped};
 use serde::Deserialize;
 
 use crate::api::admin as admin_api;
-use crate::api::types::{AdminRateLimit, AdminRateLimitConfig};
+use crate::api::types::{
+    AdminRateLimit, AdminRateLimitConfig, AdminRateLimitHistory, AdminRateLimitTraffic,
+};
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
@@ -17,7 +19,31 @@ use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
 use super::title_case;
-use super::PageQuery;
+
+/// Local query shape adding the sparkline time-range toggle (`1h | 6h | 1d`,
+/// default `1h`). PageQuery stays as-is for the rest of the admin surface.
+#[derive(Deserialize)]
+pub struct RateLimitsQuery {
+    pub page: Option<u32>,
+    #[serde(default)]
+    pub window: Option<String>,
+}
+
+fn normalize_window(raw: Option<&str>) -> &'static str {
+    match raw.unwrap_or("1h") {
+        "6h" => "6h",
+        "1d" => "1d",
+        _ => "1h",
+    }
+}
+
+fn window_label(window: &str) -> &'static str {
+    match window {
+        "6h" => "6 hours",
+        "1d" => "1 day",
+        _ => "1 hour",
+    }
+}
 
 /// Format a `retry_after` second count as a compact "retry in" label
 /// (e.g. `2m 5s`, `45s`). Zero (or a window that has just elapsed) reads as
@@ -193,13 +219,14 @@ pub(super) fn rate_limit_config_card(
 pub async fn rate_limits(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<RateLimitsQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
+    let window = normalize_window(q.window.as_deref());
     let cfg_data = admin_api::rate_limit_configs(&st.api, c.forward.as_deref()).await;
     let configs_error = cfg_data.as_ref().err().cloned();
     let configs = cfg_data.unwrap_or_default();
@@ -209,6 +236,25 @@ pub async fn rate_limits(
         Ok(p) => (p.items, p.total, p.total_pages),
         Err(_) => (Vec::new(), 0, 1),
     };
+
+    // Past throttles (BUNYIP-891): the "has a rate limit fired recently"
+    // question the active list cannot answer once the window has elapsed.
+    let history_data =
+        admin_api::rate_limit_history(&st.api, c.forward.as_deref(), None, Some(100)).await;
+    let history_error = history_data.as_ref().err().cloned();
+    let history = history_data.unwrap_or_default();
+
+    // Traffic sparklines per configured action (BUNYIP-892). Sequential
+    // fetch is fine while the configured action set is small (one row per
+    // RateLimitConfig::ALL variant); if that grows the admin page can
+    // move to `futures::join_all` without changing the render.
+    let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
+        Vec::with_capacity(configs.len());
+    for cfg in &configs {
+        let r =
+            admin_api::rate_limit_traffic(&st.api, c.forward.as_deref(), &cfg.action, window).await;
+        traffic.push((cfg.action.clone(), r));
+    }
 
     let content = html! {
         // BUNYIP-873: `@container` turns this into the query context both
@@ -238,10 +284,247 @@ pub async fn rate_limits(
                     }
                 }
             }
+            // Past Throttles (BUNYIP-891): 24h of fired-and-expired events.
+            (past_throttles_card(&history, history_error.as_ref()))
+            // Traffic + sparkline per bucket (BUNYIP-892).
+            (traffic_card(&traffic, window))
             (rate_limit_config_card(&configs, configs_error.as_ref(), user.is_super_admin))
         }
     };
     admin_response(&c, &user, "/admin/rate-limits", "Rate Limits", content)
+}
+
+/// Render one past-throttle row: subject, action, fired-at and expires-at
+/// (as relative times), with the same icon vocabulary the active-list row
+/// uses so one view's visual language carries into the next.
+fn past_throttle_row(h: &AdminRateLimitHistory) -> Markup {
+    let (subject, subject_sub, icon_name) = if let Some(email) = &h.user_email {
+        (email.clone(), h.user_id.clone(), "user")
+    } else if let Some(ip) = &h.ip {
+        (ip.clone(), None, "globe")
+    } else {
+        (h.key.clone(), None, "help-circle")
+    };
+    html! {
+        div class="flex items-start justify-between py-4 border-b last:border-0" {
+            div class="flex items-start gap-4 min-w-0" {
+                div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted" {
+                    (icon(icon_name, "h-5 w-5 text-muted-foreground"))
+                }
+                div class="min-w-0" {
+                    div class="flex items-center gap-2 flex-wrap" {
+                        p class="font-medium break-all" { (subject) }
+                        (badge("secondary", &title_case(&h.action)))
+                    }
+                    @if let Some(sub) = &subject_sub {
+                        p class="text-xs text-muted-foreground font-mono break-all" { (sub) }
+                    }
+                    p class="text-xs text-muted-foreground" {
+                        "Fired " (rel_time(&h.fired_at))
+                        " · released " (rel_time(&h.expires_at))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Past-throttles section: a 24h log of fired-and-expired events, so an
+/// operator looking at the admin page an hour after a 429 can still
+/// investigate what fired. Hidden entirely if the fetch failed with the
+/// error rendered in its place.
+fn past_throttles_card(history: &[AdminRateLimitHistory], error: Option<&ApiError>) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" {
+                    (icon("history", "h-5 w-5 text-primary-text"))
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Past Throttles" }
+                }
+                @if error.is_none() {
+                    p class="text-sm text-muted-foreground" {
+                        "The last 24 hours of fired-and-expired rate limits."
+                    }
+                }
+            }
+            div class="p-6 pt-0" {
+                @if let Some(e) = error {
+                    (error_box_for("Could not reach the API to load past throttles.", e))
+                } @else if history.is_empty() {
+                    (empty_state("history", "No rate limits have fired in the last 24 hours.", None))
+                } @else {
+                    div class="grid gap-x-8 @5xl:grid-cols-2" {
+                        @for h in history { (past_throttle_row(h)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Server-rendered SVG sparkline. Draws one bar per bucket (status.claude.com
+/// shape, not a line), colored "normal" by default and switching to the
+/// warning tint when the bar's count crosses `limit`. Uses theme tokens via
+/// Tailwind utility classes on the surrounding wrapper; the SVG itself
+/// paints with `currentColor` so dark mode inherits.
+fn sparkline(points: &[(String, i64)], limit: i32) -> Markup {
+    const W: i64 = 240;
+    const H: i64 = 32;
+    const BAR_GAP: i64 = 1;
+    let n = points.len().max(1) as i64;
+    let bar_w = ((W - BAR_GAP * (n - 1)) / n).max(1);
+    // The vertical scale is max(limit, observed): a short bar against a
+    // high limit still reads as "nowhere near", a tall bar past the limit
+    // reads as "over".
+    let observed = points.iter().map(|p| p.1).max().unwrap_or(0);
+    let scale = limit.max(1).max(observed as i32) as i64;
+
+    let mut bars = String::new();
+    // Buckets come back newest first; render oldest-left-to-newest-right.
+    for (idx, (_bucket, count)) in points.iter().rev().enumerate() {
+        let x = idx as i64 * (bar_w + BAR_GAP);
+        let frac = (*count as f64 / scale as f64).clamp(0.0, 1.0);
+        let bar_h = ((H as f64) * frac).round().max(1.0) as i64;
+        let y = H - bar_h;
+        let class = if *count as i32 > limit {
+            "fill-amber-500 dark:fill-amber-400"
+        } else {
+            "fill-primary/60 dark:fill-primary/80"
+        };
+        bars.push_str(&format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"{bar_w}\" height=\"{bar_h}\" class=\"{class}\" />"
+        ));
+    }
+    let threshold_y = if limit > 0 && (limit as i64) <= scale {
+        H - (H * limit as i64 / scale)
+    } else {
+        0
+    };
+    let threshold = if limit > 0 {
+        format!(
+            "<line x1=\"0\" y1=\"{threshold_y}\" x2=\"{W}\" y2=\"{threshold_y}\" \
+             class=\"stroke-amber-500/70\" stroke-dasharray=\"2 2\" stroke-width=\"1\" />"
+        )
+    } else {
+        String::new()
+    };
+    let svg = format!(
+        "<svg viewBox=\"0 0 {W} {H}\" width=\"{W}\" height=\"{H}\" \
+         preserveAspectRatio=\"none\" aria-hidden=\"true\">{bars}{threshold}</svg>"
+    );
+    html! { (PreEscaped(svg)) }
+}
+
+/// Traffic card: configured limit + sparkline per bucket, with a 1h/6h/1d
+/// time-range toggle at the top. One row per `RateLimitConfig::ALL` action
+/// so the unauthenticated and authenticated API buckets are both visible.
+fn traffic_card(
+    traffic: &[(String, Result<AdminRateLimitTraffic, ApiError>)],
+    window: &str,
+) -> Markup {
+    let toggles = ["1h", "6h", "1d"];
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center justify-between flex-wrap gap-3" {
+                    div class="flex items-center gap-3" {
+                        (icon("activity", "h-5 w-5 text-primary-text"))
+                        h3 class="text-2xl font-semibold leading-none tracking-tight" { "Traffic" }
+                    }
+                    div class="flex items-center gap-1 rounded-md border bg-muted/40 p-1" {
+                        @for choice in toggles {
+                            @let selected = *choice == *window;
+                            a
+                                href=(format!("/admin/rate-limits?window={}", urlenc(choice)))
+                                class=({
+                                    if selected {
+                                        "px-3 py-1 text-sm rounded bg-background shadow-sm font-medium"
+                                    } else {
+                                        "px-3 py-1 text-sm rounded text-muted-foreground hover:bg-background/60"
+                                    }
+                                })
+                                { (choice) }
+                        }
+                    }
+                }
+                p class="text-sm text-muted-foreground" {
+                    "Requests per 15-minute bucket over the last " (window_label(window))
+                    ", against each action's configured limit."
+                }
+            }
+            div class="p-6 pt-0 space-y-4" {
+                @if traffic.is_empty() {
+                    (empty_state("activity", "No rate-limit actions are configured.", None))
+                } @else {
+                    @for (action, res) in traffic {
+                        div class="flex items-center justify-between gap-4 flex-wrap border-b last:border-0 py-3" {
+                            div class="min-w-0" {
+                                p class="font-medium" { (title_case(action)) }
+                                @match res {
+                                    Ok(t) => {
+                                        p class="text-xs text-muted-foreground" {
+                                            "Limit: " (t.max_requests) " per "
+                                            (fmt_window_seconds(t.window_seconds))
+                                        }
+                                    }
+                                    Err(_) => {
+                                        p class="text-xs text-muted-foreground" { "Limit unavailable." }
+                                    }
+                                }
+                            }
+                            div {
+                                @match res {
+                                    Ok(t) => {
+                                        @let points: Vec<(String, i64)> = t
+                                            .points
+                                            .iter()
+                                            .map(|p| (p.bucket_start.clone(), p.count))
+                                            .collect();
+                                        @if points.is_empty() {
+                                            p class="text-xs text-muted-foreground italic" { "No traffic yet." }
+                                        } @else {
+                                            (sparkline(&points, t.max_requests))
+                                        }
+                                    }
+                                    Err(_) => {
+                                        p class="text-xs text-amber-800 dark:text-amber-400" {
+                                            "Traffic unavailable."
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Compact seconds-to-"5m" / "1h" / "1d" formatter for the configured
+/// window beside each sparkline. One-line, read-left-to-right.
+fn fmt_window_seconds(secs: i64) -> String {
+    if secs <= 0 {
+        return "0s".to_string();
+    }
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    let mut parts: Vec<String> = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    if mins > 0 {
+        parts.push(format!("{mins}m"));
+    }
+    if s > 0 && parts.is_empty() {
+        parts.push(format!("{s}s"));
+    }
+    parts.join(" ")
 }
 
 /// Form body for the reset action: the `(action, key)` identifying the throttle,
