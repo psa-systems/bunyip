@@ -2779,6 +2779,7 @@ mod rate_limit_management_tests {
             default_window_seconds: 60,
             overridden,
             updated_at: None,
+            updated_by: None,
         }
     }
 
@@ -2852,6 +2853,32 @@ mod rate_limit_management_tests {
             html.contains("@container") && html.contains("@md:flex-row"),
             "each row is its own container and reflows independently of the grid: {html}"
         );
+    }
+
+    /// BUNYIP-901: an overridden limit shows who last wrote the override.
+    #[test]
+    fn config_row_shows_who_overrode_the_limit() {
+        let mut overridden = cfg("login", true);
+        overridden.updated_by = Some("11111111-1111-1111-1111-111111111111".to_string());
+        let html = rate_limit_config_card(&[overridden], None, true).into_string();
+        assert!(
+            html.contains("Overridden by") && html.contains("11111111-1111-1111-1111-111111111111"),
+            "the overriding admin's id is rendered: {html}"
+        );
+    }
+
+    #[test]
+    fn config_row_omits_overridden_by_when_absent_or_not_overridden() {
+        let no_id = cfg("login", true);
+        assert!(!rate_limit_config_card(&[no_id], None, true)
+            .into_string()
+            .contains("Overridden by"));
+
+        let mut not_overridden = cfg("login", false);
+        not_overridden.updated_by = Some("11111111-1111-1111-1111-111111111111".to_string());
+        assert!(!rate_limit_config_card(&[not_overridden], None, true)
+            .into_string()
+            .contains("Overridden by"));
     }
 
     #[test]
