@@ -63,6 +63,8 @@ const ESSENTIAL_FIELDS = [
     {field: "AdminRateLimitTrafficPoint.bucket_start", reason: "a point without its bucket is a count against no x-axis"}
     {field: "AdminRateLimitApproaching.action", reason: "identifies the throttle the row is approaching"}
     {field: "AdminRateLimitApproaching.key", reason: "identifies the subject near the limit"}
+    {field: "AdminRateLimitOverviewEntry.action", reason: "identifies the action the traffic/approaching rows belong to"}
+    {field: "AdminRateLimitOverviewEntry.traffic", reason: "the sparkline's whole payload for this action"}
     {field: "AdminFeatureToggle.key", reason: "identifies the toggle a save targets"}
     {field: "AdminApplication.id", reason: "target of every admin action on the row"}
     {field: "UserEntitlement.application_id", reason: "the revoke target"}
