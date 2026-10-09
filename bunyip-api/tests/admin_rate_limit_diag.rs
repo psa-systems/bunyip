@@ -12,6 +12,13 @@
 //! - `since` older than the 24h floor is quietly clamped (older rows do not
 //!   leak).
 //! - A non-admin caller is refused (middleware).
+//! - `GET /admin/rate-limits/overview` (BUNYIP-900) returns one entry per
+//!   `RateLimitConfig::ALL` action, each carrying its own traffic + approaching
+//!   rows, behind a single ADMIN_DIAGNOSTICS check.
+//! - Two full page renders (history + overview) by the same admin inside the
+//!   same 60s window both succeed: the batched render costs 2
+//!   ADMIN_DIAGNOSTICS calls, not the pre-fix 41, so there is headroom for a
+//!   second render well inside the 60/60s cap.
 
 use actix_web::{http::header::ContentType, test, web, App};
 use bunyip_api::handlers;
@@ -94,6 +101,10 @@ macro_rules! build_app {
                 .route(
                     "/admin/rate-limits/traffic",
                     web::get().to(handlers::list_rate_limit_traffic),
+                )
+                .route(
+                    "/admin/rate-limits/overview",
+                    web::get().to(handlers::list_rate_limit_overview),
                 ),
         )
         .await
@@ -303,4 +314,86 @@ async fn history_refuses_a_non_admin() {
         403,
         "AdminUser must refuse a subscriber"
     );
+}
+
+#[actix_rt::test]
+async fn overview_returns_one_entry_per_configured_action() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let admin = seed_admin(&pool).await;
+
+    let app = build_app!(pool, jwt);
+    let req = test::TestRequest::get()
+        .uri("/admin/rate-limits/overview?window=1h")
+        .insert_header(("authorization", bearer(&jwt, &admin)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "{:?}", resp.status());
+
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["data"].as_array().expect("data is an array");
+    assert_eq!(
+        entries.len(),
+        bunyip_api::models::RateLimitConfig::ALL.len(),
+        "one overview entry per configured action: {entries:?}"
+    );
+    for entry in entries {
+        assert!(entry["action"].is_string());
+        assert!(entry["traffic"]["points"].is_array());
+        assert!(entry["approaching"].is_array());
+    }
+}
+
+/// BUNYIP-900: before the fix, a single render fetched `rate_limit_traffic`
+/// and `rate_limit_approaching` once per `RateLimitConfig::ALL` action (41
+/// ADMIN_DIAGNOSTICS-budgeted calls against a 60/60s cap), so a second
+/// render (refresh or window toggle) in the same window could exhaust the
+/// budget and degrade the Traffic / Close-to-the-Limit sections. The fix
+/// batches both into the single `overview` call, so one render costs 2
+/// calls (history + overview) and two renders cost 4, well under the cap.
+#[actix_rt::test]
+async fn two_renders_within_60s_do_not_degrade_traffic_or_approaching() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let admin = seed_admin(&pool).await;
+    let app = build_app!(pool, jwt);
+
+    for render in 0..2 {
+        let history_req = test::TestRequest::get()
+            .uri("/admin/rate-limits/history")
+            .insert_header(("authorization", bearer(&jwt, &admin)))
+            .to_request();
+        let history_resp = test::call_service(&app, history_req).await;
+        assert_eq!(
+            history_resp.status(),
+            200,
+            "render {render}: history must not degrade"
+        );
+
+        let overview_req = test::TestRequest::get()
+            .uri("/admin/rate-limits/overview?window=1h")
+            .insert_header(("authorization", bearer(&jwt, &admin)))
+            .to_request();
+        let overview_resp = test::call_service(&app, overview_req).await;
+        assert_eq!(
+            overview_resp.status(),
+            200,
+            "render {render}: overview (Traffic + Close-to-the-Limit) must not degrade"
+        );
+        let body: Value = test::read_body_json(overview_resp).await;
+        assert!(
+            body["data"].as_array().is_some(),
+            "render {render}: overview still returns data, not a 429 body"
+        );
+    }
 }

@@ -909,6 +909,18 @@ pub struct AdminRateLimitTraffic {
     pub points: Vec<AdminRateLimitTrafficPoint>,
 }
 
+/// One action's combined traffic + approaching rows, as returned by
+/// `GET /v1/admin/rate-limits/overview` (BUNYIP-900). Replaces the 2-call-
+/// per-action fan-out (`traffic` + `approaching`) with one row per action in
+/// a single budgeted call.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitOverviewEntry {
+    pub action: String,
+    pub traffic: AdminRateLimitTraffic,
+    #[serde(default)]
+    pub approaching: Vec<AdminRateLimitApproaching>,
+}
+
 /// The configured cap/window for one rate-limit action as returned by
 /// `GET /v1/admin/rate-limit-configs` (BUNYIP-413). Mirrors
 /// `bunyip_api::handlers::admin_rate_limits::RateLimitConfigEntry`:

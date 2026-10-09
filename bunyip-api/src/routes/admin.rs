@@ -217,6 +217,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/rate-limits/approaching",
                 web::get().to(handlers::list_rate_limit_approaching),
             )
+            // Traffic + approaching, batched across every action in one
+            // ADMIN_DIAGNOSTICS-budgeted call (BUNYIP-900).
+            .route(
+                "/rate-limits/overview",
+                web::get().to(handlers::list_rate_limit_overview),
+            )
             // Reset an active rate limit (BUNYIP-316)
             .route(
                 "/rate-limits/reset",

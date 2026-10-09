@@ -250,27 +250,35 @@ pub async fn rate_limits(
     let history_error = history_data.as_ref().err().cloned();
     let history = history_data.unwrap_or_default();
 
-    // Traffic sparklines per configured action (BUNYIP-892). Sequential
-    // fetch is fine while the configured action set is small (one row per
-    // RateLimitConfig::ALL variant); if that grows the admin page can
-    // move to `futures::join_all` without changing the render.
-    let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
-        Vec::with_capacity(configs.len());
-    let mut approaching: Vec<(String, Vec<AdminRateLimitApproaching>)> =
-        Vec::with_capacity(configs.len());
-    for cfg in &configs {
-        let r =
-            admin_api::rate_limit_traffic(&st.api, c.forward.as_deref(), &cfg.action, window).await;
-        traffic.push((cfg.action.clone(), r));
-        if let Ok(rows) =
-            admin_api::rate_limit_approaching(&st.api, c.forward.as_deref(), &cfg.action, 0.7, 5)
-                .await
-        {
-            if !rows.is_empty() {
-                approaching.push((cfg.action.clone(), rows));
+    // Traffic sparklines and Close-to-the-Limit rows for every configured
+    // action (BUNYIP-892/897), batched into the single `overview` call below
+    // (BUNYIP-900): the prior per-action `rate_limit_traffic` +
+    // `rate_limit_approaching` fan-out put one render at `1 + 20*2 = 41`
+    // ADMIN_DIAGNOSTICS-budgeted calls against a cap of 60, leaving no
+    // headroom for an immediate second render (refresh or window toggle).
+    let overview_data =
+        admin_api::rate_limit_overview(&st.api, c.forward.as_deref(), window, 0.7, 5).await;
+    let (traffic, approaching) = match overview_data {
+        Ok(entries) => {
+            let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
+                Vec::with_capacity(entries.len());
+            let mut approaching: Vec<(String, Vec<AdminRateLimitApproaching>)> = Vec::new();
+            for entry in entries {
+                traffic.push((entry.action.clone(), Ok(entry.traffic)));
+                if !entry.approaching.is_empty() {
+                    approaching.push((entry.action, entry.approaching));
+                }
             }
+            (traffic, approaching)
         }
-    }
+        Err(e) => (
+            configs
+                .iter()
+                .map(|cfg| (cfg.action.clone(), Err(e.clone())))
+                .collect(),
+            Vec::new(),
+        ),
+    };
 
     let content = html! {
         // BUNYIP-873: `@container` turns this into the query context both

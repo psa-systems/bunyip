@@ -4,15 +4,15 @@ use serde_json::{json, Value};
 
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
-    AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitApproaching,
-    AdminRateLimitConfig, AdminRateLimitHistory, AdminRateLimitTraffic, AdminStatsResponse,
-    AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList, ArchivedFeedback,
-    AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary,
-    IntegrationStatus, IntegrationStatusResponse, IpEnrichment, MailerSuppression,
-    PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse, RestoreReport,
-    SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice,
-    StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult,
-    TierConfigResponse, UserEntitlement,
+    AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
+    AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminStatsResponse, AdminUser, AppDoc,
+    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
+    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, IntegrationStatus,
+    IntegrationStatusResponse, IpEnrichment, MailerSuppression, PaginatedResponse, PricingStatus,
+    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -780,43 +780,26 @@ pub async fn rate_limit_history(
     parse(api.get(&path, cookie).await?)
 }
 
-/// Rows for one action whose current count is near the configured cap,
-/// top-N by `count DESC`. Wraps `GET /v1/admin/rate-limits/approaching`.
-pub async fn rate_limit_approaching(
+/// Traffic + Close-to-the-Limit rows for every `RateLimitConfig::ALL`
+/// action, batched into one call (BUNYIP-900). Wraps
+/// `GET /v1/admin/rate-limits/overview`; `window` is one of `1h`, `6h`, `1d`.
+/// Replaces the admin page's prior per-action `rate_limit_traffic` +
+/// `rate_limit_approaching` fan-out (41 ADMIN_DIAGNOSTICS-budgeted calls per
+/// render) with a single call.
+pub async fn rate_limit_overview(
     api: &Api,
     cookie: Option<&str>,
-    action: &str,
+    window: &str,
     threshold: f64,
     limit: u32,
-) -> Result<Vec<AdminRateLimitApproaching>, ApiError> {
+) -> Result<Vec<AdminRateLimitOverviewEntry>, ApiError> {
     parse(
         api.get(
             &format!(
-                "/admin/rate-limits/approaching?action={}&threshold={}&limit={}",
-                urlenc(action),
+                "/admin/rate-limits/overview?window={}&threshold={}&limit={}",
+                urlenc(window),
                 threshold,
                 limit
-            ),
-            cookie,
-        )
-        .await?,
-    )
-}
-
-/// Per-bucket traffic rollup feeding the admin sparkline. Wraps
-/// `GET /v1/admin/rate-limits/traffic`; `window` is one of `1h`, `6h`, `1d`.
-pub async fn rate_limit_traffic(
-    api: &Api,
-    cookie: Option<&str>,
-    action: &str,
-    window: &str,
-) -> Result<AdminRateLimitTraffic, ApiError> {
-    parse(
-        api.get(
-            &format!(
-                "/admin/rate-limits/traffic?action={}&window={}",
-                urlenc(action),
-                urlenc(window)
             ),
             cookie,
         )
