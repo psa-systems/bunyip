@@ -262,6 +262,13 @@ pub struct RedirectQuery {
     /// credentialed re-login that mints a fresh OP session.
     #[serde(default)]
     pub checked: Option<String>,
+    /// Set by `/login/2fa?recovery=1` to render the recovery-code variant of
+    /// the two-factor challenge card. Any truthy value switches the form; a
+    /// user who lost their authenticator submits one of the recovery codes
+    /// bunyip handed them at setup. Unused by every other handler that reads
+    /// `RedirectQuery`, so the flag is harmless there.
+    #[serde(default)]
+    pub recovery: Option<String>,
 }
 
 fn login_content(error: Option<&str>, redirect: &str) -> Markup {
@@ -935,40 +942,70 @@ pub async fn password_reset_confirm_post(
 pub struct TwoFactorForm {
     pub code: String,
     pub redirect: Option<String>,
+    /// Carried through on error so re-rendering the card lands on the same
+    /// variant (authenticator vs recovery) the user was on. Not sent to the
+    /// server; the server's `verify_2fa` already dispatches on the shape of
+    /// `code` (`is_recovery = code.contains('-') || code.len() > 6`).
+    #[serde(default)]
+    pub recovery: Option<String>,
 }
 
-fn twofa_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
+fn twofa_card(error: Option<&str>, redirect: Option<&str>, recovery_mode: bool) -> Markup {
     let redirect = redirect.unwrap_or_default();
+    let (heading, blurb) = if recovery_mode {
+        (
+            "Recovery Code",
+            "Enter one of the recovery codes you saved when you set up two-factor",
+        )
+    } else {
+        (
+            "Two-Factor Authentication",
+            "Enter the 6-digit code from your authenticator app",
+        )
+    };
     auth_card(
         "shield",
         "bg-primary/10 text-primary-text",
-        "Two-Factor Authentication",
-        "Enter the 6-digit code from your authenticator app",
+        heading,
+        blurb,
         html! {
             form method="post" action="/login/2fa" class="space-y-4" {
                 @if !redirect.is_empty() {
                     input type="hidden" name="redirect" value=(redirect);
                 }
+                @if recovery_mode {
+                    // Carry the variant through on error so a bad code
+                    // re-renders here, not on the authenticator card.
+                    input type="hidden" name="recovery" value="1";
+                }
                 @if let Some(e) = error { (error_box(e)) }
-                // BUNYIP-382: the "trust this device for 30 days" opt-in was
-                // removed here and merged into the sign-in "Remember me" choice,
-                // which now drives both session length and device trust.
                 div class="space-y-2" {
-                    label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
-                    // BUNYIP-117: maxlength + pattern so the browser bounds
-                    // and format-checks the 6-digit TOTP before submit.
-                    // Authoritative validation still happens in the domain
-                    // (services::totp::verify_code). BUNYIP-331:
-                    // data-otp-autosubmit submits the form once the code is
-                    // a complete six digits (typed / pasted / autofilled).
-                    // BUNYIP-486: autofocus so the whole screen is "type six
-                    // digits" - the autosubmit fires on input, not on focus,
-                    // so focusing alone submits nothing.
-                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" autofocus data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                    @if recovery_mode {
+                        label for="code" class="text-sm font-medium leading-none" { "Recovery Code" }
+                        // 19-character XXXX-XXXX-XXXX-XXXX (BUNYIP-202). No
+                        // pattern because the server accepts the format
+                        // check (dashes and length); no autosubmit, since a
+                        // recovery code is typed, not scanned.
+                        input id="code" name="code" type="text" inputmode="text" maxlength="19" required placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" autofocus class={ (dashboard_input()) " text-center font-mono tracking-widest" };
+                    } @else {
+                        label for="code" class="text-sm font-medium leading-none" { "Authentication Code" }
+                        // BUNYIP-117 / BUNYIP-331 / BUNYIP-486: maxlength +
+                        // pattern + autosubmit on the six-digit variant;
+                        // authoritative validation still happens in the
+                        // domain's `verify_code`.
+                        input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" autofocus data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                    }
                 }
                 (submit_btn("Verify"))
             }
-            div class="mt-4 flex justify-center" { (back_link("/login", "Back to sign in")) }
+            div class="mt-4 flex flex-col items-center gap-2" {
+                @if recovery_mode {
+                    a href="/login/2fa" class="text-sm font-medium text-primary-text hover:underline" { "Use your authenticator app" }
+                } @else {
+                    a href="/login/2fa?recovery=1" class="text-sm font-medium text-primary-text hover:underline" { "Use a recovery code" }
+                }
+                (back_link("/login", "Back to sign in"))
+            }
         },
     )
 }
@@ -990,11 +1027,12 @@ pub async fn twofa_verify_get(
         );
         return auth_page(&st, &headers, "Two-factor", card).await;
     }
+    let recovery_mode = q.recovery.is_some();
     auth_page(
         &st,
         &headers,
         "Two-factor",
-        twofa_card(None, q.redirect.as_deref()),
+        twofa_card(None, q.redirect.as_deref(), recovery_mode),
     )
     .await
 }
@@ -1017,11 +1055,16 @@ pub async fn twofa_verify_post(
             redirect_cookies(&target, &cookies)
         }
         Err(e) => {
+            let recovery_mode = f.recovery.is_some();
             auth_page(
                 &st,
                 &headers,
                 "Two-factor",
-                twofa_card(Some(&e.user_message()), f.redirect.as_deref()),
+                twofa_card(
+                    Some(&e.user_message()),
+                    f.redirect.as_deref(),
+                    recovery_mode,
+                ),
             )
             .await
         }
@@ -1642,10 +1685,58 @@ mod autofocus_tests {
         assert_focuses(&magic_form(None, false).into_string(), "email");
         assert_focuses(&reset_form(None, false).into_string(), "email");
         assert_focuses(&reset_confirm_card("tok", None).into_string(), "password");
-        assert_focuses(&twofa_card(None, None).into_string(), "code");
+        assert_focuses(&twofa_card(None, None, false).into_string(), "code");
         assert_focuses(
             &invite_password_card("tok", "user@example.com", None).into_string(),
             "password",
+        );
+    }
+
+    /// The two variants of the two-factor challenge: the default six-digit
+    /// authenticator form keeps its `pattern` + `maxlength=6` + autosubmit,
+    /// and `?recovery=1` renders a text field for `XXXX-XXXX-XXXX-XXXX`
+    /// without them. Toggle links go both ways, and the recovery variant
+    /// carries `recovery=1` on the form so an error re-renders here.
+    #[test]
+    fn twofa_card_renders_both_variants() {
+        let authenticator = twofa_card(None, None, false).into_string();
+        assert!(
+            authenticator.contains("pattern=\"[0-9]{6}\""),
+            "authenticator variant keeps the six-digit pattern: {authenticator}"
+        );
+        assert!(
+            authenticator.contains("maxlength=\"6\""),
+            "authenticator variant bounds to six characters: {authenticator}"
+        );
+        assert!(
+            authenticator.contains("data-otp-autosubmit"),
+            "authenticator variant autosubmits on the sixth digit: {authenticator}"
+        );
+        assert!(
+            authenticator.contains("/login/2fa?recovery=1"),
+            "the authenticator variant links to the recovery variant: {authenticator}"
+        );
+
+        let recovery = twofa_card(None, None, true).into_string();
+        assert!(
+            !recovery.contains("pattern=\"[0-9]{6}\""),
+            "recovery variant drops the six-digit pattern: {recovery}"
+        );
+        assert!(
+            recovery.contains("maxlength=\"19\""),
+            "recovery variant bounds to the XXXX-XXXX-XXXX-XXXX length: {recovery}"
+        );
+        assert!(
+            !recovery.contains("data-otp-autosubmit"),
+            "recovery variant has no autosubmit: {recovery}"
+        );
+        assert!(
+            recovery.contains("name=\"recovery\" value=\"1\""),
+            "recovery variant carries the flag through on error: {recovery}"
+        );
+        assert!(
+            recovery.contains("href=\"/login/2fa\""),
+            "the recovery variant links back to the authenticator variant: {recovery}"
         );
     }
 
@@ -1654,7 +1745,7 @@ mod autofocus_tests {
         // The wrong-code retry is a full page load of the same card, so the
         // attribute has to survive the error path too.
         assert_focuses(
-            &twofa_card(Some("Invalid code."), None).into_string(),
+            &twofa_card(Some("Invalid code."), None, false).into_string(),
             "code",
         );
         assert_focuses(
@@ -1748,7 +1839,7 @@ mod autofocus_tests {
                 "reset-confirm",
                 reset_confirm_card("tok", None).into_string(),
             ),
-            ("2fa", twofa_card(None, None).into_string()),
+            ("2fa", twofa_card(None, None, false).into_string()),
             (
                 "invite",
                 invite_password_card("tok", "user@example.com", None).into_string(),
@@ -1801,7 +1892,7 @@ mod autofocus_tests {
             "/auth/2fa/verify",
             &serde_json::from_str::<crate::api::types::AuthResponse>("{}").unwrap_err(),
         );
-        let html = twofa_card(Some(&e.user_message()), None).into_string();
+        let html = twofa_card(Some(&e.user_message()), None, false).into_string();
         assert!(
             html.contains("We could not read the response from the server."),
             "expected the fixed decode message: {html}"
