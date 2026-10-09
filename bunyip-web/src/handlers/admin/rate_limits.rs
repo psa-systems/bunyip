@@ -258,13 +258,11 @@ pub async fn rate_limits(
     // headroom for an immediate second render (refresh or window toggle).
     let overview_data =
         admin_api::rate_limit_overview(&st.api, c.forward.as_deref(), window, 0.7, 5).await;
-    let (traffic, approaching): (
-        Vec<(String, Result<AdminRateLimitTraffic, ApiError>)>,
-        Vec<(String, Vec<AdminRateLimitApproaching>)>,
-    ) = match overview_data {
+    let (traffic, approaching) = match overview_data {
         Ok(entries) => {
-            let mut traffic = Vec::with_capacity(entries.len());
-            let mut approaching = Vec::new();
+            let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
+                Vec::with_capacity(entries.len());
+            let mut approaching: Vec<(String, Vec<AdminRateLimitApproaching>)> = Vec::new();
             for entry in entries {
                 traffic.push((entry.action.clone(), Ok(entry.traffic)));
                 if !entry.approaching.is_empty() {
