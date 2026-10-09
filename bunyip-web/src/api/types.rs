@@ -930,6 +930,9 @@ pub struct AdminRateLimitConfig {
     pub overridden: bool,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// Super admin who last wrote the override (absent when not overridden).
+    #[serde(default)]
+    pub updated_by: Option<String>,
 }
 
 /// One row of the admin Feature Toggles page (BUNYIP-840): mirrors
