@@ -776,6 +776,129 @@ pub async fn list_rate_limit_approaching(
     Ok(success(entries, request_id))
 }
 
+/// One action's combined traffic + approaching rows, as returned by
+/// `GET /v1/admin/rate-limits/overview`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RateLimitOverviewEntry {
+    pub action: String,
+    pub traffic: TrafficResponse,
+    pub approaching: Vec<RateLimitApproachingEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OverviewQuery {
+    /// `1h`, `6h`, or `1d`. Default `1h`.
+    #[serde(default)]
+    pub window: Option<String>,
+    /// Default 0.7, clamped to [0.1, 1.0].
+    #[serde(default)]
+    pub threshold: Option<f64>,
+    /// Default 5, clamped to [1, 100].
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+/// GET /v1/admin/rate-limits/overview?window=1h|6h|1d&threshold=<r>&limit=<n>
+///
+/// BUNYIP-900: the admin page's Traffic and Close-to-the-Limit sections each
+/// need one row per `RateLimitConfig::ALL` action. Fetching both separately
+/// per action put a single render at `1 + 20*2 = 41` ADMIN_DIAGNOSTICS-budgeted
+/// calls against a cap of 60, leaving no headroom for an immediate second
+/// render (refresh or window toggle). This batches both lookups for every
+/// action behind the one budget check below, so a render costs 1 call here
+/// (plus 1 for history) regardless of how many actions `RateLimitConfig::ALL`
+/// lists.
+pub async fn list_rate_limit_overview(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    query: web::Query<OverviewQuery>,
+) -> Result<HttpResponse, AppError> {
+    use crate::repositories::{RateLimitConfigRepository, RateLimitTrafficRepository};
+    use bunyip_domain::repositories::rate_limit_traffic::BUCKET_WIDTH_SECS;
+    let request_id = get_request_id(&req);
+    RateLimitRepository::check_rate_limit(
+        pool.get_ref(),
+        &admin.0.sub.to_string(),
+        &RateLimitConfig::ADMIN_DIAGNOSTICS,
+    )
+    .await?;
+
+    let Some(window) = parse_traffic_window(query.window.as_deref()) else {
+        return Err(AppError::ValidationError {
+            field: "window".to_string(),
+            message: "`window` must be one of `1h`, `6h`, `1d`".to_string(),
+        });
+    };
+    let threshold = query.threshold.unwrap_or(0.7);
+    if !(0.1..=1.0).contains(&threshold) {
+        return Err(AppError::ValidationError {
+            field: "threshold".to_string(),
+            message: "`threshold` must be between 0.1 and 1.0".to_string(),
+        });
+    }
+    let limit = query.limit.unwrap_or(5);
+    let since = Utc::now() - window;
+
+    let mut entries = Vec::with_capacity(RateLimitConfig::ALL.len());
+    for cfg in RateLimitConfig::ALL {
+        let cfg = cfg.with_deployment_defaults();
+        let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
+
+        let points = RateLimitTrafficRepository::read(pool.get_ref(), cfg.action, since).await?;
+        let traffic = TrafficResponse {
+            action: cfg.action.to_string(),
+            max_requests: effective.max_requests,
+            window_seconds: effective.window_seconds,
+            bucket_width_seconds: BUCKET_WIDTH_SECS,
+            points: points
+                .into_iter()
+                .map(|p| TrafficPointEntry {
+                    bucket_start: p.bucket_start,
+                    count: p.count,
+                })
+                .collect(),
+        };
+
+        let rows =
+            RateLimitRepository::list_approaching(pool.get_ref(), cfg.action, threshold, limit)
+                .await?;
+        let mut approaching = Vec::with_capacity(rows.len());
+        for row in rows {
+            let subject = cfg.subject(&row.key);
+            let (user_id, user_email, ip) = match &subject {
+                KeySubject::Email(email) => {
+                    let u = UserRepository::find_by_email(pool.get_ref(), email).await?;
+                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+                }
+                KeySubject::UserId(id) => {
+                    let u = UserRepository::find_by_id(pool.get_ref(), *id).await?;
+                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
+                }
+                KeySubject::Ip(ip) => (None, None, Some(ip.clone())),
+                KeySubject::ClientId(_) | KeySubject::Unknown(_) => (None, None, None),
+            };
+            approaching.push(RateLimitApproachingEntry {
+                action: row.action,
+                key: row.key,
+                user_id,
+                user_email,
+                ip,
+                count: row.count as i64,
+                max_requests: effective.max_requests,
+            });
+        }
+
+        entries.push(RateLimitOverviewEntry {
+            action: cfg.action.to_string(),
+            traffic,
+            approaching,
+        });
+    }
+
+    Ok(success(entries, request_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
