@@ -154,6 +154,11 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
                         (cfg.max_requests) " requests per " (fmt_window_secs(cfg.window_seconds))
                     }
                 }
+                @if cfg.overridden {
+                    @if let Some(by) = &cfg.updated_by {
+                        p class="text-xs text-muted-foreground" { "Overridden by " span class="font-mono break-all" { (by) } }
+                    }
+                }
             }
             @if editable {
                 div class="flex items-end gap-2 flex-wrap @md:shrink-0 @md:flex-nowrap" {
