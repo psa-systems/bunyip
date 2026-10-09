@@ -182,6 +182,18 @@ async fn main() -> anyhow::Result<()> {
             e
         })?;
 
+    // BUNYIP-899: create the `bunyip_app` role shell BEFORE migrations so a
+    // migration GRANT that names it finds the role. The full-provisioning step
+    // below is gated on BUNYIP_APP_PASSWORD and runs AFTER migrations, so a
+    // deployment that leaves the password unset (staging c-01, prod nc-01)
+    // would otherwise fail every migration that touches the role.
+    bunyip_api::db::ensure_app_role_shell(&pool)
+        .await
+        .map_err(|e| {
+            error!(error = %e, "Failed to bootstrap bunyip_app role shell");
+            e
+        })?;
+
     // Run database migrations
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")

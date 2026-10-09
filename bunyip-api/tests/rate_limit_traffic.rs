@@ -20,6 +20,9 @@ async fn setup() -> Option<sqlx::PgPool> {
         .connect(&url)
         .await
         .ok()?;
+    bunyip_api::db::ensure_app_role_shell(&pool)
+        .await
+        .expect("ensure bunyip_app role shell");
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -107,7 +110,9 @@ async fn traffic_aggregates_per_15_minute_bucket_and_rolls_up_on_read() {
 }
 
 /// `check_and_increment` records traffic on every call, over-cap or not.
-/// Two under-cap calls land one row with count=2.
+/// Two under-cap calls land one row with count=2. BUNYIP-898 detached the
+/// write into `tokio::spawn`, so it lands some scheduler ticks after the
+/// awaited call returns; poll instead of asserting immediately.
 #[tokio::test]
 async fn check_and_increment_records_traffic_on_every_call() {
     let Some(pool) = setup().await else {
@@ -125,15 +130,34 @@ async fn check_and_increment_records_traffic_on_every_call() {
     }
 
     let key_hash = sha256(key);
-    let count: i32 = sqlx::query_scalar(
-        "SELECT count FROM rate_limit_traffic WHERE action = $1 AND key_hash = $2",
-    )
-    .bind(config.action)
-    .bind(&key_hash)
-    .fetch_one(&pool)
-    .await
-    .expect("fetch traffic count");
+    let count = wait_for_traffic_count(&pool, config.action, &key_hash, 2).await;
     assert_eq!(count, 2);
+}
+
+/// Polls `rate_limit_traffic` for up to a second, since the write that
+/// populates it is now a detached `tokio::spawn` task rather than part of
+/// the awaited `check_and_increment` call.
+async fn wait_for_traffic_count(
+    pool: &sqlx::PgPool,
+    action: &str,
+    key_hash: &[u8],
+    want: i32,
+) -> i32 {
+    for _ in 0..100 {
+        let count: Option<i32> = sqlx::query_scalar(
+            "SELECT count FROM rate_limit_traffic WHERE action = $1 AND key_hash = $2",
+        )
+        .bind(action)
+        .bind(key_hash)
+        .fetch_optional(pool)
+        .await
+        .expect("fetch traffic count");
+        if count == Some(want) {
+            return count.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("rate_limit_traffic row for action={action} never reached count={want}");
 }
 
 /// A row older than retention is swept; a fresh one is kept.
