@@ -71,7 +71,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -239,6 +239,14 @@ check-cache-keys:
 check-publish-triggers:
     ./scripts/check-publish-triggers.nu --self-test
     ./scripts/check-publish-triggers.nu
+
+# Gate Cargo.lock against the RustSec advisory database: an uncovered
+# vulnerability fails, a warning is reported only, and an EXCEPTIONS row
+# suppresses one advisory until its dated review (BUNYIP-905).
+[group: 'checks']
+check-dependency-audit:
+    ./scripts/check-dependency-audit.nu --self-test
+    ./scripts/check-dependency-audit.nu
 
 # Build every target in the workspace.
 [group: 'checks']
