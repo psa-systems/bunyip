@@ -108,6 +108,12 @@ services:
     image: postgres:18.2-alpine3.23
     container_name: bunyip-postgres
     restart: unless-stopped
+    # The image's entrypoint starts as root to chown PGDATA then re-execs as
+    # postgres via gosu; cap_drop: [ALL] removes the CAP_CHOWN/CAP_SETUID that
+    # dance needs. Starting the container already as postgres (uid 70, which
+    # already owns /var/lib/postgresql in the image) skips that root-only path
+    # entirely, verified against a fresh bunyip-postgres-data volume below.
+    user: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bunyip}
       # Native postgres-image file-secret support; the password never appears
@@ -118,6 +124,14 @@ services:
       - postgres_password
     expose:
       - "5432"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
     volumes:
       # Mount the whole tree (not .../data): Postgres >= 18 defaults PGDATA to
       # /var/lib/postgresql/<MAJOR>/docker, so the volume must cover the parent
@@ -350,6 +364,11 @@ services:
       - forgejo_api_token
       - update_check_token
       - mailer_webhook_secret
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path
@@ -424,6 +443,11 @@ services:
       - "4400"
     ports:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_WEB_PORT:-4400}:4400"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     depends_on:
       - api
     networks:
