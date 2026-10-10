@@ -1,0 +1,47 @@
+---
+
+# Audit Cargo.lock against the RustSec advisory database on a cadence.
+# .forgejo/workflows/check.yml runs the same guard on every push and pull
+# request; this one exists for the case that never triggers, an advisory
+# published against a Cargo.lock nobody has touched (BUNYIP-905).
+name: Audit
+
+on:
+  schedule:
+    # Mondays, 06:17 UTC. Forgejo only reads `schedule:` from the default
+    # branch, so this starts running once the change is on main.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: cargo audit
+    # HEAVY: the guard needs cargo and installs cargo-audit when the image does
+    # not already carry it, falling back to a source build when cargo binstall
+    # is unavailable, which needs the C toolchain the dev image carries
+    # (BUNYIP-444).
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
+
+    # Every step in this repo runs under Nushell (BUNYIP-489).
+    defaults:
+      run:
+        shell: nu {0}
+
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+
+      - name: Cache Rust build
+        # For CARGO_HOME, so the cargo-audit install is paid for once rather than
+        # on every scheduled run.
+        uses: https://github.com/Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Dependency audit
+        # Same guard and same policy as the check workflow: a vulnerability with
+        # no dated exception fails, warnings are reported. --self-test first, so a
+        # guard that stopped parsing fails the job rather than passing vacuously.
+        run: |
+          ./scripts/check-dependency-audit.nu --self-test
+          ./scripts/check-dependency-audit.nu

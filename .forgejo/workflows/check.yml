@@ -326,6 +326,19 @@ jobs:
           ./scripts/check-publish-triggers.nu --self-test
           ./scripts/check-publish-triggers.nu
 
+      - name: Dependency audit
+        # Cargo.lock against the RustSec advisory database: an uncovered
+        # vulnerability fails, a warning is reported only, and the one
+        # pre-populated EXCEPTIONS row (rsa via sqlx-mysql, never compiled in)
+        # suppresses that advisory until its dated review (BUNYIP-905). Runs on
+        # the runner host like the rest of this job, so the cargo-audit install
+        # is reused from the host's persisted cargo cache rather than paid for
+        # on every push. --self-test first, so a gate that stopped detecting
+        # anything fails the build instead of passing vacuously.
+        run: |
+          ./scripts/check-dependency-audit.nu --self-test
+          ./scripts/check-dependency-audit.nu
+
       - name: Check formatting
         run: cargo fmt --all --check
 
