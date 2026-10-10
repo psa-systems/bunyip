@@ -108,6 +108,12 @@ services:
     image: postgres:18.2-alpine3.23
     container_name: bunyip-postgres
     restart: unless-stopped
+    # The image's entrypoint starts as root to chown PGDATA then re-execs as
+    # postgres via gosu; cap_drop: [ALL] removes the CAP_CHOWN/CAP_SETUID that
+    # dance needs. Starting the container already as postgres (uid 70, which
+    # already owns /var/lib/postgresql in the image) skips that root-only path
+    # entirely, verified against a fresh bunyip-postgres-data volume below.
+    user: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bunyip}
       # Native postgres-image file-secret support; the password never appears
