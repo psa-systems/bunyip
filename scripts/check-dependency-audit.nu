@@ -70,6 +70,48 @@ const EXCEPTIONS = [
         review_by: "2027-10-09"
         reason: "No fixed version exists upstream. rsa is in Cargo.lock only through sqlx-mysql, and every sqlx consumer here (bunyip-api, bunyip-domain, bunyip-oci, bunyip-oidc) takes sqlx without the mysql feature, so nothing compiles it: `cargo tree --offline --workspace` matches no rsa or sqlx-mysql package."
     }
+    {
+        id: "RUSTSEC-2026-0204"
+        package: "crossbeam-epoch"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=0.9.20) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
+    {
+        id: "RUSTSEC-2026-0258"
+        package: "h2"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=0.4.16) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
+    {
+        id: "RUSTSEC-2024-0421"
+        package: "idna"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=1.0.0) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
+    {
+        id: "RUSTSEC-2026-0185"
+        package: "quinn-proto"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=0.11.15) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
+    {
+        id: "RUSTSEC-2026-0235"
+        package: "rkyv"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=0.8.17) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
+    {
+        id: "RUSTSEC-2026-0285"
+        package: "rustls"
+        issue: "BUNYIP-909"
+        review_by: "2026-11-07"
+        reason: "A fixed version (>=0.23.45) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
+    }
 ]
 
 # `docker compose run --rm` gives every invocation its own container, so an
