@@ -118,6 +118,14 @@ services:
       - postgres_password
     expose:
       - "5432"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
     volumes:
       # Mount the whole tree (not .../data): Postgres >= 18 defaults PGDATA to
       # /var/lib/postgresql/<MAJOR>/docker, so the volume must cover the parent
@@ -350,6 +358,11 @@ services:
       - forgejo_api_token
       - update_check_token
       - mailer_webhook_secret
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path
@@ -424,6 +437,11 @@ services:
       - "4400"
     ports:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_WEB_PORT:-4400}:4400"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
     depends_on:
       - api
     networks:
