@@ -2184,13 +2184,15 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
     // BUNYIP-827: bounds concurrent Argon2 work independently of tokio's
     // default blocking-thread pool, so a distributed burst of otherwise
-    // rate-limit-compliant requests cannot exhaust it.
+    // rate-limit-compliant requests cannot exhaust it. Renamed from
+    // ARGON2_MAX_CONCURRENT / ARGON2_PERMIT_TIMEOUT_SECS with the DUNITE-20
+    // leaf bump (BUNYIP-875); the old names are no longer read.
     EnvVarSpec::defaulted(
-        "ARGON2_MAX_CONCURRENT",
+        "DUNITE_ARGON2_MAX_CONCURRENT",
         "maximum concurrent in-flight Argon2 hash/verify operations; default 32",
     ),
     EnvVarSpec::defaulted(
-        "ARGON2_PERMIT_TIMEOUT_SECS",
+        "DUNITE_ARGON2_PERMIT_TIMEOUT_SECS",
         "seconds a caller waits for an Argon2 concurrency permit before failing closed; default 5",
     ),
     EnvVarSpec::defaulted("HOST_IP", "bind address"),
