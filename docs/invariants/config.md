@@ -8,7 +8,7 @@ Full text of the configuration, secrets and feature flags conventions indexed in
 
 ## At-rest encryption (BUNYIP-483, BUNYIP-491)
 
-**At-rest encryption**: ONE key, `APP_ENCRYPTION_KEY` (+ `APP_ENCRYPTION_KEY_PREV`, a comma-separated list of keys old rows still need, + `APP_KEY_VERSION`), protects `user_totp`, `stripe_config` and `email_config` alike (BUNYIP-483). `Config::app_key_set()` builds the one `AppKeySet`; every encrypt/decrypt site takes it. Rewrite existing rows with `bunyip-api reencrypt-secrets` (idempotent); `scripts/check-no-retired-env.nu` fails the build if a per-consumer key name reappears. The list (rather than a single previous key) exists only for the consolidation window; narrowing it back to dunite's `EncryptionKeySet` is BUNYIP-491. Runbook: `docs/encryption-key-rotation.md`.
+**At-rest encryption**: ONE key, `APP_ENCRYPTION_KEY` (+ `APP_ENCRYPTION_KEY_PREV`, a comma-separated list of keys old rows still need, + `APP_KEY_VERSION`), protects `user_totp`, `stripe_config` and `email_config` alike (BUNYIP-483). `Config::app_key_set()` builds the one `AppKeySet`; every encrypt/decrypt site takes it. Rewrite existing rows with `bunyip-api reencrypt-secrets` (idempotent); `scripts/check-no-retired-env.nu` fails the build if a per-consumer key name reappears. `AppKeySet` is a type alias for `dunite_core::services::EncryptionKeySet` (BUNYIP-491/DUNITE-23): the previous-key list is a permanent, upstream-owned capability of the shared kernel type, not a bunyip-local wrapper or migration scaffolding. Runbook: `docs/encryption-key-rotation.md`.
 
 ## Startup config validation (BUNYIP-537)
 
