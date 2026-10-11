@@ -85,5 +85,8 @@ succeeds with no undecryptable values: their rows would become unreadable, which
 means users locked out of 2FA and Stripe/SMTP credentials that have to be
 re-entered.
 
-Accepting more than one previous key exists only for this migration. Dropping it
-(and this section) once every deployment has completed step 5 is BUNYIP-491.
+Accepting more than one previous key is now a permanent part of the shared
+`dunite_core::EncryptionKeySet` type (BUNYIP-491/DUNITE-23), not scaffolding
+for this migration alone: steps 1-5 above remain the procedure for rotating
+`APP_ENCRYPTION_KEY` going forward, and `APP_ENCRYPTION_KEY_PREV` will keep
+accepting a comma-separated list on every future rotation.
