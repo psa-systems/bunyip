@@ -21,7 +21,7 @@ use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
     back_link, badge, button_class, disabled_button, empty_state, error_box, error_box_detailed,
-    icon, success_box, toggle_switch_field,
+    error_box_for, icon, success_box, toggle_switch_field,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -1034,7 +1034,7 @@ pub async fn stripe(
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "Stripe" } p class="mt-2 text-muted-foreground" { "Connect and configure Stripe billing, products, and prices." } }
             @match &cfg {
-                Err(e) => (error_box_detailed("Could not load Stripe config.", Some(&e.user_message()), e.request_id.as_deref())),
+                Err(e) => (error_box_for("Could not reach the API to load the Stripe config.", e)),
                 Ok(s) => {
                     // BUNYIP-416: setup guidance ported from a8n-tools.
                     (stripe_setup_docs())
