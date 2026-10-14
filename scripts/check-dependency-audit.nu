@@ -92,13 +92,6 @@ const EXCEPTIONS = [
         reason: "A fixed version (>=1.0.0) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
     }
     {
-        id: "RUSTSEC-2026-0185"
-        package: "quinn-proto"
-        issue: "BUNYIP-909"
-        review_by: "2026-11-07"
-        reason: "A fixed version (>=0.11.15) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
-    }
-    {
         id: "RUSTSEC-2026-0235"
         package: "rkyv"
         issue: "BUNYIP-909"
