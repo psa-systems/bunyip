@@ -72,9 +72,14 @@ async fn a_burst_over_the_cap_writes_one_history_row() {
         "one throttle event, one history row, got {for_key:?}"
     );
     let row = &for_key[0];
+    // expires_at is window_start + window_seconds (BUNYIP-915: unchanged by
+    // the fired_at fix); fired_at is the wall-clock time of the breaching
+    // request, a few DB round trips after window_start opened, so the gap is
+    // window_seconds minus that small elapsed time, not an exact match.
+    let gap_seconds = (row.expires_at - row.fired_at).num_seconds();
     assert!(
-        (row.expires_at - row.fired_at).num_seconds() == config.window_seconds,
-        "expires_at = fired_at + window_seconds: {row:?} window={}",
+        (0..=config.window_seconds).contains(&gap_seconds),
+        "expires_at = window_start + window_seconds, fired_at a moment after window_start: {row:?} window={}",
         config.window_seconds
     );
 }
