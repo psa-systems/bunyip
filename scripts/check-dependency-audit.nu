@@ -92,13 +92,6 @@ const EXCEPTIONS = [
         reason: "A fixed version (>=1.0.0) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
     }
     {
-        id: "RUSTSEC-2026-0185"
-        package: "quinn-proto"
-        issue: "BUNYIP-909"
-        review_by: "2026-11-07"
-        reason: "A fixed version (>=0.11.15) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
-    }
-    {
         id: "RUSTSEC-2026-0235"
         package: "rkyv"
         issue: "BUNYIP-909"
@@ -259,6 +252,11 @@ def violations [report: record, exceptions: list<any>, today: datetime]: nothing
     mut found = ($exceptions | each {|row| malformed $row} | flatten)
     if ($found | is-not-empty) { return $found }
 
+    # review_by is a calendar date, valid through its own end: compare it against
+    # today's date, not today's timestamp, or an exception expires at midnight on
+    # its own review_by day instead of at the end of it.
+    let today_date = ($today | format date "%Y-%m-%d" | into datetime)
+
     let ids = (if ($report.vulnerabilities | is-empty) { [] } else { $report.vulnerabilities | get id })
 
     for row in $exceptions {
@@ -266,14 +264,14 @@ def violations [report: record, exceptions: list<any>, today: datetime]: nothing
             $found = ($found | append $"exception ($row.id) covers no reported advisory, so it is stale: delete the row \(($row.issue))")
             continue
         }
-        if ($row.review_by | into datetime) < $today {
+        if ($row.review_by | into datetime) < $today_date {
             $found = ($found | append $"exception ($row.id) for `($row.package)` expired on ($row.review_by): re-decide it in ($row.issue) and move the date, or fix the advisory")
         }
     }
 
     let live = (
         $exceptions
-        | where {|row| ($row.review_by | into datetime) >= $today}
+        | where {|row| ($row.review_by | into datetime) >= $today_date}
         | each {|row| $row.id}
     )
     for v in $report.vulnerabilities {
@@ -329,7 +327,10 @@ def expect-rejected [label: string, report: record, exceptions: list<any>, today
 # it a drifted parser reports "no vulnerabilities" for every run, which is the
 # same blindness one level up that this guard exists to remove.
 def run-self-test [] {
-    let today = ("2026-08-24" | into datetime)
+    # A time-of-day well past midnight, so a test that compares $today to a
+    # review_by date actually exercises the boundary: using a bare midnight
+    # $today would pass even with the pre-fix (not date-truncated) comparison.
+    let today = ("2026-08-24T15:30:00" | into datetime)
     let parsed = (parse-report ("Creating container\n" + (sample-report | to json)))
     if not $parsed.ok {
         print --stderr $"[check-dependency-audit] SELF-TEST FAILED: a well-formed report was rejected: ($parsed.reason)"
@@ -357,6 +358,16 @@ def run-self-test [] {
 
     expect-rejected "an uncovered vulnerability" $report ($both | first 1) $today
     expect-rejected "an expired exception" $report ($both | each {|r| $r | update review_by "2026-08-23"}) $today
+
+    # review_by is valid through the entirety of its own calendar day: an
+    # exception dated today, even though $today already carries a time of day
+    # past midnight, must still be accepted.
+    let today_boundary = ($both | each {|r| $r | update review_by "2026-08-24"})
+    let accepted_boundary = (violations $report $today_boundary $today)
+    if ($accepted_boundary | is-not-empty) {
+        print --stderr $"[check-dependency-audit] SELF-TEST FAILED: an exception whose review_by is today was rejected: ($accepted_boundary | str join '; ')"
+        exit 1
+    }
     expect-rejected "an exception covering nothing" $report ($both | append {id: "RUSTSEC-2020-0001", package: "ghost", issue: "BUNYIP-56", review_by: "2027-02-24", reason: "x"}) $today
     expect-rejected "an exception naming no issue" $report ($both | each {|r| $r | update issue "later"}) $today
     expect-rejected "an exception with an unreadable date" $report ($both | each {|r| $r | update review_by "whenever"}) $today
