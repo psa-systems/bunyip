@@ -38,15 +38,19 @@ impl RateLimitHistoryRepository {
     /// Record a throttle event. Called from `check_and_increment` the first
     /// time a key crosses the cap in a window, so one row per event.
     ///
-    /// `expires_at` is `fired_at + window_seconds`, which is when the next
-    /// successful request from the same key would reset the enforcement
-    /// row's `window_start`. Carrying it on the history row means the admin
-    /// page can show "fired 11:03, released 11:18" without a second query.
+    /// `fired_at` is the wall-clock moment the breaching request was
+    /// processed; `window_start` is the window's own open timestamp, used
+    /// only to derive `expires_at = window_start + window_seconds`, when the
+    /// next successful request from the same key would reset the
+    /// enforcement row's `window_start`. Carrying `expires_at` on the
+    /// history row means the admin page can show "fired 11:03, released
+    /// 11:18" without a second query.
     pub async fn record(
         pool: &PgPool,
         action: &str,
         key: &str,
         config: &RateLimitConfig,
+        fired_at: DateTime<Utc>,
         window_start: DateTime<Utc>,
     ) -> Result<(), AppError> {
         let expires_at = window_start + Duration::seconds(config.window_seconds);
@@ -58,7 +62,7 @@ impl RateLimitHistoryRepository {
         )
         .bind(action)
         .bind(key)
-        .bind(window_start)
+        .bind(fired_at)
         .bind(expires_at)
         .execute(pool)
         .await?;

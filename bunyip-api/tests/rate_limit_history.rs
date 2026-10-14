@@ -79,6 +79,62 @@ async fn a_burst_over_the_cap_writes_one_history_row() {
     );
 }
 
+/// `fired_at` records the wall-clock moment the breaching request was
+/// processed, not the window's open timestamp. A window that opened minutes
+/// ago and is only now being driven past the cap must still get a `fired_at`
+/// close to "now", not equal to that stale `window_start`.
+#[tokio::test]
+async fn fired_at_is_the_breach_time_not_the_window_start() {
+    let Some(pool) = setup().await else {
+        eprintln!("test database unset; skipping");
+        return;
+    };
+
+    // REGISTRATION's hour-long window makes the bug visible: a window_start
+    // several minutes in the past is still well inside the window, so the
+    // seeded row is not reset by the next call.
+    let config = RateLimitConfig::REGISTRATION;
+    let key = "stale-window@example.com";
+    let window_start = Utc::now() - Duration::minutes(5);
+
+    // Seed a rate_limits row already sitting one under the cap, with a
+    // window_start several minutes in the past, so the next call is the one
+    // that crosses the cap inside a window that opened long ago.
+    sqlx::query(
+        "INSERT INTO rate_limits (key, action, count, window_start) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(key)
+    .bind(config.action)
+    .bind(config.max_requests)
+    .bind(window_start)
+    .execute(&pool)
+    .await
+    .expect("seed rate_limits");
+
+    let before_call = Utc::now();
+    RateLimitRepository::check_and_increment(&pool, key, &config)
+        .await
+        .expect("check_and_increment");
+
+    let rows = RateLimitHistoryRepository::list(&pool, Utc::now() - Duration::hours(1), 100)
+        .await
+        .expect("list history");
+    let for_key: Vec<_> = rows
+        .into_iter()
+        .filter(|r| r.key == key && r.action == config.action)
+        .collect();
+    assert_eq!(for_key.len(), 1, "one throttle event, got {for_key:?}");
+    let row = &for_key[0];
+    assert!(
+        (row.fired_at - before_call).num_seconds().abs() <= 5,
+        "fired_at should be close to the call's wall-clock time, got {row:?} before_call={before_call}"
+    );
+    assert!(
+        (row.fired_at - window_start).num_seconds().abs() > 60,
+        "fired_at must not equal the stale window_start, got {row:?} window_start={window_start}"
+    );
+}
+
 /// A row older than the retention floor is swept; a fresh row is kept.
 #[tokio::test]
 async fn the_sweep_deletes_only_rows_past_retention() {
