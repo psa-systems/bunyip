@@ -74,6 +74,42 @@ impl RateLimitRepository {
         Ok(rows)
     }
 
+    /// Batched sibling of [`Self::list_approaching`] (BUNYIP-920): fetches
+    /// every row for `actions` whose window could still be open in a single
+    /// round trip, then leaves the per-action threshold/cap filtering to the
+    /// caller. Each action's floor and window differ (they come from that
+    /// action's own effective config), so unlike [`Self::list_approaching`]
+    /// this cannot push `count >= floor` or `window_start > horizon` into the
+    /// `WHERE` clause without re-deriving every action's effective config
+    /// first; instead it fetches everything since the *longest* window in
+    /// force (`horizon`) and the caller (which already holds each action's
+    /// effective config from the cached snapshot) filters and truncates to
+    /// `limit` per action in memory. Ordered by `count DESC, window_start
+    /// DESC` within the fetch, matching `list_approaching`'s order, so a
+    /// per-action `take(limit)` after filtering reproduces the same rows.
+    pub async fn list_approaching_batch(
+        pool: &PgPool,
+        actions: &[&str],
+        horizon: chrono::DateTime<Utc>,
+    ) -> Result<Vec<RateLimit>, AppError> {
+        if actions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, RateLimit>(
+            r#"
+            SELECT id, key, action, count, window_start
+            FROM rate_limits
+            WHERE action = ANY($1) AND window_start > $2
+            ORDER BY count DESC, window_start DESC
+            "#,
+        )
+        .bind(actions)
+        .bind(horizon)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// The longest window in force across every known action, as the declared
     /// configuration providers resolve it (BUNYIP-413/645). The retention
     /// horizon for the `rate_limits` table: a row older than this cannot belong

@@ -23,6 +23,17 @@ pub struct TrafficPoint {
     pub count: i64,
 }
 
+/// One rolled-up bucket for an action, as returned by
+/// [`RateLimitTrafficRepository::read_batch`]: the same shape as
+/// [`TrafficPoint`] plus the `action` the row belongs to, so the caller can
+/// partition one fetch back into a [`TrafficPoint`] vec per action.
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct ActionTrafficPoint {
+    pub action: String,
+    pub bucket_start: DateTime<Utc>,
+    pub count: i64,
+}
+
 /// Width of a traffic bucket. 15 minutes keeps 1 day of history at 96 rows
 /// per `(action, key_hash)`, which stays well inside the ticket's "no
 /// monitoring stack" budget while still showing spikes.
@@ -83,6 +94,36 @@ impl RateLimitTrafficRepository {
             "#,
         )
         .bind(action)
+        .bind(since)
+        .fetch_all(pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Batched sibling of [`Self::read`] (BUNYIP-920): the per-bucket totals
+    /// for every action in `actions` in `[since, now]` in a single round
+    /// trip, newest bucket first within each action. Rows are not grouped by
+    /// action here; the caller partitions them (e.g. `HashMap<&str,
+    /// Vec<TrafficPoint>>`) since the admin overview needs one
+    /// [`TrafficPoint`] vec per action.
+    pub async fn read_batch(
+        pool: &PgPool,
+        actions: &[&str],
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ActionTrafficPoint>, AppError> {
+        if actions.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query_as::<_, ActionTrafficPoint>(
+            r#"
+            SELECT action, bucket_start, SUM(count)::bigint AS count
+            FROM rate_limit_traffic
+            WHERE action = ANY($1) AND bucket_start >= $2
+            GROUP BY action, bucket_start
+            ORDER BY action, bucket_start DESC
+            "#,
+        )
+        .bind(actions)
         .bind(since)
         .fetch_all(pool)
         .await?;
