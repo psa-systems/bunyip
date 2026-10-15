@@ -98,13 +98,6 @@ const EXCEPTIONS = [
         review_by: "2026-11-07"
         reason: "A fixed version (>=0.8.17) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
     }
-    {
-        id: "RUSTSEC-2026-0285"
-        package: "rustls"
-        issue: "BUNYIP-909"
-        review_by: "2026-11-07"
-        reason: "A fixed version (>=0.23.45) exists but bumping Cargo.lock is out of this gate's own diff scope; tracked for a follow-up `cargo update`."
-    }
 ]
 
 # `docker compose run --rm` gives every invocation its own container, so an
