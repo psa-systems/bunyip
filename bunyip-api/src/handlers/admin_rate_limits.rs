@@ -816,6 +816,7 @@ pub async fn list_rate_limit_overview(
 ) -> Result<HttpResponse, AppError> {
     use crate::repositories::{RateLimitConfigRepository, RateLimitTrafficRepository};
     use bunyip_domain::repositories::rate_limit_traffic::BUCKET_WIDTH_SECS;
+    use std::collections::HashMap;
     let request_id = get_request_id(&req);
     RateLimitRepository::check_rate_limit(
         pool.get_ref(),
@@ -837,44 +838,124 @@ pub async fn list_rate_limit_overview(
             message: "`threshold` must be between 0.1 and 1.0".to_string(),
         });
     }
-    let limit = query.limit.unwrap_or(5);
-    let since = Utc::now() - window;
+    let ratio = threshold.clamp(0.1, 1.0);
+    let limit = query.limit.unwrap_or(5).clamp(1, 100);
+    let now = Utc::now();
+    let since = now - window;
 
-    let mut entries = Vec::with_capacity(RateLimitConfig::ALL.len());
+    // BUNYIP-920: resolve every action's effective config up front (cached,
+    // not a per-action DB round trip, per `effective_never_reads_a_row_per_decision`),
+    // then fetch traffic and approaching rows for every action in one round
+    // trip each instead of looping `RateLimitTrafficRepository::read` /
+    // `RateLimitRepository::list_approaching` per action.
+    let mut effectives: Vec<(RateLimitConfig, RateLimitConfig)> =
+        Vec::with_capacity(RateLimitConfig::ALL.len());
     for cfg in RateLimitConfig::ALL {
         let cfg = cfg.with_deployment_defaults();
         let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
+        effectives.push((cfg, effective));
+    }
+    let actions: Vec<&str> = effectives.iter().map(|(cfg, _)| cfg.action).collect();
 
-        let points = RateLimitTrafficRepository::read(pool.get_ref(), cfg.action, since).await?;
+    let traffic_rows =
+        RateLimitTrafficRepository::read_batch(pool.get_ref(), &actions, since).await?;
+    let mut traffic_by_action: HashMap<String, Vec<TrafficPointEntry>> = HashMap::new();
+    for row in traffic_rows {
+        traffic_by_action
+            .entry(row.action)
+            .or_default()
+            .push(TrafficPointEntry {
+                bucket_start: row.bucket_start,
+                count: row.count,
+            });
+    }
+
+    let max_window_seconds = effectives
+        .iter()
+        .map(|(_, eff)| eff.window_seconds)
+        .max()
+        .unwrap_or(3600);
+    let approaching_horizon = now - Duration::seconds(max_window_seconds);
+    let approaching_rows =
+        RateLimitRepository::list_approaching_batch(pool.get_ref(), &actions, approaching_horizon)
+            .await?;
+    let mut approaching_by_action: HashMap<String, Vec<RateLimit>> = HashMap::new();
+    for row in approaching_rows {
+        approaching_by_action
+            .entry(row.action.clone())
+            .or_default()
+            .push(row);
+    }
+
+    // Collect every key that resolves to a user, across every action, for
+    // one batched email lookup and one batched id lookup (BUNYIP-920),
+    // instead of a `UserRepository::find_by_email`/`find_by_id` call per
+    // approaching row.
+    let mut emails_to_look_up: Vec<String> = Vec::new();
+    let mut ids_to_look_up: Vec<Uuid> = Vec::new();
+    let mut subjects_by_action: HashMap<String, Vec<(RateLimit, KeySubject)>> = HashMap::new();
+    for (cfg, effective) in &effectives {
+        let floor = (effective.max_requests as f64 * ratio).ceil() as i32;
+        let window_opens_after = now - Duration::seconds(effective.window_seconds);
+        let rows = approaching_by_action
+            .remove(cfg.action)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|row| {
+                row.window_start > window_opens_after
+                    && row.count >= floor
+                    && row.count <= effective.max_requests
+            })
+            .take(limit as usize);
+        let mut subjects = Vec::new();
+        for row in rows {
+            let subject = cfg.subject(&row.key);
+            match &subject {
+                KeySubject::Email(email) => emails_to_look_up.push(email.clone()),
+                KeySubject::UserId(id) => ids_to_look_up.push(*id),
+                KeySubject::Ip(_) | KeySubject::ClientId(_) | KeySubject::Unknown(_) => {}
+            }
+            subjects.push((row, subject));
+        }
+        subjects_by_action.insert(cfg.action.to_string(), subjects);
+    }
+
+    let users_by_email: HashMap<String, (Uuid, String)> =
+        UserRepository::find_by_email_batch(pool.get_ref(), &emails_to_look_up)
+            .await?
+            .into_iter()
+            .map(|u| (u.email.to_lowercase(), (u.id, u.email)))
+            .collect();
+    let users_by_id: HashMap<Uuid, (Uuid, String)> =
+        UserRepository::find_by_id_batch(pool.get_ref(), &ids_to_look_up)
+            .await?
+            .into_iter()
+            .map(|u| (u.id, (u.id, u.email)))
+            .collect();
+
+    let mut entries = Vec::with_capacity(effectives.len());
+    for (cfg, effective) in &effectives {
+        let points = traffic_by_action.remove(cfg.action).unwrap_or_default();
         let traffic = TrafficResponse {
             action: cfg.action.to_string(),
             max_requests: effective.max_requests,
             window_seconds: effective.window_seconds,
             bucket_width_seconds: BUCKET_WIDTH_SECS,
-            points: points
-                .into_iter()
-                .map(|p| TrafficPointEntry {
-                    bucket_start: p.bucket_start,
-                    count: p.count,
-                })
-                .collect(),
+            points,
         };
 
-        let rows =
-            RateLimitRepository::list_approaching(pool.get_ref(), cfg.action, threshold, limit)
-                .await?;
-        let mut approaching = Vec::with_capacity(rows.len());
-        for row in rows {
-            let subject = cfg.subject(&row.key);
+        let subjects = subjects_by_action.remove(cfg.action).unwrap_or_default();
+        let mut approaching = Vec::with_capacity(subjects.len());
+        for (row, subject) in subjects {
             let (user_id, user_email, ip) = match &subject {
-                KeySubject::Email(email) => {
-                    let u = UserRepository::find_by_email(pool.get_ref(), email).await?;
-                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
-                }
-                KeySubject::UserId(id) => {
-                    let u = UserRepository::find_by_id(pool.get_ref(), *id).await?;
-                    (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
-                }
+                KeySubject::Email(email) => match users_by_email.get(&email.to_lowercase()) {
+                    Some((id, email)) => (Some(*id), Some(email.clone()), None),
+                    None => (None, None, None),
+                },
+                KeySubject::UserId(id) => match users_by_id.get(id) {
+                    Some((id, email)) => (Some(*id), Some(email.clone()), None),
+                    None => (None, None, None),
+                },
                 KeySubject::Ip(ip) => (None, None, Some(ip.clone())),
                 KeySubject::ClientId(_) | KeySubject::Unknown(_) => (None, None, None),
             };
