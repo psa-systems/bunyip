@@ -441,6 +441,16 @@ fn sparkline(points: &[(String, i64)], limit: i32) -> Markup {
     html! { (PreEscaped(svg)) }
 }
 
+/// Returns the shared `ApiError` if every entry in `traffic` failed (the
+/// whole-card fetch failure case, where every row carries a clone of the
+/// same error), or `None` if `traffic` is empty or at least one row is `Ok`.
+fn all_err(traffic: &[(String, Result<AdminRateLimitTraffic, ApiError>)]) -> Option<&ApiError> {
+    if traffic.is_empty() || traffic.iter().any(|(_, res)| res.is_ok()) {
+        return None;
+    }
+    traffic.first().and_then(|(_, res)| res.as_ref().err())
+}
+
 /// Traffic card: configured limit + sparkline per bucket, with a 1h/6h/1d
 /// time-range toggle at the top. One row per `RateLimitConfig::ALL` action
 /// so the unauthenticated and authenticated API buckets are both visible.
@@ -481,6 +491,8 @@ fn traffic_card(
             div class="p-6 pt-0 space-y-4" {
                 @if traffic.is_empty() {
                     (empty_state("activity", "No rate-limit actions are configured.", None))
+                } @else if let Some(e) = all_err(traffic) {
+                    (error_box_for("Could not reach the API to load rate-limit traffic.", e))
                 } @else {
                     @for (action, res) in traffic {
                         div class="flex items-center justify-between gap-4 flex-wrap border-b last:border-0 py-3" {
