@@ -231,6 +231,7 @@ impl RateLimitRepository {
                 config.action,
                 key,
                 config,
+                Utc::now(),
                 resolved_window_start,
             )
             .await
