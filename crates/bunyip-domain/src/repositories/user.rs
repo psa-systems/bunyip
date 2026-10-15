@@ -63,6 +63,47 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// Batched sibling of [`Self::find_by_id`] (BUNYIP-920): every live user
+    /// among `ids` in a single round trip. Order is not guaranteed; the
+    /// caller maps results back by `id`.
+    pub async fn find_by_id_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<User>, AppError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users WHERE id = ANY($1) AND deleted_at IS NULL
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(pool)
+        .await?;
+        Ok(users)
+    }
+
+    /// Batched sibling of [`Self::find_by_email`] (BUNYIP-920): every live
+    /// user among `emails` in a single round trip, matched case-insensitively
+    /// like `find_by_email`. Order is not guaranteed; the caller maps results
+    /// back by lower-cased email.
+    pub async fn find_by_email_batch(
+        pool: &PgPool,
+        emails: &[String],
+    ) -> Result<Vec<User>, AppError> {
+        if emails.is_empty() {
+            return Ok(Vec::new());
+        }
+        let lowered: Vec<String> = emails.iter().map(|e| e.to_lowercase()).collect();
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users WHERE LOWER(email) = ANY($1) AND deleted_at IS NULL
+            "#,
+        )
+        .bind(&lowered)
+        .fetch_all(pool)
+        .await?;
+        Ok(users)
+    }
+
     /// Find user by Stripe customer ID
     pub async fn find_by_stripe_customer_id(
         pool: &PgPool,
