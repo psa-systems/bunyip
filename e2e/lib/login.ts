@@ -330,10 +330,13 @@ async function fillTotpStep(page: Page): Promise<void> {
   );
 }
 
-// Browser-driven logout: GET /logout clears the access_token / refresh_token /
-// bunyip_2fa cookies and redirects. Used by the auth-ui project.
+// Browser-driven logout: submits the profile menu's POST /logout form, which
+// clears the access_token / refresh_token / bunyip_2fa cookies and redirects.
+// Logout is a POST (BUNYIP-907, CSRF under SameSite=Lax), so this opens the
+// profile menu and clicks "Log out" rather than navigating directly.
 export async function logoutViaHub(page: Page): Promise<void> {
-  await page.goto('/logout');
+  await page.locator('[data-menu] summary').click();
+  await page.getByRole('button', { name: 'Log out' }).click();
 }
 
 // An authenticated session can read its own user record (200); an anonymous

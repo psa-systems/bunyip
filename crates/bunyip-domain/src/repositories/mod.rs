@@ -54,7 +54,7 @@ pub use oauth_client_user_tenant::OAuthClientUserTenantRepository;
 pub use rate_limit::RateLimitRepository;
 pub use rate_limit_config::{RateLimitConfigRepository, RateLimitConfigRow};
 pub use rate_limit_history::{RateLimitHistory, RateLimitHistoryRepository};
-pub use rate_limit_traffic::{RateLimitTrafficRepository, TrafficPoint};
+pub use rate_limit_traffic::{ActionTrafficPoint, RateLimitTrafficRepository, TrafficPoint};
 pub use stripe::StripeConfigRepository;
 pub use support::SupportRepository;
 pub use tier::TierConfigRepository;

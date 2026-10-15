@@ -397,3 +397,114 @@ async fn two_renders_within_60s_do_not_degrade_traffic_or_approaching() {
         );
     }
 }
+
+/// BUNYIP-920: the overview handler now fetches every action's approaching
+/// rows in one batched query and resolves every email-/id-keyed row through
+/// one batched `UserRepository` lookup each, partitioning both back into
+/// per-action, per-row results in memory. This seeds rows across three
+/// actions with three different `KeySubject` kinds (email, user id via the
+/// 2FA prefix, and IP) so a partitioning bug (a row's user resolved from a
+/// different action's lookup, or dropped crossing the in-memory regroup)
+/// would show up as a wrong `user_id`/`user_email`/`ip` on the wrong entry.
+#[actix_rt::test]
+async fn overview_resolves_approaching_rows_to_the_right_action_and_subject() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let admin = seed_admin(&pool).await;
+    let subscriber = seed_subscriber(&pool).await;
+    let now = Utc::now();
+
+    // login: Email-keyed, max_requests 10, threshold floor at default 0.7 -> 7.
+    sqlx::query(
+        "INSERT INTO rate_limits (id, key, action, count, window_start) VALUES ($1, $2, 'login', 8, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&subscriber.email)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("seed login approaching row");
+
+    // two_factor_verify_failures: TwoFactorUserId-keyed, max_requests 5, floor 4.
+    let two_factor_key = format!("2fa_verify_user:{}", subscriber.id);
+    sqlx::query(
+        "INSERT INTO rate_limits (id, key, action, count, window_start) VALUES ($1, $2, 'two_factor_verify_failures', 4, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(&two_factor_key)
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("seed 2fa approaching row");
+
+    // registration: Ip-keyed, max_requests 10, floor 7.
+    sqlx::query(
+        "INSERT INTO rate_limits (id, key, action, count, window_start) VALUES ($1, $2, 'registration', 8, $3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind("203.0.113.5")
+    .bind(now)
+    .execute(&pool)
+    .await
+    .expect("seed registration approaching row");
+
+    let app = build_app!(pool, jwt);
+    let req = test::TestRequest::get()
+        .uri("/admin/rate-limits/overview?window=1h")
+        .insert_header(("authorization", bearer(&jwt, &admin)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "{:?}", resp.status());
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["data"].as_array().expect("data is an array");
+
+    let entry_for = |action: &str| {
+        entries
+            .iter()
+            .find(|e| e["action"] == action)
+            .unwrap_or_else(|| panic!("no overview entry for {action}: {entries:?}"))
+    };
+
+    let login_approaching = entry_for("login")["approaching"]
+        .as_array()
+        .expect("login approaching is an array");
+    assert_eq!(
+        login_approaching.len(),
+        1,
+        "login approaching: {login_approaching:?}"
+    );
+    assert_eq!(login_approaching[0]["user_id"], subscriber.id.to_string());
+    assert_eq!(login_approaching[0]["user_email"], subscriber.email);
+    assert!(login_approaching[0]["ip"].is_null());
+
+    let two_factor_approaching = entry_for("two_factor_verify_failures")["approaching"]
+        .as_array()
+        .expect("2fa approaching is an array");
+    assert_eq!(
+        two_factor_approaching.len(),
+        1,
+        "2fa approaching: {two_factor_approaching:?}"
+    );
+    assert_eq!(
+        two_factor_approaching[0]["user_id"],
+        subscriber.id.to_string()
+    );
+    assert_eq!(two_factor_approaching[0]["user_email"], subscriber.email);
+
+    let registration_approaching = entry_for("registration")["approaching"]
+        .as_array()
+        .expect("registration approaching is an array");
+    assert_eq!(
+        registration_approaching.len(),
+        1,
+        "registration approaching: {registration_approaching:?}"
+    );
+    assert!(registration_approaching[0]["user_id"].is_null());
+    assert!(registration_approaching[0]["user_email"].is_null());
+    assert_eq!(registration_approaching[0]["ip"], "203.0.113.5");
+}
