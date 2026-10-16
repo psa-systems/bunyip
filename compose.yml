@@ -369,6 +369,8 @@ services:
     cap_drop:
       - ALL
     read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path
