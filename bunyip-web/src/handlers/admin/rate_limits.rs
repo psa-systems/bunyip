@@ -258,6 +258,11 @@ pub async fn rate_limits(
     // headroom for an immediate second render (refresh or window toggle).
     let overview_data =
         admin_api::rate_limit_overview(&st.api, c.forward.as_deref(), window, 0.7, 5).await;
+    // Kept out of the `match` below so the Close to the Limit card can tell a
+    // failed fetch (empty `approaching` because we could not ask) from a
+    // genuinely empty result (BUNYIP-912); the traffic card reads the same
+    // failure off its per-action `Err` entries via `all_err`.
+    let overview_error = overview_data.as_ref().err().cloned();
     let (traffic, approaching) = match overview_data {
         Ok(entries) => {
             let mut traffic: Vec<(String, Result<AdminRateLimitTraffic, ApiError>)> =
@@ -313,7 +318,7 @@ pub async fn rate_limits(
             // Traffic + sparkline per bucket (BUNYIP-892).
             (traffic_card(&traffic, window))
             // Close to the Limit: top-N rows approaching each cap (BUNYIP-897).
-            (close_to_limit_card(&approaching))
+            (close_to_limit_card(&approaching, overview_error.as_ref()))
             (rate_limit_config_card(&configs, configs_error.as_ref(), user.is_super_admin))
         }
     };
@@ -686,8 +691,14 @@ pub async fn rate_limit_config_reset(
 /// Close to the Limit card: for each action with at least one row near the
 /// cap, show a subheading and up to five "subject - count/cap" rows. An
 /// empty approaching list across every action still renders the card with
-/// a single empty-state line so the operator sees the check ran.
-fn close_to_limit_card(approaching: &[(String, Vec<AdminRateLimitApproaching>)]) -> Markup {
+/// a single empty-state line so the operator sees the check ran. A failed
+/// overview fetch renders the error through `error_box_for` instead, so
+/// "nothing is approaching" and "could not find out" stay distinct
+/// (BUNYIP-912, the fetched-list-states invariant BUNYIP-461/546/635).
+pub(super) fn close_to_limit_card(
+    approaching: &[(String, Vec<AdminRateLimitApproaching>)],
+    error: Option<&ApiError>,
+) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -695,12 +706,16 @@ fn close_to_limit_card(approaching: &[(String, Vec<AdminRateLimitApproaching>)])
                     (icon("activity", "h-5 w-5 text-primary-text"))
                     h3 class="text-2xl font-semibold leading-none tracking-tight" { "Close to the Limit" }
                 }
-                p class="text-sm text-muted-foreground" {
-                    "Subjects whose current window is at 70% of the cap or over, under-cap only."
+                @if error.is_none() {
+                    p class="text-sm text-muted-foreground" {
+                        "Subjects whose current window is at 70% of the cap or over, under-cap only."
+                    }
                 }
             }
             div class="p-6 pt-0 space-y-4" {
-                @if approaching.is_empty() {
+                @if let Some(e) = error {
+                    (error_box_for("Could not reach the API to load subjects approaching their limit.", e))
+                } @else if approaching.is_empty() {
                     (empty_state("activity", "No throttles are approaching right now.", None))
                 } @else {
                     @for (action, rows) in approaching {

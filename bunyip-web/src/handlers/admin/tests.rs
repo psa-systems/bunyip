@@ -597,6 +597,47 @@ mod rate_limit_tests {
         assert!(panel.contains("req_users123"), "request id surfaced");
     }
 
+    // BUNYIP-912: a failed overview fetch must render the Close to the Limit
+    // card through `error_box_for`, never its empty state, so "nothing is
+    // approaching" and "could not find out" stay distinct (fetched-list-states
+    // invariant BUNYIP-461/546/635).
+    #[test]
+    fn close_to_limit_card_shows_error_box_on_fetch_failure() {
+        let err = crate::api::ApiError {
+            status: 502,
+            code: "BAD_GATEWAY".into(),
+            message: "overview failed".into(),
+            retry_after: None,
+            request_id: Some("req_ctl912".into()),
+            bucket: None,
+        };
+        let card = super::close_to_limit_card(&[], Some(&err)).into_string();
+        assert!(
+            card.contains("Could not reach the API to load subjects approaching their limit."),
+            "error_box_for headline shown instead of the empty state"
+        );
+        assert!(
+            !card.contains("No throttles are approaching right now."),
+            "the empty state must not render on fetch failure"
+        );
+        assert!(card.contains("req_ctl912"), "request id surfaced");
+    }
+
+    // The genuine-empty path still renders the empty state, so the error path
+    // above is a real distinction and not a blanket replacement.
+    #[test]
+    fn close_to_limit_card_shows_empty_state_when_nothing_approaching() {
+        let card = super::close_to_limit_card(&[], None).into_string();
+        assert!(
+            card.contains("No throttles are approaching right now."),
+            "a genuinely empty result renders the empty state"
+        );
+        assert!(
+            !card.contains("Could not reach the API"),
+            "no error box when the fetch succeeded"
+        );
+    }
+
     #[test]
     fn verified_filter_parses_tri_state() {
         assert_eq!(super::parse_verified_filter("verified"), Some(true));
