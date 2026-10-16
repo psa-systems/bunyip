@@ -599,7 +599,8 @@ pub struct TrafficPointEntry {
     pub count: i64,
 }
 
-/// GET /v1/admin/rate-limits/traffic response.
+/// Per-action traffic read, embedded in each entry of the
+/// `GET /v1/admin/rate-limits/overview` response.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrafficResponse {
     pub action: String,
@@ -609,14 +610,6 @@ pub struct TrafficResponse {
     pub points: Vec<TrafficPointEntry>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TrafficQuery {
-    pub action: String,
-    /// `1h`, `6h`, or `1d`. Default `1h`.
-    #[serde(default)]
-    pub window: Option<String>,
-}
-
 fn parse_traffic_window(raw: Option<&str>) -> Option<Duration> {
     match raw.unwrap_or("1h") {
         "1h" => Some(Duration::hours(1)),
@@ -624,63 +617,6 @@ fn parse_traffic_window(raw: Option<&str>) -> Option<Duration> {
         "1d" => Some(Duration::days(1)),
         _ => None,
     }
-}
-
-/// GET /v1/admin/rate-limits/traffic?action=<name>&window=1h|6h|1d
-///
-/// Per-15-minute-bucket counts summed across every key_hash for the action,
-/// newest bucket first. `max_requests` and `window_seconds` are the
-/// configured limit for the sparkline's threshold line; the client never has
-/// to re-resolve them separately.
-pub async fn list_rate_limit_traffic(
-    req: HttpRequest,
-    admin: AdminUser,
-    pool: web::Data<PgPool>,
-    query: web::Query<TrafficQuery>,
-) -> Result<HttpResponse, AppError> {
-    use crate::repositories::{RateLimitConfigRepository, RateLimitTrafficRepository};
-    use bunyip_domain::repositories::rate_limit_traffic::BUCKET_WIDTH_SECS;
-    let request_id = get_request_id(&req);
-    RateLimitRepository::check_rate_limit(
-        pool.get_ref(),
-        &admin.0.sub.to_string(),
-        &RateLimitConfig::ADMIN_DIAGNOSTICS,
-    )
-    .await?;
-    let now = Utc::now();
-
-    let Some(window) = parse_traffic_window(query.window.as_deref()) else {
-        return Err(AppError::ValidationError {
-            field: "window".to_string(),
-            message: "`window` must be one of `1h`, `6h`, `1d`".to_string(),
-        });
-    };
-    let Some(cfg) = RateLimitConfig::by_action(&query.action) else {
-        return Err(AppError::ValidationError {
-            field: "action".to_string(),
-            message: format!("unknown rate-limit action: {}", query.action),
-        });
-    };
-    let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
-
-    let since = now - window;
-    let points = RateLimitTrafficRepository::read(pool.get_ref(), &query.action, since).await?;
-
-    let body = TrafficResponse {
-        action: query.action.clone(),
-        max_requests: effective.max_requests,
-        window_seconds: effective.window_seconds,
-        bucket_width_seconds: BUCKET_WIDTH_SECS,
-        points: points
-            .into_iter()
-            .map(|p| TrafficPointEntry {
-                bucket_start: p.bucket_start,
-                count: p.count,
-            })
-            .collect(),
-    };
-
-    Ok(success(body, request_id))
 }
 
 /// One row of the "close to the limit" admin view: `(action, key)` with its
@@ -695,85 +631,6 @@ pub struct RateLimitApproachingEntry {
     pub ip: Option<String>,
     pub count: i64,
     pub max_requests: i32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ApproachingQuery {
-    pub action: String,
-    /// Default 0.7, clamped to [0.1, 1.0].
-    #[serde(default)]
-    pub threshold: Option<f64>,
-    /// Default 10, clamped to [1, 100].
-    #[serde(default)]
-    pub limit: Option<i64>,
-}
-
-/// GET /v1/admin/rate-limits/approaching?action=<name>&threshold=<r>&limit=<n>
-///
-/// Top-N rows for `action` whose current count is close to the cap (ratio
-/// defaults to 0.7), under-cap only; over-cap rows are the active-throttles
-/// view. AdminUser-gated. Rate-limited through ADMIN_DIAGNOSTICS.
-pub async fn list_rate_limit_approaching(
-    req: HttpRequest,
-    admin: AdminUser,
-    pool: web::Data<PgPool>,
-    query: web::Query<ApproachingQuery>,
-) -> Result<HttpResponse, AppError> {
-    let request_id = get_request_id(&req);
-    RateLimitRepository::check_rate_limit(
-        pool.get_ref(),
-        &admin.0.sub.to_string(),
-        &RateLimitConfig::ADMIN_DIAGNOSTICS,
-    )
-    .await?;
-
-    let Some(cfg) = RateLimitConfig::by_action(&query.action) else {
-        return Err(AppError::ValidationError {
-            field: "action".to_string(),
-            message: format!("unknown rate-limit action: {}", query.action),
-        });
-    };
-    let threshold = query.threshold.unwrap_or(0.7);
-    if !(0.1..=1.0).contains(&threshold) {
-        return Err(AppError::ValidationError {
-            field: "threshold".to_string(),
-            message: "`threshold` must be between 0.1 and 1.0".to_string(),
-        });
-    }
-    let limit = query.limit.unwrap_or(10);
-
-    let rows =
-        RateLimitRepository::list_approaching(pool.get_ref(), &query.action, threshold, limit)
-            .await?;
-
-    let effective = RateLimitConfigRepository::effective(pool.get_ref(), &cfg).await?;
-    let mut entries = Vec::with_capacity(rows.len());
-    for row in rows {
-        let subject = cfg.subject(&row.key);
-        let (user_id, user_email, ip) = match &subject {
-            KeySubject::Email(email) => {
-                let u = UserRepository::find_by_email(pool.get_ref(), email).await?;
-                (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
-            }
-            KeySubject::UserId(id) => {
-                let u = UserRepository::find_by_id(pool.get_ref(), *id).await?;
-                (u.as_ref().map(|u| u.id), u.map(|u| u.email), None)
-            }
-            KeySubject::Ip(ip) => (None, None, Some(ip.clone())),
-            KeySubject::ClientId(_) | KeySubject::Unknown(_) => (None, None, None),
-        };
-        entries.push(RateLimitApproachingEntry {
-            action: row.action,
-            key: row.key,
-            user_id,
-            user_email,
-            ip,
-            count: row.count as i64,
-            max_requests: effective.max_requests,
-        });
-    }
-
-    Ok(success(entries, request_id))
 }
 
 /// One action's combined traffic + approaching rows, as returned by

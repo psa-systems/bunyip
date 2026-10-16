@@ -867,7 +867,8 @@ pub struct AdminRateLimitHistory {
     pub expires_at: String,
 }
 
-/// One point in `GET /v1/admin/rate-limits/traffic` (BUNYIP-893).
+/// One point in the per-action `traffic` field of
+/// `GET /v1/admin/rate-limits/overview` (BUNYIP-900).
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRateLimitTrafficPoint {
     pub bucket_start: String,
@@ -875,8 +876,9 @@ pub struct AdminRateLimitTrafficPoint {
     pub count: i64,
 }
 
-/// One row returned by `GET /v1/admin/rate-limits/approaching`
-/// (BUNYIP-897): a key whose count is approaching the configured cap.
+/// One row of the per-action `approaching` field of
+/// `GET /v1/admin/rate-limits/overview` (BUNYIP-900): a key whose count is
+/// approaching the configured cap.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRateLimitApproaching {
     pub action: String,
@@ -893,9 +895,9 @@ pub struct AdminRateLimitApproaching {
     pub max_requests: i32,
 }
 
-/// Response from `GET /v1/admin/rate-limits/traffic` (BUNYIP-893). Carries
-/// the configured limit alongside the counts so the admin page's sparkline
-/// does not need a second resolver read.
+/// The per-action `traffic` field of `GET /v1/admin/rate-limits/overview`
+/// (BUNYIP-900). Carries the configured limit alongside the counts so the
+/// admin page's sparkline does not need a second resolver read.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRateLimitTraffic {
     pub action: String,

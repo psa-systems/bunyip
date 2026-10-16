@@ -207,16 +207,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/rate-limits/history",
                 web::get().to(handlers::list_rate_limit_history),
             )
-            // Per-bucket traffic rollup feeding the admin sparkline (BUNYIP-893).
-            .route(
-                "/rate-limits/traffic",
-                web::get().to(handlers::list_rate_limit_traffic),
-            )
-            // Top-N rows close to the cap for each action (BUNYIP-897).
-            .route(
-                "/rate-limits/approaching",
-                web::get().to(handlers::list_rate_limit_approaching),
-            )
             // Traffic + approaching, batched across every action in one
             // ADMIN_DIAGNOSTICS-budgeted call (BUNYIP-900).
             .route(

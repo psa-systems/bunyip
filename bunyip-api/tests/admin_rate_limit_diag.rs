@@ -6,15 +6,16 @@
 //!
 //! Covers:
 //! - `GET /admin/rate-limits/history` returns `data: [...]`, newest first.
-//! - `GET /admin/rate-limits/traffic` returns the configured limit + the
-//!   per-15-minute points for the action.
-//! - Unknown action -> 400.
 //! - `since` older than the 24h floor is quietly clamped (older rows do not
 //!   leak).
 //! - A non-admin caller is refused (middleware).
 //! - `GET /admin/rate-limits/overview` (BUNYIP-900) returns one entry per
 //!   `RateLimitConfig::ALL` action, each carrying its own traffic + approaching
 //!   rows, behind a single ADMIN_DIAGNOSTICS check.
+//! - The overview's per-action `traffic` carries the configured limit + the
+//!   per-15-minute points for the action.
+//! - `window` outside `1h`/`6h`/`1d` -> 400; `threshold` and `limit` outside
+//!   their valid ranges are clamped, not rejected.
 //! - Two full page renders (history + overview) by the same admin inside the
 //!   same 60s window both succeed: the batched render costs 2
 //!   ADMIN_DIAGNOSTICS calls, not the pre-fix 41, so there is headroom for a
@@ -97,10 +98,6 @@ macro_rules! build_app {
                 .route(
                     "/admin/rate-limits/history",
                     web::get().to(handlers::list_rate_limit_history),
-                )
-                .route(
-                    "/admin/rate-limits/traffic",
-                    web::get().to(handlers::list_rate_limit_traffic),
                 )
                 .route(
                     "/admin/rate-limits/overview",
@@ -198,7 +195,7 @@ async fn history_since_is_clamped_to_the_24h_floor() {
 }
 
 #[actix_rt::test]
-async fn traffic_returns_limit_and_bucket_points() {
+async fn overview_returns_limit_and_bucket_points_per_action() {
     let Some(pool) = maybe_pool().await else {
         return;
     };
@@ -227,21 +224,26 @@ async fn traffic_returns_limit_and_bucket_points() {
     // the test runs well after the seeded instant; the window just bounds
     // the lower edge and the seeded time predates `now`.
     let req = test::TestRequest::get()
-        .uri("/admin/rate-limits/traffic?action=login&window=1d")
+        .uri("/admin/rate-limits/overview?window=1d")
         .insert_header(("authorization", bearer(&jwt, &admin)))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 200, "{:?}", resp.status());
     let body: Value = test::read_body_json(resp).await;
-    let data = &body["data"];
-    assert_eq!(data["action"], "login");
+    let entries = body["data"].as_array().expect("data is an array");
+    let login = entries
+        .iter()
+        .find(|e| e["action"] == "login")
+        .expect("login entry present");
+    let traffic = &login["traffic"];
+    assert_eq!(traffic["action"], "login");
     // The server resolves the configured limit through RateLimitConfig::LOGIN.
     assert!(
-        data["max_requests"].as_i64().unwrap_or(0) > 0,
-        "configured limit present: {data}"
+        traffic["max_requests"].as_i64().unwrap_or(0) > 0,
+        "configured limit present: {traffic}"
     );
-    assert_eq!(data["bucket_width_seconds"], 900);
-    let points = data["points"].as_array().expect("points array");
+    assert_eq!(traffic["bucket_width_seconds"], 900);
+    let points = traffic["points"].as_array().expect("points array");
     // The seeded row is well in the past (2026-10-08), so against a 1d
     // window from `now` it may or may not be included depending on when
     // the test runs. The shape assertion is the point: the array exists
@@ -253,7 +255,7 @@ async fn traffic_returns_limit_and_bucket_points() {
 }
 
 #[actix_rt::test]
-async fn traffic_rejects_unknown_action() {
+async fn overview_rejects_unknown_window() {
     let Some(pool) = maybe_pool().await else {
         return;
     };
@@ -265,7 +267,7 @@ async fn traffic_rejects_unknown_action() {
 
     let app = build_app!(pool, jwt);
     let req = test::TestRequest::get()
-        .uri("/admin/rate-limits/traffic?action=not_a_real_action&window=1h")
+        .uri("/admin/rate-limits/overview?window=3h")
         .insert_header(("authorization", bearer(&jwt, &admin)))
         .to_request();
     let resp = test::call_service(&app, req).await;
@@ -273,7 +275,7 @@ async fn traffic_rejects_unknown_action() {
 }
 
 #[actix_rt::test]
-async fn traffic_rejects_unknown_window() {
+async fn overview_rejects_out_of_range_threshold() {
     let Some(pool) = maybe_pool().await else {
         return;
     };
@@ -285,11 +287,67 @@ async fn traffic_rejects_unknown_window() {
 
     let app = build_app!(pool, jwt);
     let req = test::TestRequest::get()
-        .uri("/admin/rate-limits/traffic?action=login&window=3h")
+        .uri("/admin/rate-limits/overview?window=1h&threshold=50")
         .insert_header(("authorization", bearer(&jwt, &admin)))
         .to_request();
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status().as_u16(), 400);
+}
+
+/// `limit` is clamped to `[1, 100]`, not rejected: a value below 1 (here, 0)
+/// clamps to 1, so exactly one of several qualifying rows for an action
+/// comes back instead of zero.
+#[actix_rt::test]
+async fn overview_limit_is_clamped_not_rejected() {
+    let Some(pool) = maybe_pool().await else {
+        return;
+    };
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+    let admin = seed_admin(&pool).await;
+    let now = Utc::now();
+
+    // registration: Ip-keyed, max_requests 10, default threshold floor 7.
+    // Two different IPs both qualify under the default threshold.
+    sqlx::query(
+        "INSERT INTO rate_limits (id, key, action, count, window_start) \
+         VALUES ($1, '203.0.113.5', 'registration', 8, $2), \
+                ($3, '203.0.113.6', 'registration', 9, $2)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(now)
+    .bind(Uuid::new_v4())
+    .execute(&pool)
+    .await
+    .expect("seed registration approaching rows");
+
+    let app = build_app!(pool, jwt);
+    let req = test::TestRequest::get()
+        .uri("/admin/rate-limits/overview?window=1h&limit=0")
+        .insert_header(("authorization", bearer(&jwt, &admin)))
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "out-of-range limit is clamped, not rejected: {:?}",
+        resp.status()
+    );
+    let body: Value = test::read_body_json(resp).await;
+    let entries = body["data"].as_array().expect("data is an array");
+    let registration_approaching = entries
+        .iter()
+        .find(|e| e["action"] == "registration")
+        .expect("registration entry present")["approaching"]
+        .as_array()
+        .expect("registration approaching is an array");
+    assert_eq!(
+        registration_approaching.len(),
+        1,
+        "clamped limit (1) returns exactly one of the two qualifying rows: {registration_approaching:?}"
+    );
 }
 
 #[actix_rt::test]
