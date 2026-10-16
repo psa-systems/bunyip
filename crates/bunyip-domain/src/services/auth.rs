@@ -24,6 +24,7 @@ use crate::repositories::{
 };
 use crate::services::{argon2_offload, EmailService, GeoIpService, JwtService, PasswordService};
 use dunite_geoip::{is_non_public_ip, login_location_decision, LoginLocationDecision};
+use dunite_oidc_op::check_op_session_alive;
 
 /// Authentication tokens returned after login
 #[derive(Debug, Clone)]
@@ -1196,12 +1197,23 @@ impl AuthService {
                     return Err(AppError::InvalidCredentials);
                 }
             };
-            if session.revoked_at.is_some()
-                || now > session.expires_at
-                || now > session.idle_expires_at
-            {
-                return Err(AppError::InvalidCredentials);
-            }
+            // BUNYIP-885: the SAME tri-arm liveness predicate the OIDC RP
+            // rotation calls (`OidcProvider::rotate_refresh_token`), so the hub
+            // and RP paths agree at every instant including the exact boundary.
+            // Its `now >= deadline` semantics (BUNYIP-852) match
+            // `OpSession::is_alive`'s `deadline > now` and the SQL
+            // `expires_at > NOW()` filter; the old inline `now > deadline` copy
+            // treated `now == expires_at` as still alive, a one-instant window
+            // where the hub accepted a rotation every other path refused. The
+            // three arms collapse to `InvalidCredentials` as before (BUNYIP-373:
+            // a revoked session reads the same as any other invalid refresh).
+            check_op_session_alive(
+                session.revoked_at,
+                session.expires_at,
+                session.idle_expires_at,
+                now,
+            )
+            .map_err(|_| AppError::InvalidCredentials)?;
             let slid_idle =
                 (now + Duration::seconds(session.idle_ttl_seconds as i64)).min(session.expires_at);
             sqlx::query!(
