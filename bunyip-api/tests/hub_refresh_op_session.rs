@@ -324,3 +324,69 @@ async fn a_hub_refresh_rotation_loses_a_revoke_that_commits_mid_rotation() {
 
     cleanup(&pool, user_id).await;
 }
+
+/// BUNYIP-885: a session sitting exactly on its ABSOLUTE deadline refuses the
+/// hub rotation, matching `oidc_provider.rs`'s
+/// `check_op_session_alive_refuses_at_the_absolute_deadline_instant`. Seeding
+/// `expires_at = NOW()` means the `Utc::now()` `refresh_tokens` reads is at or
+/// a hair past the ceiling, which the shared `check_op_session_alive` predicate
+/// (`now >= expires_at`) refuses. The idle deadline stays an hour out so the
+/// absolute arm is the one that fires.
+#[tokio::test]
+async fn a_hub_refresh_rotation_refuses_at_the_absolute_deadline_instant() {
+    let Some(pool) = connect_and_migrate().await else {
+        eprintln!("RLS_TEST_DATABASE_URL unset; skipping BUNYIP-885 absolute-boundary test");
+        return;
+    };
+
+    let auth = build_auth_service(pool.clone());
+    let user_id = seed_user(&pool).await;
+    let now = Utc::now();
+    let session_id =
+        seed_op_session(&pool, user_id, now, now + Duration::hours(1), 28_800, false).await;
+
+    let (raw, _) = mint_and_link(&auth, &pool, user_id, session_id).await;
+
+    let err = auth
+        .refresh_tokens(raw, None, None)
+        .await
+        .expect_err("a session at its absolute deadline refuses the hub rotation");
+    match err {
+        bunyip_api::errors::AppError::InvalidCredentials => {}
+        other => panic!("expected InvalidCredentials, got {other:?}"),
+    }
+
+    cleanup(&pool, user_id).await;
+}
+
+/// BUNYIP-885: the same boundary agreement on the IDLE arm, mirroring
+/// `check_op_session_alive_refuses_at_the_idle_deadline_instant`. Seeding
+/// `idle_expires_at = NOW()` with the absolute deadline far out isolates the
+/// idle arm; the old inline `now > idle_expires_at` copy accepted this
+/// one-instant case, the shared predicate (`now >= idle_expires_at`) refuses it.
+#[tokio::test]
+async fn a_hub_refresh_rotation_refuses_at_the_idle_deadline_instant() {
+    let Some(pool) = connect_and_migrate().await else {
+        eprintln!("RLS_TEST_DATABASE_URL unset; skipping BUNYIP-885 idle-boundary test");
+        return;
+    };
+
+    let auth = build_auth_service(pool.clone());
+    let user_id = seed_user(&pool).await;
+    let now = Utc::now();
+    let session_id =
+        seed_op_session(&pool, user_id, now + Duration::days(30), now, 28_800, false).await;
+
+    let (raw, _) = mint_and_link(&auth, &pool, user_id, session_id).await;
+
+    let err = auth
+        .refresh_tokens(raw, None, None)
+        .await
+        .expect_err("a session at its idle deadline refuses the hub rotation");
+    match err {
+        bunyip_api::errors::AppError::InvalidCredentials => {}
+        other => panic!("expected InvalidCredentials, got {other:?}"),
+    }
+
+    cleanup(&pool, user_id).await;
+}
