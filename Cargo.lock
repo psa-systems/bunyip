@@ -822,6 +822,7 @@ dependencies = [
  "dunite-hibp",
  "dunite-ipenrich",
  "dunite-mailer",
+ "dunite-oidc-op",
  "dunite-stripe",
  "dunite-stripe-core",
  "dunite-user-core",
