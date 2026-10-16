@@ -207,8 +207,8 @@ pub use download::{
 };
 pub use events::events_stream;
 pub use feedback::{
-    archive_feedback, delete_feedback, export_feedback, get_attachment, get_feedback,
-    list_feedback, list_feedback_archive, mark_feedback_spam, respond_to_feedback,
+    archive_feedback, delete_feedback, export_feedback, feedback_new_count, get_attachment,
+    get_feedback, list_feedback, list_feedback_archive, mark_feedback_spam, respond_to_feedback,
     restore_feedback, submit_feedback, unmark_feedback_spam, update_feedback_status,
 };
 pub use membership::{

@@ -263,6 +263,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             )
             // Feedback
             .route("/feedback", web::get().to(handlers::list_feedback))
+            // BUNYIP-919: literal subpath registered before the `{feedback_id}`
+            // dynamic route below so it is never captured as an id.
+            .route(
+                "/feedback/new-count",
+                web::get().to(handlers::feedback_new_count),
+            )
             .route("/feedback/export", web::get().to(handlers::export_feedback))
             .route(
                 "/feedback/archive",
