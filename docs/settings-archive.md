@@ -8,12 +8,14 @@ A `pg_dump` does not replace this. A dump carries the users, the sessions, the a
 
 Both commands run as `docker compose exec api /app/bunyip-api <subcommand>` (or `docker compose run --rm api <subcommand>` when the api container is not up). Neither prints a setting value, a secret or a hash: the plan and the report name sections, columns, keys and counts only.
 
+The api service runs with `read_only: true` (BUNYIP-906), so `/tmp` is the only writable path inside the container; `compose.yml` mounts it as `tmpfs`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
+
 ## The passphrase
 
 No flag takes the passphrase itself. A command-line argument is visible in `ps`, in the shell history and in `docker inspect`, and this one unlocks every integration secret at once, so the passphrase comes from a file:
 
 ```nu
-docker compose exec api /app/bunyip-api settings-export --passphrase-file /run/secrets/archive_passphrase --output /tmp/bunyip-settings-20260915.json
+docker compose exec api /app/bunyip-api settings-export --passphrase-file - --output /tmp/bunyip-settings-20260915.json
 ```
 
 `--passphrase-file -` reads it from stdin instead. At most one trailing newline is stripped, so `echo "..." | ...` works and a passphrase that genuinely ends in whitespace still survives.
@@ -60,8 +62,8 @@ This is the case the archive exists for: the postgres volume is gone or is being
 1. **Export, while the deployment is still healthy.** An archive taken after the volume is gone is empty.
 
    ```nu
-   docker compose exec api /app/bunyip-api settings-export --passphrase-file /run/secrets/archive_passphrase --output /tmp/bunyip-settings-20260915.json --include-catalog --include-oauth-clients
-   docker compose cp api:/tmp/bunyip-settings-20260915.json ./bunyip-settings-20260915.json
+   docker compose exec api /app/bunyip-api settings-export --passphrase-file - --output /tmp/bunyip-settings-20260915.json --include-catalog --include-oauth-clients
+   docker compose exec -T api cat /tmp/bunyip-settings-20260915.json | save --raw ./bunyip-settings-20260915.json
    ```
 
    Copy the file off the host and store it where you store the passphrase's counterpart, but not beside it.
@@ -88,14 +90,14 @@ This is the case the archive exists for: the postgres volume is gone or is being
 5. **Dry-run the import.** Everything will read as an insert or a change, because the database is fresh.
 
    ```nu
-   docker compose cp ./bunyip-settings-20260915.json api:/tmp/restore.json
-   docker compose exec api /app/bunyip-api settings-import --passphrase-file /run/secrets/archive_passphrase --input /tmp/restore.json --dry-run
+   open --raw ./bunyip-settings-20260915.json | docker compose exec -T api sh -c 'cat > /tmp/restore.json'
+   docker compose exec api /app/bunyip-api settings-import --passphrase-file - --input /tmp/restore.json --dry-run
    ```
 
 6. **Import for real.**
 
    ```nu
-   docker compose exec api /app/bunyip-api settings-import --passphrase-file /run/secrets/archive_passphrase --input /tmp/restore.json
+   docker compose exec api /app/bunyip-api settings-import --passphrase-file - --input /tmp/restore.json
    ```
 
 7. **Restart bunyip-api.** A running process holds the tier configuration in memory and reads the system settings at boot, so it does not see a CLI import live. The report's last line says so too.
