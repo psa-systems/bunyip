@@ -274,14 +274,8 @@ async fn overview_rejects_unknown_window() {
     assert_eq!(resp.status().as_u16(), 400);
 }
 
-/// `threshold` is clamped to `[0.1, 1.0]`, not rejected: a value above 1.0
-/// (here, 50.0) clamps to 1.0, raising the "close to the cap" floor to
-/// `max_requests` itself. Unclamped, the floor would be `ceil(max * 50)`,
-/// which no seeded row could ever reach, so the clamped and unclamped
-/// behaviors are distinguishable: clamped keeps the at-cap row, unclamped
-/// drops it too.
 #[actix_rt::test]
-async fn overview_threshold_is_clamped_not_rejected() {
+async fn overview_rejects_out_of_range_threshold() {
     let Some(pool) = maybe_pool().await else {
         return;
     };
@@ -290,19 +284,6 @@ async fn overview_threshold_is_clamped_not_rejected() {
         "bunyip-test",
     )));
     let admin = seed_admin(&pool).await;
-    let subscriber = seed_subscriber(&pool).await;
-    let now = Utc::now();
-
-    // login: max_requests 10. One row at the cap, one well under it.
-    sqlx::query(
-        "INSERT INTO rate_limits (id, key, action, count, window_start) VALUES ($1, $2, 'login', 10, $3)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(&subscriber.email)
-    .bind(now)
-    .execute(&pool)
-    .await
-    .expect("seed at-cap login row");
 
     let app = build_app!(pool, jwt);
     let req = test::TestRequest::get()
@@ -310,26 +291,7 @@ async fn overview_threshold_is_clamped_not_rejected() {
         .insert_header(("authorization", bearer(&jwt, &admin)))
         .to_request();
     let resp = test::call_service(&app, req).await;
-    assert_eq!(
-        resp.status(),
-        200,
-        "out-of-range threshold is clamped, not rejected: {:?}",
-        resp.status()
-    );
-    let body: Value = test::read_body_json(resp).await;
-    let entries = body["data"].as_array().expect("data is an array");
-    let login_approaching = entries
-        .iter()
-        .find(|e| e["action"] == "login")
-        .expect("login entry present")["approaching"]
-        .as_array()
-        .expect("login approaching is an array");
-    assert_eq!(
-        login_approaching.len(),
-        1,
-        "clamped threshold (1.0) keeps the at-cap row: {login_approaching:?}"
-    );
-    assert_eq!(login_approaching[0]["count"], 10);
+    assert_eq!(resp.status().as_u16(), 400);
 }
 
 /// `limit` is clamped to `[1, 100]`, not rejected: a value below 1 (here, 0)

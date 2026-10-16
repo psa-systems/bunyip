@@ -599,7 +599,8 @@ pub struct TrafficPointEntry {
     pub count: i64,
 }
 
-/// GET /v1/admin/rate-limits/traffic response.
+/// Per-action traffic read, embedded in each entry of the
+/// `GET /v1/admin/rate-limits/overview` response.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct TrafficResponse {
     pub action: String,
