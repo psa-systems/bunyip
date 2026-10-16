@@ -165,6 +165,20 @@ pub fn theme_controls(icon_class: &str) -> Markup {
     }
 }
 
+/// An optional attention badge on a [`NavItem`] (BUNYIP-919): a small count
+/// bubble, or a failure marker when the count could not be fetched. `Copy` so a
+/// consumer can hand the same badge to the sidebar and the below-`md`
+/// disclosure, which each build their own nav list.
+#[derive(Clone, Copy)]
+pub enum NavBadge {
+    /// Items needing attention. A count of 0 renders no bubble; a value above
+    /// 99 renders `99+`. The bubble carries an accessible `"<n> new"` label.
+    Count(u32),
+    /// The count could not be fetched. Renders a `!` marker whose tooltip and
+    /// accessible label are `tooltip`, so a failed fetch never reads as zero.
+    Unavailable { tooltip: &'static str },
+}
+
 /// One navigation destination. The consumer builds the section lists (their
 /// routes, their icons); `external` marks an entry that leaves this app (opens
 /// in a new tab with a trailing glyph) instead of hardcoding any one route here.
@@ -173,6 +187,38 @@ pub struct NavItem {
     pub href: &'static str,
     pub icon: &'static str,
     pub external: bool,
+    /// Optional attention badge (BUNYIP-919). `None` for nearly every item.
+    pub badge: Option<NavBadge>,
+}
+
+/// Render a [`NavBadge`] as a small pill pushed to the row's end, reusing the
+/// same class vocabulary as [`crate::ui::badge`] so the committed CSS already
+/// carries every class. A zero count renders nothing (the row reads as "nothing
+/// new"); a count over 99 renders `99+`; an unavailable count renders a `!`
+/// marker carrying its tooltip. It always carries an accessible label, so the
+/// marker is never colour- or position-only (BUNYIP-919).
+fn nav_badge(badge: NavBadge) -> Markup {
+    const PILL: &str =
+        "ml-auto inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors";
+    match badge {
+        NavBadge::Count(0) => html! {},
+        NavBadge::Count(n) => {
+            let label = format!("{n} new");
+            let text = if n > 99 {
+                "99+".to_string()
+            } else {
+                n.to_string()
+            };
+            html! {
+                span class={ (PILL) " border-transparent bg-primary text-primary-foreground" }
+                     aria-label=(label) { (text) }
+            }
+        }
+        NavBadge::Unavailable { tooltip } => html! {
+            span class={ (PILL) " border-transparent bg-destructive text-destructive-foreground" }
+                 title=(tooltip) aria-label=(tooltip) { "!" }
+        },
+    }
 }
 
 const NAV_ACTIVE: &str =
@@ -195,6 +241,12 @@ pub fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
                   class={ "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-all " (if active == item.href { NAV_ACTIVE } else { NAV_INACTIVE }) } {
                     (icon(item.icon, "h-4 w-4"))
                     (item.title)
+                    // BUNYIP-919: an attention badge (e.g. the Feedback new-items
+                    // count) sits at the row end. An item is never both badged and
+                    // external, so the two `ml-auto` end-slots never collide.
+                    @if let Some(badge) = item.badge {
+                        (nav_badge(badge))
+                    }
                     // BUNYIP-341: flag the external launch with a trailing
                     // external-link glyph, so the row reads as "leaves this app"
                     // before it is clicked.
@@ -243,5 +295,89 @@ pub fn admin_block_grid(blocks: Vec<Markup>) -> Markup {
         div class="grid gap-6 items-start lg:grid-cols-2" {
             @for b in blocks { (b) }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feedback_item(badge: Option<NavBadge>) -> Vec<Vec<NavItem>> {
+        vec![vec![NavItem {
+            title: "Feedback",
+            href: "/admin/feedback",
+            icon: "message-square-quote",
+            external: false,
+            badge,
+        }]]
+    }
+
+    // BUNYIP-919: a positive count renders a bubble carrying both the number and
+    // an accessible label, so the marker is not colour- or position-only.
+    #[test]
+    fn nav_links_renders_a_count_bubble() {
+        let html = nav_links(&feedback_item(Some(NavBadge::Count(1))), "/x").into_string();
+        assert!(
+            html.contains(r#"aria-label="1 new""#),
+            "the count bubble carries an accessible label"
+        );
+        assert!(html.contains(">1</span>"), "and shows the count");
+    }
+
+    // A count of 0 renders no bubble at all, so a nav row with nothing new is
+    // identical to one that never had a badge.
+    #[test]
+    fn nav_links_hides_the_bubble_for_zero() {
+        let html = nav_links(&feedback_item(Some(NavBadge::Count(0))), "/x").into_string();
+        assert!(
+            !html.contains("rounded-full border"),
+            "a zero count renders no pill element"
+        );
+        let bare = nav_links(&feedback_item(None), "/x").into_string();
+        assert_eq!(html, bare, "a zero count renders identically to no badge");
+    }
+
+    // A count over 99 renders `99+`, while the accessible label keeps the true
+    // count.
+    #[test]
+    fn nav_links_caps_the_count_at_99_plus() {
+        let html = nav_links(&feedback_item(Some(NavBadge::Count(100))), "/x").into_string();
+        assert!(html.contains(">99+</span>"), "a count over 99 renders 99+");
+        assert!(
+            html.contains(r#"aria-label="100 new""#),
+            "the accessible label keeps the true count"
+        );
+    }
+
+    // A failed fetch renders a `!` marker with its tooltip and accessible label,
+    // never a silent empty (which would read as zero new items).
+    #[test]
+    fn nav_links_renders_the_unavailable_marker() {
+        let html = nav_links(
+            &feedback_item(Some(NavBadge::Unavailable {
+                tooltip: "Feedback count unavailable",
+            })),
+            "/x",
+        )
+        .into_string();
+        assert!(
+            html.contains(r#"title="Feedback count unavailable""#),
+            "the failure marker carries a tooltip"
+        );
+        assert!(
+            html.contains(r#"aria-label="Feedback count unavailable""#),
+            "and an accessible label"
+        );
+        assert!(html.contains(">!</span>"), "and renders the ! marker");
+    }
+
+    // An item with no badge renders exactly as before: no pill element.
+    #[test]
+    fn nav_links_without_a_badge_renders_no_pill() {
+        let html = nav_links(&feedback_item(None), "/x").into_string();
+        assert!(
+            !html.contains("rounded-full border"),
+            "no pill when there is no badge"
+        );
     }
 }

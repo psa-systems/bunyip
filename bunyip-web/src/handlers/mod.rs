@@ -25,6 +25,7 @@ use crate::auth::{self, AuthCtx};
 use crate::util::urlenc;
 use crate::views::layout::{admin_shell, dashboard_shell, document, public_shell};
 use crate::web::{html_cookies, redirect_cookies, AppState};
+use web_kit::shell::NavBadge;
 
 /// Read the forwarded cookie from the request.
 pub fn cookie_of(headers: &HeaderMap) -> Option<String> {
@@ -292,10 +293,25 @@ pub async fn guard(
 /// Like `guard` but also requires the admin role (non-admins -> dashboard).
 #[allow(clippy::result_large_err)] // Err is the ready-made redirect the caller returns as-is
 pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, AuthCtx), Response> {
-    let (user, c) = guard(st, headers, "/admin").await?;
+    let (user, mut c) = guard(st, headers, "/admin").await?;
     if user.role != UserRole::Admin {
         return Err(redirect_cookies("/dashboard", &c.set_cookies));
     }
+    // BUNYIP-919: the admin sidebar's Feedback badge, fetched once here per admin
+    // page render (admin_guard runs immediately before admin_response). A failed
+    // fetch renders the explicit "unavailable" marker, never a silent zero, and
+    // is logged with its cause; it never fails the page.
+    c.feedback_badge = Some(
+        match crate::api::admin::feedback_new_count(&st.api, c.forward.as_deref()).await {
+            Ok(count) => NavBadge::Count(count.clamp(0, i64::from(u32::MAX)) as u32),
+            Err(e) => {
+                tracing::warn!(error = ?e, "admin sidebar: feedback new-count fetch failed");
+                NavBadge::Unavailable {
+                    tooltip: "Feedback count unavailable",
+                }
+            }
+        },
+    );
     Ok((user, c))
 }
 
@@ -399,7 +415,10 @@ pub fn admin_response(
     content: Markup,
 ) -> Response {
     html_cookies(
-        document(title, admin_shell(user, active, title, content)),
+        document(
+            title,
+            admin_shell(user, active, title, content, c.feedback_badge),
+        ),
         &c.set_cookies,
     )
 }
@@ -567,6 +586,7 @@ mod verification_gate_tests {
             user: None,
             set_cookies: Vec::new(),
             forward: None,
+            feedback_badge: None,
         }
     }
 

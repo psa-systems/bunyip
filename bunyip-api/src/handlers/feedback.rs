@@ -615,6 +615,22 @@ pub async fn list_feedback(
     Ok(paginated(items, total, page, per_page, request_id))
 }
 
+/// BUNYIP-919: the new-items count for the admin sidebar's Feedback badge: rows
+/// with `status = 'new'` and not spam. A dedicated endpoint rather than the
+/// paginated list, which would fetch up to 100 full rows on every admin page to
+/// read one number. `AdminUser` like the sibling feedback routes; a database
+/// error propagates as a non-2xx through `?`, so the web tier can render the
+/// explicit "unavailable" marker rather than a silent zero.
+pub async fn feedback_new_count(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let count = crate::repositories::feedback::count_new_feedback(&pool).await?;
+    Ok(success(serde_json::json!({ "count": count }), request_id))
+}
+
 pub async fn get_feedback(
     req: HttpRequest,
     _admin: AdminUser,

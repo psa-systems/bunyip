@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use axum::http::{header::COOKIE, HeaderMap};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use web_kit::shell::NavBadge;
 
 use crate::api::{
     self,
@@ -37,6 +38,10 @@ pub struct AuthCtx {
     pub set_cookies: Vec<String>,
     /// Cookie header to forward on further API calls this request.
     pub forward: Option<String>,
+    /// BUNYIP-919: the admin sidebar's Feedback badge, set by `admin_guard` on
+    /// an admin page render and read by `admin_response`. `None` on every
+    /// non-admin context (and before the admin fetch runs).
+    pub feedback_badge: Option<NavBadge>,
 }
 
 impl AuthCtx {
@@ -51,6 +56,7 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
             user: None,
             set_cookies: vec![],
             forward: None,
+            feedback_badge: None,
         };
     };
 
@@ -79,6 +85,7 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
                             user: Some(user_after),
                             set_cookies: set,
                             forward: Some(merged),
+                            feedback_badge: None,
                         };
                     }
                 }
@@ -87,6 +94,7 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
                 user: Some(user),
                 set_cookies: vec![],
                 forward: Some(cookie.to_string()),
+                feedback_badge: None,
             }
         }
         Err(e) if e.status == 401 => match api::auth::refresh(api, Some(cookie)).await {
@@ -97,18 +105,21 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
                     user,
                     set_cookies: set,
                     forward: Some(merged),
+                    feedback_badge: None,
                 }
             }
             Err(_) => AuthCtx {
                 user: None,
                 set_cookies: vec![],
                 forward: Some(cookie.to_string()),
+                feedback_badge: None,
             },
         },
         Err(_) => AuthCtx {
             user: None,
             set_cookies: vec![],
             forward: Some(cookie.to_string()),
+            feedback_badge: None,
         },
     }
 }

@@ -544,6 +544,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
         href: "/dashboard",
         icon: "layout-dashboard",
         external: false,
+        badge: None,
     }];
     // BUNYIP-329: Community (Let's Chat) sits high in the nav so it is front
     // and centre, but only for members and only when an instance is configured
@@ -555,6 +556,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             icon: "message-square-quote",
             // BUNYIP-329: Community launches the external Let's Chat instance.
             external: true,
+            badge: None,
         });
     }
     // BUNYIP-493: organizations and teams are dark until an admin switches them
@@ -566,6 +568,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             href: "/organizations",
             icon: "users",
             external: false,
+            badge: None,
         });
     }
     items.extend([
@@ -574,6 +577,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             href: "/applications",
             icon: "app-window",
             external: false,
+            badge: None,
         },
         // Downloads moved onto each application card (BUNYIP-100); the
         // standalone /downloads page is now a redirect to /applications.
@@ -585,6 +589,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             href: "/membership",
             icon: "credit-card",
             external: false,
+            badge: None,
         },
         // BUNYIP-635 put the docs hub in this list, which `shell_nav_sections`
         // feeds to both the sidebar and the below-`md` disclosure. BUNYIP-630
@@ -595,24 +600,30 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
             href: "/docs",
             icon: "file-text",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Settings",
             href: "/settings",
             icon: "settings",
             external: false,
+            badge: None,
         },
     ]);
     items
 }
 
-fn admin_items() -> Vec<NavItem> {
+// BUNYIP-919: `feedback_badge` is the new-items bubble shown on the Feedback
+// item (and only that item); every other entry passes `badge: None`. The caller
+// (`admin_response` via `admin_shell`) supplies it per render.
+fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
     vec![
         NavItem {
             title: "Admin Dashboard",
             href: "/admin",
             icon: "layout-dashboard",
             external: false,
+            badge: None,
         },
         // BUNYIP-623: per-integration Configured / Unconfigured / Failing status,
         // so a self-hosted deployment can see what is degraded at a glance.
@@ -621,6 +632,7 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/status",
             icon: "activity",
             external: false,
+            badge: None,
         },
         // BUNYIP-634: the suite provider-status aggregate (this deployment's
         // own, Mokosh's, and Drillmark's) on one page.
@@ -629,6 +641,7 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/providers/status",
             icon: "globe",
             external: false,
+            badge: None,
         },
         // BUNYIP-410: Memberships folded into the Users page (tier column +
         // filter bar); its nav entry is removed and /admin/memberships redirects
@@ -638,24 +651,28 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/users",
             icon: "users",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Applications",
             href: "/admin/applications",
             icon: "app-window",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Application Groups",
             href: "/admin/application-groups",
             icon: "layers",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Entitlements",
             href: "/admin/entitlements",
             icon: "key",
             external: false,
+            badge: None,
         },
         // BUNYIP-561: the product name, tagline, meta description and Open
         // Graph image, so a rebrand is an admin edit rather than a redeploy.
@@ -667,24 +684,28 @@ fn admin_items() -> Vec<NavItem> {
             // the brand assets, and their icon, with it).
             icon: "globe",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Email",
             href: "/admin/email",
             icon: "mail",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Mailer Suppressions",
             href: "/admin/mailer-suppressions",
             icon: "shield-off",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "System",
             href: "/admin/system-config",
             icon: "settings",
             external: false,
+            badge: None,
         },
         // BUNYIP-840: every feature toggle on one page.
         NavItem {
@@ -692,12 +713,14 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/features",
             icon: "sliders-horizontal",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Stripe",
             href: "/admin/stripe",
             icon: "banknote",
             external: false,
+            badge: None,
         },
         NavItem {
             // BUNYIP-487: label only. The route stays /admin/tier-settings so
@@ -706,54 +729,64 @@ fn admin_items() -> Vec<NavItem> {
             href: "/admin/tier-settings",
             icon: "settings",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Feedback",
             href: "/admin/feedback",
             icon: "message-square-quote",
             external: false,
+            // BUNYIP-919: the only item that carries a badge.
+            badge: feedback_badge,
         },
         NavItem {
             title: "Audit Logs",
             href: "/admin/audit-logs",
             icon: "file-text",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Error Logs",
             href: "/admin/logs",
             icon: "alert-triangle",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Seed Data",
             href: "/admin/seed",
             icon: "layers",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Admin Invites",
             href: "/admin/invites",
             icon: "user-plus",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "IP Bans",
             href: "/admin/ip-bans",
             icon: "shield-off",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Auto-ban Settings",
             href: "/admin/auto-ban-settings",
             icon: "shield-alert",
             external: false,
+            badge: None,
         },
         NavItem {
             title: "Rate Limits",
             href: "/admin/rate-limits",
             icon: "gauge",
             external: false,
+            badge: None,
         },
     ]
 }
@@ -763,7 +796,14 @@ fn admin_items() -> Vec<NavItem> {
 /// (BUNYIP-417) is its own leading section; the page items follow. Both the
 /// sidebar and the below-`md` disclosure render from this one list, so an entry
 /// added here reaches every width.
-fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<NavItem>> {
+// BUNYIP-919: `feedback_badge` reaches the admin section's Feedback item; it is
+// ignored for the non-admin dashboard shell (which has no Feedback item).
+fn shell_nav_sections(
+    admin: bool,
+    is_admin: bool,
+    is_member: bool,
+    feedback_badge: Option<NavBadge>,
+) -> Vec<Vec<NavItem>> {
     let mut sections = Vec::new();
     // BUNYIP-417: the user/admin dashboard switch is a top-level, frequently
     // used control, so it sits at the TOP of the nav rather than at the bottom.
@@ -773,6 +813,7 @@ fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<N
             href: "/dashboard",
             icon: "layout-dashboard",
             external: false,
+            badge: None,
         }]);
     } else if is_admin {
         sections.push(vec![NavItem {
@@ -780,10 +821,11 @@ fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<N
             href: "/admin",
             icon: "shield",
             external: false,
+            badge: None,
         }]);
     }
     sections.push(if admin {
-        admin_items()
+        admin_items(feedback_badge)
     } else {
         dashboard_items(is_member)
     });
@@ -795,8 +837,14 @@ fn shell_nav_sections(admin: bool, is_admin: bool, is_member: bool) -> Vec<Vec<N
 /// same pattern [`profile_menu`] uses, so it inherits the click-away and Escape
 /// dismissal already bound in `assets/js/app.js` and needs no new script. Its
 /// panel scrolls (`overflow-y-auto`) because the admin list is fifteen entries.
-fn mobile_nav(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
-    let sections = shell_nav_sections(admin, is_admin, is_member);
+fn mobile_nav(
+    admin: bool,
+    is_admin: bool,
+    active: &str,
+    is_member: bool,
+    feedback_badge: Option<NavBadge>,
+) -> Markup {
+    let sections = shell_nav_sections(admin, is_admin, is_member, feedback_badge);
     html! {
         details class="relative md:hidden" data-menu data-mobile-nav {
             summary class="flex h-9 w-9 cursor-pointer list-none items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground [&::-webkit-details-marker]:hidden"
@@ -810,8 +858,14 @@ fn mobile_nav(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Mar
     }
 }
 
-fn sidebar(admin: bool, is_admin: bool, active: &str, is_member: bool) -> Markup {
-    let sections = shell_nav_sections(admin, is_admin, is_member);
+fn sidebar(
+    admin: bool,
+    is_admin: bool,
+    active: &str,
+    is_member: bool,
+    feedback_badge: Option<NavBadge>,
+) -> Markup {
+    let sections = shell_nav_sections(admin, is_admin, is_member, feedback_badge);
     html! {
         // BUNYIP-368: the sidebar is its own scroll container. It fills the
         // viewport-locked shell (`h-full`), keeps the brand row pinned
@@ -951,9 +1005,9 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
     let sse = sse_subscriber_script();
     html! {
         div class=(APP_SHELL_CLASS) {
-            (sidebar(false, is_admin, active, is_member))
+            (sidebar(false, is_admin, active, is_member, None))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user, mobile_nav(false, is_admin, active, is_member)))
+                (app_topbar(topbar_title, user, mobile_nav(false, is_admin, active, is_member, None)))
                 main class=(APP_MAIN_CLASS) {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
@@ -965,13 +1019,21 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
     }
 }
 
-pub fn admin_shell(user: &User, active: &str, topbar_title: &str, content: Markup) -> Markup {
+// BUNYIP-919: `feedback_badge` is the admin sidebar's Feedback new-items bubble,
+// fetched once per render by `admin_response` (via `admin_guard`) and passed in.
+pub fn admin_shell(
+    user: &User,
+    active: &str,
+    topbar_title: &str,
+    content: Markup,
+    feedback_badge: Option<NavBadge>,
+) -> Markup {
     let sse = sse_subscriber_script();
     html! {
         div class=(APP_SHELL_CLASS) {
-            (sidebar(true, true, active, true))
+            (sidebar(true, true, active, true, feedback_badge))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user, mobile_nav(true, true, active, true)))
+                (app_topbar(topbar_title, user, mobile_nav(true, true, active, true, feedback_badge)))
                 main class=(APP_MAIN_CLASS) {
                     div class="relative" { (content) }
                 }
@@ -1034,7 +1096,7 @@ mod tests {
         let shells = [
             (
                 "admin_shell",
-                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+                admin_shell(&admin, "/admin", "Admin", html! {}, None).into_string(),
             ),
             (
                 "dashboard_shell",
@@ -1097,7 +1159,7 @@ mod tests {
         let shells = [
             (
                 "admin_shell",
-                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+                admin_shell(&admin, "/admin", "Admin", html! {}, None).into_string(),
             ),
             (
                 "dashboard_shell",
@@ -1145,8 +1207,8 @@ mod tests {
         let shells = [
             (
                 "admin_shell",
-                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
-                shell_nav_sections(true, true, true),
+                admin_shell(&admin, "/admin", "Admin", html! {}, None).into_string(),
+                shell_nav_sections(true, true, true, None),
             ),
             (
                 "dashboard_shell",
@@ -1155,6 +1217,7 @@ mod tests {
                     false,
                     member.role == UserRole::Admin,
                     crate::util::has_active_membership(Some(&member)),
+                    None,
                 ),
             ),
         ];
@@ -1280,6 +1343,7 @@ mod tests {
             "/admin/users",
             "Users",
             html! {},
+            None,
         )
         .into_string();
         assert!(
@@ -1289,6 +1353,49 @@ mod tests {
         assert!(
             markup.contains(r#"aria-label="Open feedback page""#),
             "admin shell also carries the submit-feedback launcher"
+        );
+    }
+
+    // BUNYIP-919: the badge admin_shell receives reaches the Feedback nav row.
+    // A positive count renders the bubble with its accessible label.
+    #[test]
+    fn admin_shell_renders_the_feedback_count_bubble() {
+        let markup = admin_shell(
+            &test_user(UserRole::Admin),
+            "/admin",
+            "Admin",
+            html! {},
+            Some(NavBadge::Count(3)),
+        )
+        .into_string();
+        assert!(
+            markup.contains(r#"aria-label="3 new""#),
+            "the feedback count bubble renders on the admin nav"
+        );
+        assert!(markup.contains(">3</span>"), "and shows the count");
+    }
+
+    // A failed count fetch reaches the Feedback row as the visible "!" marker
+    // with its tooltip, never a silent empty.
+    #[test]
+    fn admin_shell_renders_the_feedback_unavailable_marker() {
+        let markup = admin_shell(
+            &test_user(UserRole::Admin),
+            "/admin",
+            "Admin",
+            html! {},
+            Some(NavBadge::Unavailable {
+                tooltip: "Feedback count unavailable",
+            }),
+        )
+        .into_string();
+        assert!(
+            markup.contains(r#"title="Feedback count unavailable""#),
+            "the failure marker renders with a tooltip"
+        );
+        assert!(
+            markup.contains(r#"aria-label="Feedback count unavailable""#),
+            "and an accessible label"
         );
     }
 
@@ -1755,7 +1862,7 @@ mod tests {
         let shells = [
             (
                 "admin_shell",
-                admin_shell(&admin, "/admin", "Admin", html! {}).into_string(),
+                admin_shell(&admin, "/admin", "Admin", html! {}, None).into_string(),
             ),
             (
                 "dashboard_shell",
@@ -1912,7 +2019,7 @@ mod tests {
     /// existing bookmarks keep working (BUNYIP-487, re-cased in BUNYIP-551).
     #[test]
     fn admin_nav_renames_tier_settings_without_moving_it() {
-        let item = admin_items()
+        let item = admin_items(None)
             .into_iter()
             .find(|i| i.href == "/admin/tier-settings")
             .expect("the tier-settings entry is still mounted at its old route");
@@ -1924,7 +2031,7 @@ mod tests {
     /// sentence-case heading on the page too.
     #[test]
     fn admin_nav_titles_are_title_case() {
-        for item in admin_items() {
+        for item in admin_items(None) {
             for word in item.title.split(' ') {
                 let first = word.chars().next().expect("no empty word in a nav title");
                 assert!(
@@ -2143,7 +2250,7 @@ mod tests {
     #[test]
     fn the_admin_nav_carries_the_branding_page() {
         assert!(
-            admin_items()
+            admin_items(None)
                 .iter()
                 .any(|i| i.href == "/admin/branding" && i.title == "Branding"),
             "the branding record is unreachable without a nav entry"

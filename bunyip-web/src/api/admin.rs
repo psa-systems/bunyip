@@ -50,6 +50,22 @@ pub async fn provider_status(
     parse(api.get("/admin/providers/status", cookie).await?)
 }
 
+// --- feedback ---------------------------------------------------------------
+
+/// New-items count for the admin sidebar's Feedback badge (BUNYIP-919): rows
+/// with `status = 'new'` and not spam. `GET /v1/admin/feedback/new-count`. A
+/// dedicated endpoint, so the sidebar reads one number rather than a page of
+/// rows. An `Err` here is surfaced as the explicit "unavailable" marker, never
+/// a silent zero.
+pub async fn feedback_new_count(api: &Api, cookie: Option<&str>) -> Result<i64, ApiError> {
+    #[derive(serde::Deserialize)]
+    struct NewCount {
+        count: i64,
+    }
+    let resp: NewCount = parse(api.get("/admin/feedback/new-count", cookie).await?)?;
+    Ok(resp.count)
+}
+
 // --- users ------------------------------------------------------------------
 
 #[allow(clippy::too_many_arguments)]
