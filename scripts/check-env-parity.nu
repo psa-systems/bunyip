@@ -95,7 +95,7 @@ def main [
             print --stderr $"error: ($RUST_FILE) reads '($name)' but ($ENV_FILE) has no entry for it"
         }
         print --stderr ""
-        print --stderr $"Add ($ENV_FILE) entries (active or commented) for every variable"
+        print --stderr $"Add ($ENV_FILE) entries \(active or commented\) for every variable"
         print --stderr $"($RUST_FILE) reads, so a deployer can discover it exists."
         exit 1
     }
