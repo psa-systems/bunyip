@@ -665,6 +665,16 @@ pub(super) fn feedback_detail_view(
                         (feedback_attachments_view(&f.id, &f.attachments))
                     }
                     div { h3 class="text-sm font-semibold" { "Received" } p class="text-sm text-muted-foreground" { (rel_time(&f.created_at)) } }
+                    // BUNYIP-934: the composite spam classifier's reason
+                    // (sender-domain mimicry, URL + >=3 tags, or hosting
+                    // IP ASN). Shown so an admin reversing the flag has
+                    // the WHY; honeypot-only hits have no reason row.
+                    @if let Some(reason) = f.spam_reason.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        div {
+                            h3 class="text-sm font-semibold" { "Flagged by spam classifier" }
+                            p class="text-sm text-muted-foreground" { (reason) }
+                        }
+                    }
                     // BUNYIP-411: request metadata for spam tracing. Shown only
                     // when captured (dev / direct-hit submissions resolve no
                     // forwarded IP). Maud escapes both values.

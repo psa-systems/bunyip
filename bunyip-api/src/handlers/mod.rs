@@ -177,6 +177,7 @@ pub mod branding;
 pub mod download;
 pub mod events;
 pub mod feedback;
+pub mod feedback_classifier;
 pub mod mailer;
 pub mod membership;
 pub mod pricing;
