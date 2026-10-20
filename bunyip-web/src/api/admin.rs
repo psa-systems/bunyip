@@ -540,10 +540,17 @@ pub async fn audit_logs(
     page: u32,
     page_size: u32,
     admin_only: bool,
+    // BUNYIP-930: optional single-user filter. The API already accepts
+    // `user_id`; the admin audit page and the user-detail page both read
+    // through this one helper so a change to the filter surface stays local.
+    user_id: Option<&str>,
 ) -> Result<PaginatedResponse<AdminAuditLog>, ApiError> {
     let mut path = format!("/admin/audit-logs?page={page}&per_page={page_size}");
     if admin_only {
         path.push_str("&admin_only=true");
+    }
+    if let Some(uid) = user_id {
+        path.push_str(&format!("&user_id={uid}"));
     }
     parse(api.get(&path, cookie).await?)
 }
