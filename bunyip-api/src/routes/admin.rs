@@ -218,6 +218,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/rate-limits/reset",
                 web::post().to(handlers::reset_rate_limit),
             )
+            // BUNYIP-933: whitelist of principals exempt from rate limits.
+            .route(
+                "/rate-limits/whitelist",
+                web::get().to(handlers::list_rate_limit_whitelist),
+            )
+            .route(
+                "/rate-limits/whitelist",
+                web::post().to(handlers::add_rate_limit_whitelist),
+            )
+            .route(
+                "/rate-limits/whitelist/{id}",
+                web::delete().to(handlers::delete_rate_limit_whitelist),
+            )
             // Rate-limit configuration: read for admins, write for the super
             // admin only (BUNYIP-413)
             .route(

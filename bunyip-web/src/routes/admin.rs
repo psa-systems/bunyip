@@ -43,6 +43,15 @@ pub fn routes() -> Router<AppState> {
             "/admin/rate-limits/config/reset",
             post(admin::rate_limit_config_reset),
         )
+        // BUNYIP-933: whitelist CRUD. Add + remove each audit on the API.
+        .route(
+            "/admin/rate-limits/whitelist/add",
+            post(admin::rate_limit_whitelist_add),
+        )
+        .route(
+            "/admin/rate-limits/whitelist/remove",
+            post(admin::rate_limit_whitelist_remove),
+        )
         .route("/admin/users", get(admin::users))
         .route("/admin/users/:id", get(admin::user_detail))
         .route("/admin/users/:id/role", post(admin::user_role))

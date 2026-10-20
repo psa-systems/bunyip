@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::api::admin as admin_api;
 use crate::api::types::{
     AdminRateLimit, AdminRateLimitApproaching, AdminRateLimitConfig, AdminRateLimitHistory,
-    AdminRateLimitTraffic,
+    AdminRateLimitTraffic, AdminRateLimitWhitelistEntry,
 };
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
@@ -250,6 +250,12 @@ pub async fn rate_limits(
     let history_error = history_data.as_ref().err().cloned();
     let history = history_data.unwrap_or_default();
 
+    // BUNYIP-933: whitelist of principals exempt from every rate limit.
+    // Small by construction (no pagination) and reads once per page render.
+    let whitelist_data = admin_api::rate_limit_whitelist(&st.api, c.forward.as_deref()).await;
+    let whitelist_error = whitelist_data.as_ref().err().cloned();
+    let whitelist = whitelist_data.unwrap_or_default();
+
     // Traffic sparklines and Close-to-the-Limit rows for every configured
     // action (BUNYIP-892/897), batched into the single `overview` call below
     // (BUNYIP-900): the prior per-action `rate_limit_traffic` +
@@ -319,6 +325,8 @@ pub async fn rate_limits(
             (traffic_card(&traffic, window))
             // Close to the Limit: top-N rows approaching each cap (BUNYIP-897).
             (close_to_limit_card(&approaching, overview_error.as_ref()))
+            // BUNYIP-933: principals exempt from every rate limit.
+            (whitelist_card(&whitelist, whitelist_error.as_ref()))
             (rate_limit_config_card(&configs, configs_error.as_ref(), user.is_super_admin))
         }
     };
@@ -753,5 +761,205 @@ fn close_to_limit_row(row: &AdminRateLimitApproaching) -> Markup {
                 (row.count) "/" (row.max_requests)
             }
         }
+    }
+}
+
+// =============================================================================
+// BUNYIP-933: whitelist card + form handlers
+// =============================================================================
+
+/// Render one whitelist row: the kind badge + value, the reason underneath,
+/// and a Remove button that POSTs the row id to the remove endpoint.
+fn whitelist_row(e: &AdminRateLimitWhitelistEntry) -> Markup {
+    html! {
+        div class="flex items-start justify-between py-3 border-b last:border-0 gap-4" {
+            div class="min-w-0" {
+                div class="flex items-center gap-2 flex-wrap" {
+                    (badge("secondary", &title_case(&e.kind)))
+                    span class="font-mono text-sm break-all" { (e.value) }
+                }
+                @if !e.reason.is_empty() {
+                    p class="text-xs text-muted-foreground mt-1" { (e.reason) }
+                }
+                p class="text-xs text-muted-foreground mt-1" { "Added " (rel_time(&e.added_at)) }
+            }
+            form method="post" action="/admin/rate-limits/whitelist/remove" data-confirm=(format!("Remove {} {} from the rate-limit whitelist? Caps apply to them again on the next request.", &e.kind, &e.value)) {
+                input type="hidden" name="id" value=(e.id);
+                button type="submit" class=(button_class("outline", "sm", "")) { "Remove" }
+            }
+        }
+    }
+}
+
+/// The whitelist card. Renders current entries + an Add form; empty state
+/// explains the mechanism rather than showing a bare "no entries".
+fn whitelist_card(
+    entries: &[AdminRateLimitWhitelistEntry],
+    error: Option<&ApiError>,
+) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                div class="flex items-center gap-3" {
+                    (icon("shield", "h-5 w-5 text-primary-text"))
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { "Rate Limit Whitelist" }
+                }
+                p class="text-sm text-muted-foreground" {
+                    "Principals exempt from every per-route cap. A whitelisted user, email or IP skips the counter entirely; add + remove are audited."
+                }
+            }
+            div class="p-6 pt-0 space-y-6" {
+                @if let Some(e) = error {
+                    (error_box_for("Could not reach the API to load the whitelist.", e))
+                } @else if entries.is_empty() {
+                    (empty_state("shield", "No whitelisted principals. Use the form below to add one.", None))
+                } @else {
+                    div class="space-y-0" { @for row in entries { (whitelist_row(row)) } }
+                }
+                form method="post" action="/admin/rate-limits/whitelist/add" class="flex flex-col gap-3 md:flex-row md:items-end" {
+                    div class="flex flex-col gap-1 md:w-32" {
+                        label class="text-sm font-medium" for="wl-kind" { "Kind" }
+                        select id="wl-kind" name="kind" class=(dashboard_input()) {
+                            option value="user" { "User id" }
+                            option value="email" { "Email" }
+                            option value="ip" { "IP" }
+                        }
+                    }
+                    div class="flex flex-col gap-1 flex-1 min-w-0" {
+                        label class="text-sm font-medium" for="wl-value" { "Value" }
+                        input id="wl-value" name="value" type="text" required class=(dashboard_input()) placeholder="user id, email address, or IP";
+                    }
+                    div class="flex flex-col gap-1 flex-1 min-w-0" {
+                        label class="text-sm font-medium" for="wl-reason" { "Reason" }
+                        input id="wl-reason" name="reason" type="text" class=(dashboard_input()) placeholder="why this principal is exempt (optional, auditable)";
+                    }
+                    button type="submit" class=(button_class("default", "default", "")) { "Add to whitelist" }
+                }
+            }
+        }
+    }
+}
+
+/// Form body for adding a whitelist entry.
+#[derive(Deserialize)]
+pub struct RateLimitWhitelistAddForm {
+    pub kind: String,
+    pub value: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Add one principal to the whitelist, then redirect back to the rate-limits
+/// page with a toast. AdminUser-guarded; the add is audited on the API.
+pub async fn rate_limit_whitelist_add(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitWhitelistAddForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target = match admin_api::add_rate_limit_whitelist(
+        &st.api,
+        c.forward.as_deref(),
+        f.kind.trim(),
+        f.value.trim(),
+        f.reason.trim(),
+    )
+    .await
+    {
+        Ok(()) => "/admin/rate-limits?toast_ok=Added%20to%20whitelist",
+        Err(_) => "/admin/rate-limits?toast_err=Could%20not%20add%20to%20whitelist",
+    };
+    redirect_cookies(target, &c.set_cookies)
+}
+
+/// Form body for removing a whitelist entry.
+#[derive(Deserialize)]
+pub struct RateLimitWhitelistRemoveForm {
+    pub id: String,
+}
+
+/// Remove one whitelist entry by id, then redirect back with a toast.
+/// AdminUser-guarded; the remove is audited on the API.
+pub async fn rate_limit_whitelist_remove(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(f): Form<RateLimitWhitelistRemoveForm>,
+) -> Response {
+    let (_, c) = match admin_guard(&st, &headers).await {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let target =
+        match admin_api::delete_rate_limit_whitelist(&st.api, c.forward.as_deref(), f.id.trim())
+            .await
+        {
+            Ok(()) => "/admin/rate-limits?toast_ok=Removed%20from%20whitelist",
+            Err(_) => "/admin/rate-limits?toast_err=Could%20not%20remove%20from%20whitelist",
+        };
+    redirect_cookies(target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod whitelist_tests {
+    use super::*;
+
+    fn sample(id: &str, kind: &str, value: &str, reason: &str) -> AdminRateLimitWhitelistEntry {
+        AdminRateLimitWhitelistEntry {
+            id: id.to_string(),
+            kind: kind.to_string(),
+            value: value.to_string(),
+            reason: reason.to_string(),
+            added_by: None,
+            added_at: "2026-10-20T12:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn whitelist_card_renders_entries_with_remove_button() {
+        let html = whitelist_card(
+            &[sample("1", "ip", "1.2.3.4", "monitoring probe")],
+            None,
+        )
+        .into_string();
+        assert!(html.contains("1.2.3.4"));
+        assert!(html.contains("monitoring probe"));
+        assert!(html.contains("Remove"));
+    }
+
+    #[test]
+    fn whitelist_card_shows_empty_state_without_entries() {
+        let html = whitelist_card(&[], None).into_string();
+        assert!(
+            html.contains("No whitelisted principals"),
+            "empty state visible: {html}"
+        );
+    }
+
+    #[test]
+    fn whitelist_card_shows_error_box_on_failed_fetch() {
+        let err = ApiError {
+            status: 500,
+            code: "INTERNAL_ERROR".into(),
+            message: "boom".into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        let html = whitelist_card(&[], Some(&err)).into_string();
+        assert!(
+            html.contains("Could not reach the API to load the whitelist."),
+            "error box: {html}"
+        );
+    }
+
+    #[test]
+    fn whitelist_card_add_form_offers_three_kinds() {
+        let html = whitelist_card(&[], None).into_string();
+        assert!(html.contains(r#"value="user""#));
+        assert!(html.contains(r#"value="email""#));
+        assert!(html.contains(r#"value="ip""#));
     }
 }

@@ -837,6 +837,134 @@ pub async fn list_rate_limit_overview(
     Ok(success(entries, request_id))
 }
 
+// =============================================================================
+// BUNYIP-933: whitelist CRUD
+// =============================================================================
+
+/// Request body for POST /v1/admin/rate-limits/whitelist.
+#[derive(Debug, Deserialize)]
+pub struct AddWhitelistRequest {
+    pub kind: String,
+    pub value: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// One serialised whitelist row for the admin API.
+#[derive(Debug, Serialize)]
+pub struct WhitelistEntry {
+    pub id: String,
+    pub kind: String,
+    pub value: String,
+    pub reason: String,
+    pub added_by: Option<String>,
+    pub added_at: String,
+}
+
+impl From<crate::repositories::RateLimitWhitelistRow> for WhitelistEntry {
+    fn from(row: crate::repositories::RateLimitWhitelistRow) -> Self {
+        Self {
+            id: row.id.to_string(),
+            kind: row.kind,
+            value: row.value,
+            reason: row.reason,
+            added_by: row.added_by.map(|u| u.to_string()),
+            added_at: row.added_at.to_rfc3339(),
+        }
+    }
+}
+
+/// GET /v1/admin/rate-limits/whitelist
+pub async fn list_rate_limit_whitelist(
+    req: HttpRequest,
+    _admin: AdminUser,
+    pool: web::Data<PgPool>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let rows = crate::repositories::RateLimitWhitelistRepository::list(pool.get_ref()).await?;
+    let entries: Vec<WhitelistEntry> = rows.into_iter().map(Into::into).collect();
+    Ok(success(entries, request_id))
+}
+
+/// POST /v1/admin/rate-limits/whitelist
+pub async fn add_rate_limit_whitelist(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    body: web::Json<AddWhitelistRequest>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let kind = crate::repositories::WhitelistKind::parse(body.kind.trim()).ok_or_else(|| {
+        AppError::bad_request("kind must be one of 'user', 'email', or 'ip'".to_string())
+    })?;
+    let value = body.value.trim();
+    if value.is_empty() {
+        return Err(AppError::bad_request("value is required".to_string()));
+    }
+    let reason = body.reason.trim();
+
+    let row = crate::repositories::RateLimitWhitelistRepository::insert(
+        pool.get_ref(),
+        kind,
+        value,
+        reason,
+        Some(admin.0.sub),
+    )
+    .await?;
+
+    // Only audit when the row was actually inserted; a conflict (same
+    // kind + value already present) is idempotent and does not log twice.
+    if let Some(row) = &row {
+        let log = CreateAuditLog::new(AuditAction::AdminRateLimitWhitelistAdded)
+            .with_actor(admin.0.sub.clone(), &admin.0.email, &admin.0.role)
+            .with_resource("rate_limit_whitelist", row.id)
+            .with_metadata(serde_json::json!({
+                "kind": row.kind,
+                "value": row.value,
+                "reason": row.reason,
+            }));
+        AuditLogRepository::create(pool.get_ref(), log).await?;
+    }
+
+    let payload: Option<WhitelistEntry> = row.map(Into::into);
+    Ok(success(payload, request_id))
+}
+
+/// DELETE /v1/admin/rate-limits/whitelist/{id}
+pub async fn delete_rate_limit_whitelist(
+    req: HttpRequest,
+    admin: AdminUser,
+    pool: web::Data<PgPool>,
+    path: web::Path<Uuid>,
+) -> Result<HttpResponse, AppError> {
+    let request_id = get_request_id(&req);
+    let id = path.into_inner();
+
+    // Read the row before deleting so the audit record carries the kind +
+    // value of what was removed; a bare id tells a later reader nothing.
+    let rows =
+        crate::repositories::RateLimitWhitelistRepository::list(pool.get_ref()).await?;
+    let existing = rows.into_iter().find(|r| r.id == id);
+    let removed =
+        crate::repositories::RateLimitWhitelistRepository::delete(pool.get_ref(), id).await?;
+    if !removed {
+        return Err(AppError::not_found("rate_limit_whitelist entry"));
+    }
+
+    if let Some(row) = existing {
+        let log = CreateAuditLog::new(AuditAction::AdminRateLimitWhitelistRemoved)
+            .with_actor(admin.0.sub.clone(), &admin.0.email, &admin.0.role)
+            .with_resource("rate_limit_whitelist", row.id)
+            .with_metadata(serde_json::json!({
+                "kind": row.kind,
+                "value": row.value,
+            }));
+        AuditLogRepository::create(pool.get_ref(), log).await?;
+    }
+
+    Ok(success_no_data(request_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
