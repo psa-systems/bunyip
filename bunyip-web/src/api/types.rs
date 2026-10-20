@@ -540,9 +540,26 @@ pub struct DatasetHealth {
 }
 
 /// The `health` block of `GET /v1/admin/health`. Only the fields the dashboard
-/// renders are captured; the rest of the payload is ignored.
+/// and the System Status page render are captured; the rest of the payload is
+/// ignored.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SystemHealth {
+    /// BUNYIP-931: System Status Build card.
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub git_commit: String,
+    #[serde(default)]
+    pub git_tag: String,
+    #[serde(default)]
+    pub build_date: String,
+    /// BUNYIP-931: System Status Stats card.
+    #[serde(default)]
+    pub uptime_seconds: u64,
+    #[serde(default)]
+    pub db_pool_size: u32,
+    #[serde(default)]
+    pub db_pool_idle: u64,
     #[serde(default)]
     pub datasets: Vec<DatasetHealth>,
 }

@@ -13,7 +13,7 @@ use axum::response::Response;
 use maud::{html, Markup};
 
 use crate::api::admin as admin_api;
-use crate::api::types::{IntegrationState, IntegrationStatus};
+use crate::api::types::{IntegrationState, IntegrationStatus, SystemHealth};
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::views::ui::{badge, error_box_for};
@@ -71,10 +71,77 @@ fn integrations_card(integrations: &[IntegrationStatus], fetch_error: Option<&Ap
     }
 }
 
-fn status_content(integrations: &[IntegrationStatus], fetch_error: Option<&ApiError>) -> Markup {
+/// BUNYIP-931: identity of the running build. Short hash (first 12 chars) plus
+/// the git-describe tag plus the UTC build date, so a hotfix patch between
+/// tagged releases is distinguishable from the release itself.
+fn build_card(h: &SystemHealth) -> Markup {
+    let short_commit: String = h.git_commit.chars().take(12).collect();
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Build" }
+                p class="text-sm text-muted-foreground" { "The exact source revision this instance was built from." }
+            }
+            div class="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm" {
+                div { span class="text-muted-foreground" { "Version: " } (h.version) }
+                div { span class="text-muted-foreground" { "Commit: " } code class="font-mono" { (short_commit) } }
+                div { span class="text-muted-foreground" { "Describe: " } code class="font-mono" { (h.git_tag) } }
+                div { span class="text-muted-foreground" { "Built: " } (h.build_date) }
+            }
+        }
+    }
+}
+
+/// BUNYIP-931: live process stats. Uptime formatted for a glance; pool numbers
+/// raw so an admin can match them against the configured ceiling.
+fn stats_card(h: &SystemHealth) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Stats" }
+                p class="text-sm text-muted-foreground" { "What the process is doing right now." }
+            }
+            div class="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm" {
+                div { span class="text-muted-foreground" { "Uptime: " } (format_uptime(h.uptime_seconds)) }
+                div { span class="text-muted-foreground" { "Database: " } (h.db_pool_idle) " idle / " (h.db_pool_size) " open" }
+            }
+        }
+    }
+}
+
+/// Days / hours / minutes / seconds, trimmed to the largest two non-zero units;
+/// a two-week uptime reads `14d 3h`, a sub-minute one `42s`.
+fn format_uptime(secs: u64) -> String {
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3_600;
+    let m = (secs % 3_600) / 60;
+    let s = secs % 60;
+    if d > 0 {
+        format!("{d}d {h}h")
+    } else if h > 0 {
+        format!("{h}h {m}m")
+    } else if m > 0 {
+        format!("{m}m {s}s")
+    } else {
+        format!("{s}s")
+    }
+}
+
+fn status_content(
+    health: Option<&SystemHealth>,
+    integrations: &[IntegrationStatus],
+    fetch_error: Option<&ApiError>,
+    health_error: Option<&ApiError>,
+) -> Markup {
     html! {
         div class="space-y-6" {
-            div { h1 class="text-3xl font-bold" { "System Status" } p class="mt-2 text-muted-foreground" { "Each optional integration and whether it is configured, off, or half-configured." } }
+            div { h1 class="text-3xl font-bold" { "System Status" } p class="mt-2 text-muted-foreground" { "The running build, live process stats, and each optional integration's state." } }
+            @if let Some(h) = health {
+                (build_card(h))
+                (stats_card(h))
+            } @else if let Some(e) = health_error {
+                (error_box_for("Could not reach the API to load build + stats.", e))
+            }
             (integrations_card(integrations, fetch_error))
         }
     }
@@ -91,7 +158,19 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
     let fetched = admin_api::integration_status(&st.api, c.forward.as_deref()).await;
     let fetch_error = fetched.as_ref().err().cloned();
     let integrations = fetched.unwrap_or_default();
-    let content = status_content(&integrations, fetch_error.as_ref());
+    // BUNYIP-931: build info + stats come from the same /admin/health endpoint
+    // the dashboard's Datasets card already reads. Two reads are tolerated: the
+    // page is admin-only and renders at human cadence, so one extra API call
+    // beats inventing a combined endpoint only this page would use.
+    let fetched_health = admin_api::system_health(&st.api, c.forward.as_deref()).await;
+    let health_error = fetched_health.as_ref().err().cloned();
+    let health = fetched_health.ok();
+    let content = status_content(
+        health.as_ref(),
+        &integrations,
+        fetch_error.as_ref(),
+        health_error.as_ref(),
+    );
     admin_response(&c, &user, "/admin/status", "System Status", content)
 }
 
@@ -169,5 +248,53 @@ mod tests {
             html.contains("Could not reach the API to load integration status."),
             "{html}"
         );
+    }
+
+    fn sample_health() -> SystemHealth {
+        SystemHealth {
+            version: "0.19.0".to_string(),
+            git_commit: "deadbeefcafebabe1234".to_string(),
+            git_tag: "v0.19.0".to_string(),
+            build_date: "2026-10-20T12:00:00Z".to_string(),
+            uptime_seconds: 3_600 * 25,
+            db_pool_size: 10,
+            db_pool_idle: 7,
+            datasets: Vec::new(),
+        }
+    }
+
+    /// BUNYIP-931: Build card renders the three identity fields; the commit is
+    /// truncated to its first 12 chars so a 40-char SHA does not wrap.
+    #[test]
+    fn build_card_renders_version_short_commit_tag_and_date() {
+        let html = build_card(&sample_health()).into_string();
+        assert!(html.contains("0.19.0"), "{html}");
+        assert!(html.contains("deadbeefcafe"), "short commit: {html}");
+        assert!(
+            !html.contains("deadbeefcafebabe1234"),
+            "full commit must be truncated: {html}"
+        );
+        assert!(html.contains("v0.19.0"), "describe: {html}");
+        assert!(html.contains("2026-10-20T12:00:00Z"), "build date: {html}");
+    }
+
+    /// BUNYIP-931: Stats card shows the formatted uptime plus idle / open
+    /// counts; the raw numbers match what an operator sees in `psql`.
+    #[test]
+    fn stats_card_renders_uptime_and_pool_counts() {
+        let html = stats_card(&sample_health()).into_string();
+        assert!(html.contains("1d 1h"), "25h uptime formats as 1d 1h: {html}");
+        assert!(html.contains("7"), "idle count: {html}");
+        assert!(html.contains("10"), "pool size: {html}");
+    }
+
+    /// Uptime formatter trims to the two largest non-zero units.
+    #[test]
+    fn uptime_formats_each_scale() {
+        assert_eq!(format_uptime(0), "0s");
+        assert_eq!(format_uptime(42), "42s");
+        assert_eq!(format_uptime(65), "1m 5s");
+        assert_eq!(format_uptime(3_725), "1h 2m");
+        assert_eq!(format_uptime(86_400 + 7_200), "1d 2h");
     }
 }
