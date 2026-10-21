@@ -890,6 +890,25 @@ pub struct AdminRateLimitHistory {
     pub expires_at: String,
 }
 
+/// BUNYIP-933: one row of the admin-managed whitelist of principals exempt
+/// from every rate limit. The web page renders this list in full and
+/// writes new rows through `add_rate_limit_whitelist`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AdminRateLimitWhitelistEntry {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub added_by: Option<String>,
+    #[serde(default)]
+    pub added_at: String,
+}
+
 /// One point in the per-action `traffic` field of
 /// `GET /v1/admin/rate-limits/overview` (BUNYIP-900).
 #[derive(Debug, Clone, Deserialize)]

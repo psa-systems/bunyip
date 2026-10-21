@@ -198,6 +198,14 @@ pub enum AuditAction {
     /// (BUNYIP-413), reverting that action to its bootstrap default. Metadata
     /// carries the `action`.
     AdminRateLimitConfigDeleted,
+    /// Admin added a principal to the rate-limit whitelist (BUNYIP-933), so
+    /// every per-route cap short-circuits for that principal. Metadata
+    /// carries `kind` (`user` / `email` / `ip`), `value` and the operator
+    /// `reason`.
+    AdminRateLimitWhitelistAdded,
+    /// Admin removed a principal from the rate-limit whitelist (BUNYIP-933).
+    /// Metadata carries the removed row's `kind` and `value`.
+    AdminRateLimitWhitelistRemoved,
     /// Super admin banned an IP by hand (BUNYIP-413), the counterpart to
     /// [`AuditAction::AdminIpBanLifted`]. Metadata carries the target `ip`, the
     /// operator `reason` and the ban `expires_at`.
@@ -317,6 +325,8 @@ impl AuditAction {
             AuditAction::AdminRateLimitReset => "admin_rate_limit_reset",
             AuditAction::AdminRateLimitConfigUpdated => "admin_rate_limit_config_updated",
             AuditAction::AdminRateLimitConfigDeleted => "admin_rate_limit_config_deleted",
+            AuditAction::AdminRateLimitWhitelistAdded => "admin_rate_limit_whitelist_added",
+            AuditAction::AdminRateLimitWhitelistRemoved => "admin_rate_limit_whitelist_removed",
             AuditAction::AdminIpBanCreated => "admin_ip_ban_created",
             AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
             AuditAction::SystemConfigUpdated => "system_config_updated",
@@ -375,6 +385,8 @@ impl AuditAction {
                 | AuditAction::AdminRateLimitReset
                 | AuditAction::AdminRateLimitConfigUpdated
                 | AuditAction::AdminRateLimitConfigDeleted
+                | AuditAction::AdminRateLimitWhitelistAdded
+                | AuditAction::AdminRateLimitWhitelistRemoved
                 | AuditAction::AdminIpBanCreated
                 | AuditAction::AdminMailerSuppressionDeleted
                 | AuditAction::SystemConfigUpdated
