@@ -176,7 +176,7 @@ pub async fn invites(
                     // email is a text input bounded at 128 server-side.
                     form method="get" action="/admin/invites" class="mt-4 flex flex-wrap items-center gap-2" {
                         (invite_filter_select("status", q.status.as_deref().unwrap_or(""), INVITE_STATUS_OPTIONS))
-                        input type="text" name="email" value=(email_value) placeholder="Filter by email..." maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
+                        input type="text" name="email" value=(email_value) placeholder="Filter by email…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if any_filter_active {
                             a href="/admin/invites" class=(button_class("ghost", "sm", "")) { "Clear" }

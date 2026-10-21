@@ -257,7 +257,7 @@ pub async fn ip_bans(
                     // on any control carries every value to the server.
                     form method="get" action="/admin/ip-bans" class="mt-4 flex flex-wrap items-center gap-2" {
                         input type="text" name="search" value=(search_value) placeholder="IP prefix (e.g. 45.3.)" maxlength="45" class="h-9 w-48 rounded-md border border-input bg-background px-3 text-sm";
-                        input type="text" name="reason" value=(reason_value) placeholder="Reason contains..." maxlength="128" class="h-9 flex-1 min-w-[12rem] rounded-md border border-input bg-background px-3 text-sm";
+                        input type="text" name="reason" value=(reason_value) placeholder="Reason contains…" maxlength="128" class="h-9 flex-1 min-w-[12rem] rounded-md border border-input bg-background px-3 text-sm";
                         select name="sort" class="h-9 rounded-md border border-input bg-background px-3 text-sm" onchange="this.form.submit()" {
                             @for (value, label) in IP_BANS_SORT_OPTIONS {
                                 option value=(value) selected[sort == *value] { (label) }
