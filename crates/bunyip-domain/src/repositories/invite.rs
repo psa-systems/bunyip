@@ -186,10 +186,7 @@ impl InviteRepository {
         let mut c = QueryBuilder::new("SELECT COUNT(*) FROM admin_invites");
         push_where(&mut c, status_predicate, email);
 
-        let invites = q
-            .build_query_as::<AdminInvite>()
-            .fetch_all(pool)
-            .await?;
+        let invites = q.build_query_as::<AdminInvite>().fetch_all(pool).await?;
         let total: (i64,) = c.build_query_as().fetch_one(pool).await?;
         Ok((invites, total.0))
     }

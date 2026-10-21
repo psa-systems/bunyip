@@ -20,7 +20,6 @@ use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
-
 /// The invite's current state, derived the same way the API model does
 /// (`AdminInvite::is_revoked` / `is_accepted` / `is_expired`), since the wire
 /// type carries the raw timestamps rather than a precomputed label.

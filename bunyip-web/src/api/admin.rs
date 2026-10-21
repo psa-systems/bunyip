@@ -683,13 +683,7 @@ pub async fn admin_invites(
     if let Some(email) = filters.email {
         path.push_str(&format!("&email={}", urlenc(email)));
     }
-    parse(
-        api.get(
-            &path,
-            cookie,
-        )
-        .await?,
-    )
+    parse(api.get(&path, cookie).await?)
 }
 
 /// Invite `email` as an admin. Wraps `POST /v1/admin/invites`, which emails the
