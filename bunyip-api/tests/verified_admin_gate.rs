@@ -125,9 +125,15 @@ async fn verified_admin_user_gates_on_verification_status() {
     );
 
     // Verification-complete: name present and email verified.
-    UserRepository::update_profile(&pool, unverified.id, Some("Ada"), Some("Lovelace"), None)
-        .await
-        .expect("set name");
+    UserRepository::update_profile(
+        &pool,
+        unverified.id,
+        Some(Some("Ada")),
+        Some(Some("Lovelace")),
+        Some(None),
+    )
+    .await
+    .expect("set name");
     UserRepository::set_email_verified(&pool, unverified.id)
         .await
         .expect("verify email");
@@ -201,9 +207,15 @@ async fn admin_invites_require_a_verified_admin() {
         assert_eq!(test::call_service(&app, req).await.status(), 403);
     }
 
-    UserRepository::update_profile(&pool, user.id, Some("Ada"), Some("Lovelace"), None)
-        .await
-        .expect("set name");
+    UserRepository::update_profile(
+        &pool,
+        user.id,
+        Some(Some("Ada")),
+        Some(Some("Lovelace")),
+        Some(None),
+    )
+    .await
+    .expect("set name");
     UserRepository::set_email_verified(&pool, user.id)
         .await
         .expect("verify email");
@@ -260,9 +272,15 @@ async fn mailer_suppression_delete_requires_a_verified_admin() {
         "an unverified admin must be refused the delete"
     );
 
-    UserRepository::update_profile(&pool, user.id, Some("Ada"), Some("Lovelace"), None)
-        .await
-        .expect("set name");
+    UserRepository::update_profile(
+        &pool,
+        user.id,
+        Some(Some("Ada")),
+        Some(Some("Lovelace")),
+        Some(None),
+    )
+    .await
+    .expect("set name");
     UserRepository::set_email_verified(&pool, user.id)
         .await
         .expect("verify email");
