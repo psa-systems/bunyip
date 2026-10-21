@@ -16,7 +16,29 @@ use crate::views::ui::{
 };
 use crate::web::{redirect_cookies, AppState};
 
+use super::audit::audit_row;
 use super::rate_limits::rate_limit_row;
+
+/// BUNYIP-930: `Real user: Yes` iff three or more of the four signals are
+/// present. Email verification carries no extra weight; the rule stays
+/// inspectable without a hidden weighting table (decision 2026-10-20).
+/// The pure function is what tests call so the boundary cases are pinned
+/// without having to render HTML.
+pub(super) fn is_real_user(
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    email_verified: bool,
+    has_audit: bool,
+) -> bool {
+    fn present(s: Option<&str>) -> bool {
+        s.map(|v| !v.trim().is_empty()).unwrap_or(false)
+    }
+    let score = present(first_name) as u32
+        + present(last_name) as u32
+        + email_verified as u32
+        + has_audit as u32;
+    score >= 3
+}
 
 #[derive(Deserialize)]
 pub struct UserQuery {
@@ -1130,6 +1152,33 @@ pub async fn user_detail(
             Err(_) => Vec::new(),
         };
 
+    // BUNYIP-930: the user's own audit log, newest 25 entries. The Real User
+    // classifier reads a bool over the same list, so one fetch covers both the
+    // badge (used/not) and the User activity section (rendered). A failed
+    // fetch degrades to "No" for the badge and shows an error box in the
+    // section, rather than hiding either silently.
+    let fetched_audit = admin_api::audit_logs(
+        &st.api,
+        c.forward.as_deref(),
+        1,
+        25,
+        false,
+        Some(target.id.as_str()),
+    )
+    .await;
+    let audit_error = fetched_audit.as_ref().err().cloned();
+    let user_audit: Vec<crate::api::types::AdminAuditLog> = fetched_audit
+        .as_ref()
+        .map(|p| p.items.clone())
+        .unwrap_or_default();
+    let has_audit = !user_audit.is_empty();
+    let real_user = is_real_user(
+        target.first_name.as_deref(),
+        target.last_name.as_deref(),
+        target.email_verified,
+        has_audit,
+    );
+
     let content = html! {
         div class="space-y-6" {
             div class="flex items-center justify-between" {
@@ -1139,6 +1188,11 @@ pub async fn user_detail(
                         @if is_admin_target { (badge("default", "Admin")) }
                         @if target.lifetime_member { (badge("default", "Lifetime")) }
                         @if !target.email_verified { (badge("outline", "Unverified")) }
+                        // BUNYIP-930: 3-of-4 signal classifier. Success badge for
+                        // Yes, outline for No, so the chip stays legible beside
+                        // the existing Admin/Lifetime badges.
+                        @if real_user { (badge("success", "Real user")) }
+                        @else { (badge("outline", "Unverified identity")) }
                     }
                     p class="text-sm text-muted-foreground mt-1" {
                         "Joined " (rel_time(&target.created_at))
@@ -1158,6 +1212,10 @@ pub async fn user_detail(
                 div class="p-6 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm" {
                     div { span class="text-muted-foreground" { "User ID: " } code class="font-mono text-xs" { (target.id) } }
                     div { span class="text-muted-foreground" { "Email: " } (target.email) }
+                    // BUNYIP-930: first + last name, matching the existing row shape.
+                    // An unset name reads as a muted dash so the row still renders.
+                    div { span class="text-muted-foreground" { "First name: " } (target.first_name.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("-")) }
+                    div { span class="text-muted-foreground" { "Last name: " } (target.last_name.as_deref().filter(|s| !s.trim().is_empty()).unwrap_or("-")) }
                     div { span class="text-muted-foreground" { "Role: " } (format!("{:?}", target.role)) }
                     div { span class="text-muted-foreground" { "Email verified: " } @if target.email_verified { "Yes" } @else { "No" } }
                     div { span class="text-muted-foreground" { "Two-factor: " } @if target.two_factor_enabled { "Enabled" } @else { "Disabled" } }
@@ -1228,6 +1286,29 @@ pub async fn user_detail(
             (user_actions_card(&target, is_admin_target))
             // BUNYIP-431: 2FA-gated any-tier-to-any-tier move.
             (tier_change_card(&target))
+
+            // BUNYIP-930: this user's own audit log, newest 25 inline plus a
+            // "View full audit log" link that opens /admin/audit-logs
+            // pre-filtered to this id. An unreachable API renders through the
+            // same error-box helper the global audit page uses, so a broken
+            // page is stated rather than looking like a user with no activity.
+            div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                    div class="flex items-center justify-between gap-2" {
+                        div class="flex items-center gap-2" {
+                            (icon("file-text", "h-4 w-4 text-muted-foreground"))
+                            h3 class="text-2xl font-semibold leading-none tracking-tight" { "User activity" }
+                        }
+                        a href=(format!("/admin/audit-logs?user_id={}", target.id)) class=(button_class("outline", "sm", "")) { "View full audit log" }
+                    }
+                    p class="text-xs text-muted-foreground" { "Newest 25 events attributed to this user." }
+                }
+                div class="p-6 pt-0" {
+                    @if let Some(e) = &audit_error { (error_box_for("Could not reach the API to load this user's audit log.", e)) }
+                    @else if user_audit.is_empty() { (empty_state("file-text", "No audit entries for this user.", None)) }
+                    @else { div class="space-y-0" { @for log in &user_audit { (audit_row(log)) } } }
+                }
+            }
         }
     };
     admin_response(&c, &user, "/admin/users", "User", content)
@@ -1235,7 +1316,7 @@ pub async fn user_detail(
 
 #[cfg(test)]
 mod tests {
-    use super::htmx_script;
+    use super::{htmx_script, is_real_user};
 
     /// BUNYIP-742: `/admin/users` is the one page whose `hx-` attributes use
     /// htmx (BUNYIP-424), so it - and only it - must carry the vendored
@@ -1246,5 +1327,44 @@ mod tests {
         let html = htmx_script().into_string();
         assert!(html.contains(r#"src="/assets/vendor/htmx-2.0.3.min.js?v="#));
         assert!(html.contains("defer"));
+    }
+
+    // BUNYIP-930: boundary table over `is_real_user`. The rule is 3-of-4,
+    // so (0, 1, 2) read as No and (3, 4) read as Yes; the table drives
+    // every combination of the four inputs so a flipped operator (e.g.
+    // >= 2) fails here instead of in prod.
+    #[test]
+    fn is_real_user_fires_at_three_of_four() {
+        // Zero signals.
+        assert!(!is_real_user(None, None, false, false));
+        // One signal: any single input alone is a No.
+        assert!(!is_real_user(Some("Ada"), None, false, false));
+        assert!(!is_real_user(None, Some("Lovelace"), false, false));
+        assert!(!is_real_user(None, None, true, false));
+        assert!(!is_real_user(None, None, false, true));
+        // Two signals: still a No.
+        assert!(!is_real_user(Some("Ada"), Some("Lovelace"), false, false));
+        assert!(!is_real_user(Some("Ada"), None, true, false));
+        assert!(!is_real_user(None, Some("Lovelace"), false, true));
+        // Three signals: Yes.
+        assert!(is_real_user(Some("Ada"), Some("Lovelace"), true, false));
+        assert!(is_real_user(Some("Ada"), Some("Lovelace"), false, true));
+        assert!(is_real_user(Some("Ada"), None, true, true));
+        assert!(is_real_user(None, Some("Lovelace"), true, true));
+        // Four signals: Yes.
+        assert!(is_real_user(Some("Ada"), Some("Lovelace"), true, true));
+    }
+
+    /// An empty-or-whitespace name does not count as present; a trimmed
+    /// non-empty one does. This mirrors how the server stores an "unset"
+    /// first/last name (empty string, not NULL) in some rows.
+    #[test]
+    fn is_real_user_trims_whitespace_names() {
+        // Empty strings do not count as present.
+        assert!(!is_real_user(Some(""), Some(""), true, true));
+        // Whitespace-only strings do not count either.
+        assert!(!is_real_user(Some("   "), Some("\t"), true, true));
+        // A real name combined with email_verified + has_audit is three signals.
+        assert!(is_real_user(Some("Ada"), Some(""), true, true));
     }
 }
