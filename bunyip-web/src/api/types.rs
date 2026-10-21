@@ -872,13 +872,17 @@ pub struct AdminRateLimitHistory {
 /// writes new rows through `add_rate_limit_whitelist`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AdminRateLimitWhitelistEntry {
+    #[serde(default)]
     pub id: String,
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub value: String,
     #[serde(default)]
     pub reason: String,
     #[serde(default)]
     pub added_by: Option<String>,
+    #[serde(default)]
     pub added_at: String,
 }
 
