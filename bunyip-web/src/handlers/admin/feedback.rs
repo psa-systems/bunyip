@@ -277,7 +277,7 @@ async fn render_feedback_list(
                         (feedback_filter_select("tag", q.tag.as_deref().unwrap_or(""), FEEDBACK_TAG_OPTIONS))
                         (feedback_filter_select("attachment", q.attachment.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_ATTACHMENT))
                         (feedback_filter_select("response", q.response.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_RESPONSE))
-                        input type="text" name="q" value=(search_value) placeholder="Search subject, message, email..." maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
+                        input type="text" name="q" value=(search_value) placeholder="Search subject, message, email…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if any_filter_active {
                             a href=(tab.path()) class=(button_class("ghost", "sm", "")) { "Clear" }
