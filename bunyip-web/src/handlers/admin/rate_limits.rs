@@ -793,10 +793,7 @@ fn whitelist_row(e: &AdminRateLimitWhitelistEntry) -> Markup {
 
 /// The whitelist card. Renders current entries + an Add form; empty state
 /// explains the mechanism rather than showing a bare "no entries".
-fn whitelist_card(
-    entries: &[AdminRateLimitWhitelistEntry],
-    error: Option<&ApiError>,
-) -> Markup {
+fn whitelist_card(entries: &[AdminRateLimitWhitelistEntry], error: Option<&ApiError>) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
@@ -919,11 +916,8 @@ mod whitelist_tests {
 
     #[test]
     fn whitelist_card_renders_entries_with_remove_button() {
-        let html = whitelist_card(
-            &[sample("1", "ip", "1.2.3.4", "monitoring probe")],
-            None,
-        )
-        .into_string();
+        let html =
+            whitelist_card(&[sample("1", "ip", "1.2.3.4", "monitoring probe")], None).into_string();
         assert!(html.contains("1.2.3.4"));
         assert!(html.contains("monitoring probe"));
         assert!(html.contains("Remove"));

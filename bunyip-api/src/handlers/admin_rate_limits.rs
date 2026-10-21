@@ -942,8 +942,7 @@ pub async fn delete_rate_limit_whitelist(
 
     // Read the row before deleting so the audit record carries the kind +
     // value of what was removed; a bare id tells a later reader nothing.
-    let rows =
-        crate::repositories::RateLimitWhitelistRepository::list(pool.get_ref()).await?;
+    let rows = crate::repositories::RateLimitWhitelistRepository::list(pool.get_ref()).await?;
     let existing = rows.into_iter().find(|r| r.id == id);
     let removed =
         crate::repositories::RateLimitWhitelistRepository::delete(pool.get_ref(), id).await?;
