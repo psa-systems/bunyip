@@ -925,10 +925,20 @@ pub async fn user_reset_2fa(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+/// Body for the lifetime grant/revoke forms: the acting admin's 2FA code.
+/// BUNYIP-943: `grant_lifetime_membership`/`revoke_lifetime_membership` have
+/// the same billing-consequential effect as `set_user_tier`, so they take the
+/// same 2FA re-confirmation.
+#[derive(serde::Deserialize)]
+pub struct LifetimeActionForm {
+    pub totp_code: String,
+}
+
 pub async fn user_grant_lifetime(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Form(f): Form<LifetimeActionForm>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -937,19 +947,19 @@ pub async fn user_grant_lifetime(
     if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
         return refusal;
     }
-    let target = match admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id).await {
-        Ok(_) => format!(
-            "/admin/users/{id}?toast_ok={}",
-            urlenc("Lifetime membership granted")
-        ),
-        Err(e) => {
-            tracing::warn!(user_id = %id, error = ?e, "admin grant lifetime membership failed");
-            format!(
-                "/admin/users/{id}?toast_err={}",
-                urlenc("Could not grant lifetime membership")
-            )
-        }
-    };
+    let target =
+        match admin_api::grant_lifetime(&st.api, c.forward.as_deref(), &id, f.totp_code.trim())
+            .await
+        {
+            Ok(_) => format!(
+                "/admin/users/{id}?toast_ok={}",
+                urlenc("Lifetime membership granted")
+            ),
+            Err(e) => {
+                tracing::warn!(user_id = %id, error = ?e, "admin grant lifetime membership failed");
+                format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message()))
+            }
+        };
     redirect_cookies(&target, &c.set_cookies)
 }
 
@@ -957,6 +967,7 @@ pub async fn user_revoke_lifetime(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Form(f): Form<LifetimeActionForm>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -965,14 +976,18 @@ pub async fn user_revoke_lifetime(
     if let Some(refusal) = verification_gate(&user, &c, &format!("/admin/users/{id}")) {
         return refusal;
     }
-    let target = match admin_api::revoke_lifetime(&st.api, c.forward.as_deref(), &id).await {
+    let target = match admin_api::revoke_lifetime(
+        &st.api,
+        c.forward.as_deref(),
+        &id,
+        f.totp_code.trim(),
+    )
+    .await
+    {
         Ok(_) => format!("/admin/users/{id}"),
         Err(e) => {
             tracing::warn!(user_id = %id, error = ?e, "admin revoke lifetime membership failed");
-            format!(
-                "/admin/users/{id}?toast_err={}",
-                urlenc("Could not revoke lifetime membership")
-            )
+            format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message()))
         }
     };
     redirect_cookies(&target, &c.set_cookies)
