@@ -648,6 +648,12 @@ pub struct AdminUser {
     /// keeps an older API that predates the field deserialize-compatible.
     #[serde(default)]
     pub suspended: bool,
+    /// BUNYIP-930: optional first + last name. `default` keeps a build
+    /// predating the field parseable (BUNYIP-506 wire-compat convention).
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
