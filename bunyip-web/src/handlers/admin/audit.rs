@@ -70,15 +70,8 @@ pub async fn audit_logs(
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
     let user_id = q.user_id.as_deref();
-    let result = admin_api::audit_logs(
-        &st.api,
-        c.forward.as_deref(),
-        page,
-        50,
-        admin_only,
-        user_id,
-    )
-    .await;
+    let result =
+        admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only, user_id).await;
     let fetch_error = result.as_ref().err().cloned();
     let data = result.ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
