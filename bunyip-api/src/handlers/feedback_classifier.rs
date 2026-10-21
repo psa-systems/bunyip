@@ -133,20 +133,19 @@ fn message_has_url(message: &str) -> bool {
 
 fn message_has_url_inner(message: &str) -> Option<bool> {
     let m = message.to_ascii_lowercase();
-    let marker_http = m.find("http://");
-    let marker_https = m.find("https://");
-    let marker = match (marker_http, marker_https) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) | (None, Some(a)) => Some(a),
-        (None, None) => None,
-    }?;
-    let after = &m[marker..];
-    let scheme_end = after.find("://")? + 3;
-    Some(
-        after
-            .get(scheme_end..scheme_end + 1)
-            .is_some_and(|c| !c.chars().all(char::is_whitespace)),
-    )
+    for scheme in ["http://", "https://"] {
+        let mut offset = 0;
+        while let Some(found) = m[offset..].find(scheme) {
+            let scheme_end = offset + found + scheme.len();
+            if m.get(scheme_end..scheme_end + 1)
+                .is_some_and(|c| !c.chars().all(char::is_whitespace))
+            {
+                return Some(true);
+            }
+            offset = scheme_end;
+        }
+    }
+    Some(false)
 }
 
 /// Signal 3: the submitter's IP resolved ASN name matches a hosting
@@ -351,6 +350,16 @@ mod tests {
         assert!(message_has_url("look at https://cheap.example"));
         assert!(!message_has_url("look at example.com"));
         assert!(!message_has_url("look at https:// nothing"));
+    }
+
+    /// A bare scheme marker followed by whitespace does not shadow a real
+    /// URL later in the same message; every marker is scanned, not just
+    /// the first one found.
+    #[test]
+    fn url_check_scans_every_marker() {
+        assert!(message_has_url(
+            "https:// nothing but also http://spam.cheap/x really"
+        ));
     }
 
     /// Without any inputs, the classifier returns clean.
