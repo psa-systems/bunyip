@@ -916,7 +916,7 @@ pub async fn add_rate_limit_whitelist(
     // kind + value already present) is idempotent and does not log twice.
     if let Some(row) = &row {
         let log = CreateAuditLog::new(AuditAction::AdminRateLimitWhitelistAdded)
-            .with_actor(admin.0.sub.clone(), &admin.0.email, &admin.0.role)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
             .with_resource("rate_limit_whitelist", row.id)
             .with_metadata(serde_json::json!({
                 "kind": row.kind,
@@ -952,7 +952,7 @@ pub async fn delete_rate_limit_whitelist(
 
     if let Some(row) = existing {
         let log = CreateAuditLog::new(AuditAction::AdminRateLimitWhitelistRemoved)
-            .with_actor(admin.0.sub.clone(), &admin.0.email, &admin.0.role)
+            .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
             .with_resource("rate_limit_whitelist", row.id)
             .with_metadata(serde_json::json!({
                 "kind": row.kind,
