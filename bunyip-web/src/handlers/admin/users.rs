@@ -1163,7 +1163,10 @@ pub async fn user_detail(
         1,
         25,
         false,
-        Some(target.id.as_str()),
+        admin_api::AuditFilters {
+            user_id: Some(target.id.as_str()),
+            ..Default::default()
+        },
     )
     .await;
     let audit_error = fetched_audit.as_ref().err().cloned();
