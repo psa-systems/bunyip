@@ -750,7 +750,12 @@ pub async fn list_feedback(
     }
     // BUNYIP-938: canonical tag set, same vocabulary submit_feedback
     // accepts (see normalize_tags: Bug / Feature / Flow / Idea).
-    if let Some(t) = query.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(t) = query
+        .tag
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         match t {
             "Bug" | "Feature" | "Flow" | "Idea" => {}
             _ => {
@@ -768,7 +773,11 @@ pub async fn list_feedback(
     }
 
     let filters = crate::repositories::feedback::FeedbackFilters {
-        tag: query.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        tag: query
+            .tag
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
         has_attachment: query.has_attachment,
         has_response: query.has_response,
         search: query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()),
