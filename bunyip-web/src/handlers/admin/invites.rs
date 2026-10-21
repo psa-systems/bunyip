@@ -20,7 +20,6 @@ use crate::util::{rel_time, urlenc};
 use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
 use crate::web::{redirect_cookies, AppState};
 
-use super::PageQuery;
 
 /// The invite's current state, derived the same way the API model does
 /// (`AdminInvite::is_revoked` / `is_accepted` / `is_expired`), since the wire
@@ -94,23 +93,76 @@ fn invite_create_card() -> Markup {
 /// AdminUser-guarded like the other admin pages; no super-admin restriction.
 /// Listing needs no verification (it grants nothing); sending and revoking
 /// are gated on verification, matching the API's `VerifiedAdminUser` guard.
+/// BUNYIP-939: query for the invites list. Dedicated struct so adding a
+/// filter here does not reshape `PageQuery` (used across the admin area).
+#[derive(Deserialize, Default)]
+pub struct InvitesQuery {
+    pub page: Option<u32>,
+    pub status: Option<String>,
+    pub email: Option<String>,
+}
+
+/// BUNYIP-939: the four derived states invites classify into. Mirrors the
+/// row renderer's classification and the API's `list_filtered` SQL.
+const INVITE_STATUS_OPTIONS: &[(&str, &str)] = &[
+    ("", "All statuses"),
+    ("pending", "Pending"),
+    ("accepted", "Accepted"),
+    ("revoked", "Revoked"),
+    ("expired", "Expired"),
+];
+
+fn invite_filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
+    html! {
+        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" onchange="this.form.submit()" {
+            @for (value, label) in options {
+                option value=(value) selected[current == *value] { (label) }
+            }
+        }
+    }
+}
+
+fn invites_pager_base(q: &InvitesQuery) -> String {
+    let mut params: Vec<String> = Vec::new();
+    if let Some(s) = q.status.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("status={}", urlenc(s)));
+    }
+    if let Some(e) = q.email.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("email={}", urlenc(e)));
+    }
+    if params.is_empty() {
+        "/admin/invites".to_string()
+    } else {
+        format!("/admin/invites?{}", params.join("&"))
+    }
+}
+
 pub async fn invites(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<InvitesQuery>,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
-    let data = admin_api::admin_invites(&st.api, c.forward.as_deref(), page, 20).await;
+    let filters = admin_api::InviteFilters {
+        status: q.status.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        email: q.email.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    };
+    let data =
+        admin_api::admin_invites(&st.api, c.forward.as_deref(), page, 20, filters.clone()).await;
     let fetch_error = data.as_ref().err().cloned();
     let reachable = data.is_ok();
     let (items, total, total_pages) = match data {
         Ok(p) => (p.items, p.total, p.total_pages),
         Err(_) => (Vec::new(), 0, 1),
     };
+
+    let any_filter_active = filters.status.is_some() || filters.email.is_some();
+    let email_value = q.email.as_deref().unwrap_or("");
+    let pager_base = invites_pager_base(&q);
 
     let content = html! {
         div class="space-y-6" {
@@ -120,6 +172,16 @@ pub async fn invites(
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("mail", "h-5 w-5 text-primary-text")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Invites" } }
                     @if reachable { p class="text-sm text-muted-foreground" { (total) " total." } }
+                    // BUNYIP-939: filter chips. Status is a dropdown chip;
+                    // email is a text input bounded at 128 server-side.
+                    form method="get" action="/admin/invites" class="mt-4 flex flex-wrap items-center gap-2" {
+                        (invite_filter_select("status", q.status.as_deref().unwrap_or(""), INVITE_STATUS_OPTIONS))
+                        input type="text" name="email" value=(email_value) placeholder="Filter by email..." maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
+                        @if any_filter_active {
+                            a href="/admin/invites" class=(button_class("ghost", "sm", "")) { "Clear" }
+                        }
+                    }
                 }
                 div class="p-6 pt-0" {
                     @if let Some(e) = &fetch_error {
@@ -128,7 +190,7 @@ pub async fn invites(
                         (empty_state("mail", "No invites yet.", None))
                     } @else {
                         div { @for inv in &items { (invite_row(inv)) } }
-                        (pager("/admin/invites", "page", page, total_pages))
+                        (pager(&pager_base, "page", page, total_pages))
                     }
                 }
             }

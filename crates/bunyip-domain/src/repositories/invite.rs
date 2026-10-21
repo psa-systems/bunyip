@@ -125,28 +125,72 @@ impl InviteRepository {
         page: i32,
         per_page: i32,
     ) -> Result<(Vec<AdminInvite>, i64), AppError> {
+        Self::list_filtered(pool, page, per_page, None, None).await
+    }
+
+    /// BUNYIP-939: paginated list with `status` (pending / accepted /
+    /// revoked / expired) and `email` substring. The caller validates
+    /// `status` against the closed set and caps `email` at 128 chars
+    /// before passing them in.
+    pub async fn list_filtered(
+        pool: &sqlx::PgPool,
+        page: i32,
+        per_page: i32,
+        status: Option<&str>,
+        email: Option<&str>,
+    ) -> Result<(Vec<AdminInvite>, i64), AppError> {
+        use sqlx::QueryBuilder;
+
         let offset = (page - 1) * per_page;
 
-        let invites = sqlx::query_as::<_, AdminInvite>(
-            r#"
-            SELECT * FROM admin_invites
-            ORDER BY created_at DESC
-            LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(per_page as i64)
-        .bind(offset as i64)
-        .fetch_all(pool)
-        .await?;
+        // Derived-state SQL mirrors the web renderer's classification:
+        //   pending  = not used, not revoked, not expired
+        //   accepted = used
+        //   revoked  = revoked
+        //   expired  = not used, not revoked, past expires_at
+        let status_predicate: Option<&'static str> = match status {
+            Some("pending") => {
+                Some("used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()")
+            }
+            Some("accepted") => Some("used_at IS NOT NULL"),
+            Some("revoked") => Some("revoked_at IS NOT NULL"),
+            Some("expired") => {
+                Some("used_at IS NULL AND revoked_at IS NULL AND expires_at <= NOW()")
+            }
+            _ => None,
+        };
 
-        let total: (i64,) = sqlx::query_as(
-            r#"
-            SELECT COUNT(*) FROM admin_invites
-            "#,
-        )
-        .fetch_one(pool)
-        .await?;
+        fn push_where<'a>(
+            qb: &mut QueryBuilder<'a, sqlx::Postgres>,
+            status_predicate: Option<&'static str>,
+            email: Option<&'a str>,
+        ) {
+            let mut sep = " WHERE ";
+            if let Some(p) = status_predicate {
+                qb.push(sep).push(p);
+                sep = " AND ";
+            }
+            if let Some(e) = email {
+                let pattern = format!("%{e}%");
+                qb.push(sep).push("email ILIKE ").push_bind(pattern);
+            }
+        }
 
+        let mut q = QueryBuilder::new("SELECT * FROM admin_invites");
+        push_where(&mut q, status_predicate, email);
+        q.push(" ORDER BY created_at DESC LIMIT ")
+            .push_bind(per_page as i64)
+            .push(" OFFSET ")
+            .push_bind(offset as i64);
+
+        let mut c = QueryBuilder::new("SELECT COUNT(*) FROM admin_invites");
+        push_where(&mut c, status_predicate, email);
+
+        let invites = q
+            .build_query_as::<AdminInvite>()
+            .fetch_all(pool)
+            .await?;
+        let total: (i64,) = c.build_query_as().fetch_one(pool).await?;
         Ok((invites, total.0))
     }
 }
