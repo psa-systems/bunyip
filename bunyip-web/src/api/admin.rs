@@ -956,24 +956,45 @@ pub async fn delete_rate_limit_config(
 
 // --- feedback ---------------------------------------------------------------
 
+/// BUNYIP-938: filter parameters for the admin feedback list. Grouped so
+/// adding a filter does not reshape every call site.
+#[derive(Debug, Default, Clone)]
+pub struct FeedbackFilters<'a> {
+    pub tag: Option<&'a str>,
+    pub has_attachment: Option<bool>,
+    pub has_response: Option<bool>,
+    pub q: Option<&'a str>,
+}
+
 /// Feedback list bucketed by admin tab (BUNYIP-92). Bucket strings map
 /// 1:1 to the API's accepted set: `active` (default, excludes closed +
 /// spam), `closed` (closed and not spam), `spam` (is_spam=true, any
 /// status). The `archive` view has its own endpoint.
+///
+/// BUNYIP-938: additionally filters by tag / has_attachment /
+/// has_response / q (text search).
 pub async fn feedback(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
     bucket: &str,
+    filters: FeedbackFilters<'_>,
 ) -> Result<PaginatedResponse<AdminFeedbackSummary>, ApiError> {
-    parse(
-        api.get(
-            &format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}"),
-            cookie,
-        )
-        .await?,
-    )
+    let mut path = format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}");
+    if let Some(tag) = filters.tag {
+        path.push_str(&format!("&tag={}", urlenc(tag)));
+    }
+    if let Some(has_attachment) = filters.has_attachment {
+        path.push_str(&format!("&has_attachment={has_attachment}"));
+    }
+    if let Some(has_response) = filters.has_response {
+        path.push_str(&format!("&has_response={has_response}"));
+    }
+    if let Some(q) = filters.q {
+        path.push_str(&format!("&q={}", urlenc(q)));
+    }
+    parse(api.get(&path, cookie).await?)
 }
 
 pub async fn update_feedback_status(

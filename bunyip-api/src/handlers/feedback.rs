@@ -707,11 +707,24 @@ pub struct ListFeedbackQuery {
     pub per_page: Option<i32>,
     /// BUNYIP-92: tab-aware filtering. Accepts `active` / `closed` /
     /// `spam`. The repository layer maps each value to a static SQL
-    /// predicate; unknown values produce an unfiltered list (preserves
-    /// pre-BUNYIP-92 behaviour for any caller that does not yet pass
-    /// it). The `archive` view has its own endpoint and does not enter
-    /// here.
+    /// predicate; unknown values are refused here (not silently
+    /// dropped). The `archive` view has its own endpoint and does not
+    /// enter here.
     pub bucket: Option<String>,
+    /// BUNYIP-938: tag filter. One tag at a time; validated against the
+    /// canonical set the submit path accepts (Bug / Feature / Flow /
+    /// Idea).
+    pub tag: Option<String>,
+    /// BUNYIP-938: `true` keeps only rows with at least one attachment,
+    /// `false` keeps only rows with none, absent means no filter.
+    pub has_attachment: Option<bool>,
+    /// BUNYIP-938: `true` keeps only rows with a non-blank admin
+    /// response, `false` keeps only rows without one, absent means no
+    /// filter.
+    pub has_response: Option<bool>,
+    /// BUNYIP-938: free-text search over subject + message + email.
+    /// 128-char cap; longer is a 400.
+    pub q: Option<String>,
 }
 
 pub async fn list_feedback(
@@ -724,10 +737,6 @@ pub async fn list_feedback(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
 
-    // Validate the bucket value against the known set so we can hand it
-    // straight through to the repository; an unknown value here would
-    // silently fall through to the no-filter branch and re-expose the
-    // pre-BUNYIP-92 spam-in-active-queue bug.
     if let Some(b) = query.bucket.as_deref() {
         match b {
             "active" | "closed" | "spam" => {}
@@ -739,9 +748,40 @@ pub async fn list_feedback(
             }
         }
     }
+    // BUNYIP-938: canonical tag set, same vocabulary submit_feedback
+    // accepts (see normalize_tags: Bug / Feature / Flow / Idea).
+    if let Some(t) = query.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        match t {
+            "Bug" | "Feature" | "Flow" | "Idea" => {}
+            _ => {
+                return Err(AppError::validation(
+                    "tag",
+                    "Tag must be one of Bug|Feature|Flow|Idea",
+                ));
+            }
+        }
+    }
+    if let Some(s) = query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if s.len() > 128 {
+            return Err(AppError::validation("q", "must be at most 128 characters"));
+        }
+    }
 
-    let (feedback, total) =
-        FeedbackRepository::list_paginated(&pool, page, per_page, query.bucket.as_deref()).await?;
+    let filters = crate::repositories::feedback::FeedbackFilters {
+        tag: query.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        has_attachment: query.has_attachment,
+        has_response: query.has_response,
+        search: query.q.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    };
+
+    let (feedback, total) = crate::repositories::feedback::list_paginated_filtered(
+        &pool,
+        page,
+        per_page,
+        query.bucket.as_deref(),
+        filters,
+    )
+    .await?;
 
     let items = feedback
         .into_iter()

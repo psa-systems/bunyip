@@ -20,6 +20,38 @@ use crate::web::{redirect_cookies, AppState};
 use super::with_attachment_hardening;
 use super::PageQuery;
 
+/// BUNYIP-938: query shape for the three live feedback tabs (Active /
+/// Closed / Spam). The Archive view has its own handler and its own
+/// query. Dedicated struct so adding filters here does not force every
+/// pager in the admin area to carry them.
+#[derive(Deserialize, Default, Clone)]
+pub struct FeedbackListQuery {
+    pub page: Option<u32>,
+    /// Tag filter (one at a time). Validated server-side against Bug /
+    /// Feature / Flow / Idea; anything else is a 400.
+    pub tag: Option<String>,
+    /// `yes` keeps only rows with at least one attachment, `no` only
+    /// those with none, anything else means no filter.
+    pub attachment: Option<String>,
+    /// `yes` keeps only rows with an admin response, `no` only those
+    /// without, anything else means no filter.
+    pub response: Option<String>,
+    /// Free-text search (subject / message / email). 128-char cap on
+    /// the API.
+    pub q: Option<String>,
+}
+
+/// Parse the tri-state `attachment` / `response` query values into
+/// Option<bool>. "yes" -> Some(true), "no" -> Some(false), anything else
+/// -> None (no filter).
+fn tri_state(value: Option<&str>) -> Option<bool> {
+    match value.map(str::trim).unwrap_or("") {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Top-of-page tabs that bucket the feedback queue by triage state.
 /// Active is the working queue (new/reviewed/responded, not spam).
 /// Closed is the resolved bin (status=closed, not spam). Spam is
@@ -103,7 +135,7 @@ fn feedback_tabs(current: FeedbackTab) -> Markup {
 pub async fn feedback(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<FeedbackListQuery>,
 ) -> Response {
     render_feedback_list(st, headers, q, FeedbackTab::Active).await
 }
@@ -113,7 +145,7 @@ pub async fn feedback(
 pub async fn feedback_closed(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<FeedbackListQuery>,
 ) -> Response {
     render_feedback_list(st, headers, q, FeedbackTab::Closed).await
 }
@@ -124,15 +156,70 @@ pub async fn feedback_closed(
 pub async fn feedback_spam(
     State(st): State<AppState>,
     headers: HeaderMap,
-    Query(q): Query<PageQuery>,
+    Query(q): Query<FeedbackListQuery>,
 ) -> Response {
     render_feedback_list(st, headers, q, FeedbackTab::Spam).await
+}
+
+/// Tag options for the filter chip. Mirrors `normalize_tags`'s canonical
+/// set in the submit path.
+const FEEDBACK_TAG_OPTIONS: &[(&str, &str)] = &[
+    ("", "All tags"),
+    ("Bug", "Bug"),
+    ("Feature", "Feature"),
+    ("Flow", "Flow"),
+    ("Idea", "Idea"),
+];
+
+/// Tri-state options for the Attachments / Response chips.
+const TRI_STATE_OPTIONS_ATTACHMENT: &[(&str, &str)] = &[
+    ("", "Any attachment"),
+    ("yes", "With attachments"),
+    ("no", "Without attachments"),
+];
+const TRI_STATE_OPTIONS_RESPONSE: &[(&str, &str)] = &[
+    ("", "Any response"),
+    ("yes", "With response"),
+    ("no", "Without response"),
+];
+
+fn feedback_filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
+    html! {
+        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" onchange="this.form.submit()" {
+            @for (value, label) in options {
+                option value=(value) selected[current == *value] { (label) }
+            }
+        }
+    }
+}
+
+/// Build the pager base URL carrying every active filter on this tab.
+/// The pager appends `&page=N`.
+fn feedback_pager_base(tab: FeedbackTab, q: &FeedbackListQuery) -> String {
+    let mut params: Vec<String> = Vec::new();
+    if let Some(t) = q.tag.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("tag={}", urlenc(t)));
+    }
+    if let Some(a) = q.attachment.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("attachment={}", urlenc(a)));
+    }
+    if let Some(r) = q.response.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("response={}", urlenc(r)));
+    }
+    if let Some(s) = q.q.as_deref().filter(|s| !s.is_empty()) {
+        params.push(format!("q={}", urlenc(s)));
+    }
+    if params.is_empty() {
+        tab.path().to_string()
+    } else {
+        format!("{}?{}", tab.path(), params.join("&"))
+    }
 }
 
 async fn render_feedback_list(
     st: AppState,
     headers: HeaderMap,
-    q: PageQuery,
+    q: FeedbackListQuery,
     tab: FeedbackTab,
 ) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -140,7 +227,21 @@ async fn render_feedback_list(
         Err(r) => return r,
     };
     let page = q.page.unwrap_or(1).max(1);
-    let result = admin_api::feedback(&st.api, c.forward.as_deref(), page, 20, tab.bucket()).await;
+    let filters = admin_api::FeedbackFilters {
+        tag: q.tag.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+        has_attachment: tri_state(q.attachment.as_deref()),
+        has_response: tri_state(q.response.as_deref()),
+        q: q.q.as_deref().map(str::trim).filter(|s| !s.is_empty()),
+    };
+    let result = admin_api::feedback(
+        &st.api,
+        c.forward.as_deref(),
+        page,
+        20,
+        tab.bucket(),
+        filters.clone(),
+    )
+    .await;
     let fetch_error = result.as_ref().err().cloned();
     let data = result.ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
@@ -153,6 +254,13 @@ async fn render_feedback_list(
         FeedbackTab::Archive => ("Archive", "Archive is empty."),
     };
 
+    let pager_base = feedback_pager_base(tab, &q);
+    let any_filter_active = filters.tag.is_some()
+        || filters.has_attachment.is_some()
+        || filters.has_response.is_some()
+        || filters.q.is_some();
+    let search_value = q.q.as_deref().unwrap_or("");
+
     let content = html! {
         div class="space-y-6" {
             div class="flex items-start justify-between gap-4" {
@@ -161,7 +269,21 @@ async fn render_feedback_list(
             }
             (feedback_tabs(tab))
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
-                div class="flex flex-col space-y-1.5 p-6" { h3 class="text-2xl font-semibold leading-none tracking-tight" { (section_title) } }
+                div class="flex flex-col space-y-1.5 p-6" {
+                    h3 class="text-2xl font-semibold leading-none tracking-tight" { (section_title) }
+                    // BUNYIP-938: filter chips. One form wraps the row so a
+                    // submit on any chip carries every filter to the server.
+                    form method="get" action=(tab.path()) class="mt-4 flex flex-wrap items-center gap-2" {
+                        (feedback_filter_select("tag", q.tag.as_deref().unwrap_or(""), FEEDBACK_TAG_OPTIONS))
+                        (feedback_filter_select("attachment", q.attachment.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_ATTACHMENT))
+                        (feedback_filter_select("response", q.response.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_RESPONSE))
+                        input type="text" name="q" value=(search_value) placeholder="Search subject, message, email..." maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
+                        @if any_filter_active {
+                            a href=(tab.path()) class=(button_class("ghost", "sm", "")) { "Clear" }
+                        }
+                    }
+                }
                 div class="p-6 pt-0" {
                     @if let Some(e) = &fetch_error {
                         (error_box_for("Could not reach the API to load feedback.", e))
@@ -174,7 +296,7 @@ async fn render_feedback_list(
                             }
                         }
                     }
-                    (pager(tab.path(), "page", page, total_pages))
+                    (pager(&pager_base, "page", page, total_pages))
                 }
             }
         }
