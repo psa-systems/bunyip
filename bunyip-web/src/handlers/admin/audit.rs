@@ -244,7 +244,7 @@ pub async fn audit_logs(
                         (filter_select("action", q.action.as_deref().unwrap_or(""), ACTION_OPTIONS))
                         (filter_select("severity", q.severity.as_deref().unwrap_or(""), SEVERITY_OPTIONS))
                         (filter_select("since", q.since.as_deref().unwrap_or(""), SINCE_OPTIONS))
-                        input type="text" name="q" value=(search_value) placeholder="Search email or resource id..." maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
+                        input type="text" name="q" value=(search_value) placeholder="Search email or resource id…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if filters.action.is_some() || filters.severity.is_some() || filters.since.is_some() || filters.q.is_some() {
                             @let clear = pager_base(&AuditQuery { user_id: q.user_id.clone(), admin_only: q.admin_only.clone(), ..Default::default() }, admin_only);
