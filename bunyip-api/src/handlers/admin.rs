@@ -1779,6 +1779,22 @@ pub struct SystemHealth {
     pub database: HealthStatus,
     pub uptime_seconds: u64,
     pub version: String,
+    /// BUNYIP-931: short git commit hash the binary was built from, from
+    /// `build.rs`'s `GIT_COMMIT` env. `"unknown"` for a local build with no
+    /// git context (same fallback the build script emits).
+    pub git_commit: String,
+    /// BUNYIP-931: `git describe --tags --always --dirty` at build time.
+    /// On a tagged commit this matches the release tag (`v0.19.0`);
+    /// otherwise it includes a commit count plus the short hash.
+    pub git_tag: String,
+    /// BUNYIP-931: UTC ISO-8601 timestamp of the build, from `build.rs`'s
+    /// `BUILD_DATE` env.
+    pub build_date: String,
+    /// BUNYIP-931: live Postgres connection pool size (`PgPool::size`) and
+    /// idle count (`PgPool::num_idle`). A pool near its ceiling under light
+    /// load points at a connection leak before `acquire` starts timing out.
+    pub db_pool_size: u32,
+    pub db_pool_idle: usize,
     /// BUNYIP-474: age/staleness of the offline IP datasets (IP2Location for
     /// login country, IP2Proxy for ASN/VPN enrichment), so a missed refresh is
     /// visible to an admin.
@@ -1999,6 +2015,11 @@ pub async fn get_system_health(
         database: db_health,
         uptime_seconds: server_start.elapsed().as_secs(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        git_commit: env!("GIT_COMMIT").to_string(),
+        git_tag: env!("GIT_TAG").to_string(),
+        build_date: env!("BUILD_DATE").to_string(),
+        db_pool_size: pool.size(),
+        db_pool_idle: pool.num_idle(),
         datasets,
     };
 
