@@ -1776,8 +1776,8 @@ mod autofocus_tests {
     //! default document focus.
 
     use super::{
-        invite_password_card, login_content, magic_form, register_card, reset_confirm_card,
-        reset_form, twofa_card, RegisterErrors,
+        invite_password_card, login_approval_card, login_content, magic_form, register_card,
+        reset_confirm_card, reset_form, twofa_card, RegisterErrors,
     };
 
     fn autofocus_count(html: &str) -> usize {
@@ -1817,6 +1817,7 @@ mod autofocus_tests {
             &invite_password_card("tok", "user@example.com", None).into_string(),
             "password",
         );
+        assert_focuses(&login_approval_card(None, None).into_string(), "code");
     }
 
     /// The two variants of the two-factor challenge: the default six-digit
@@ -1873,6 +1874,10 @@ mod autofocus_tests {
         // attribute has to survive the error path too.
         assert_focuses(
             &twofa_card(Some("Invalid code."), None, false).into_string(),
+            "code",
+        );
+        assert_focuses(
+            &login_approval_card(Some("Invalid code."), None).into_string(),
             "code",
         );
         assert_focuses(
