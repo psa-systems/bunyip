@@ -306,7 +306,11 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
                     span class="bg-background px-2 text-muted-foreground" { "Or continue with" }
                 }
             }
-            a href="/magic-link" class=(button_class("outline", "default", "mt-4 w-full")) { "Sign in with Magic Link" }
+            // BUNYIP-947 F10: carry the same ?redirect= target the password
+            // form preserves, so choosing magic-link doesn't drop the OIDC
+            // return-URL.
+            a href=(format!("/magic-link?redirect={}", urlencoding::encode(redirect)))
+                class=(button_class("outline", "default", "mt-4 w-full")) { "Sign in with Magic Link" }
             // BUNYIP-574: the two methods differ in email verification, so say so.
             p class="mt-3 text-center text-xs text-muted-foreground" {
                 "A magic link verifies your email as you sign in. Signing up with a password verifies it in a separate step."
@@ -697,6 +701,9 @@ pub async fn register_post(
 #[derive(Deserialize)]
 pub struct TokenQuery {
     pub token: Option<String>,
+    /// BUNYIP-947 F10: carries the original `?redirect=` through magic-link
+    /// sign-in, matching what the password form already preserves.
+    pub redirect: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -743,12 +750,19 @@ pub async fn magic_link_get(
     Query(q): Query<TokenQuery>,
 ) -> Response {
     if let Some(token) = q.token {
+        // BUNYIP-947 F10: preserve the same ?redirect= target the password
+        // path carries, instead of hardcoding "/dashboard".
+        let target = safe_redirect(q.redirect.as_deref(), &st.cfg.oidc_issuer);
         return match auth_api::verify_magic_link(&st.api, &token).await {
-            Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies("/dashboard", &cookies),
+            Ok((LoginOutcome::SignedIn(_), cookies)) => redirect_cookies(&target, &cookies),
             Ok((LoginOutcome::TwoFactorRequired { challenge_token }, mut cookies)) => {
                 let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
                 cookies.push(bunyip_2fa_cookie_set(secure, &challenge_token));
-                redirect_cookies("/login/2fa", &cookies)
+                let path = match q.redirect.as_deref().filter(|s| !s.is_empty()) {
+                    Some(r) => format!("/login/2fa?redirect={}", urlencoding::encode(r)),
+                    None => "/login/2fa".to_string(),
+                };
+                redirect_cookies(&path, &cookies)
             }
             Err(e) => {
                 let card = auth_card(
@@ -1394,6 +1408,112 @@ mod safe_redirect_tests {
             safe_redirect(Some("javascript:alert(1)"), ISSUER),
             "/dashboard"
         );
+    }
+}
+
+/// BUNYIP-947 F10: `magic_link_get` against a recording stand-in for
+/// bunyip-api, proving the `?redirect=` query param survives through
+/// `safe_redirect` to the final redirect, matching the password path.
+#[cfg(test)]
+mod magic_link_redirect_tests {
+    use std::net::SocketAddr;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use axum::routing::get;
+    use axum::Router;
+    use serde_json::json;
+    use tower::ServiceExt;
+
+    use crate::handlers::unreachable_api_state;
+
+    /// Answers `/v1/auth/magic-link/verify` with a signed-in user for any
+    /// token, so the handler reaches its redirect-resolution branch.
+    fn app(api_url: &str) -> Router {
+        let state = crate::web::AppState {
+            api: crate::api::Api::new(api_url),
+            ..unreachable_api_state()
+        };
+        Router::new()
+            .route("/magic-link", get(super::magic_link_get))
+            .with_state(state)
+    }
+
+    async fn mock_api() -> String {
+        let user = json!({
+            "id": "u1",
+            "email": "member@example.com",
+            "role": "subscriber",
+            "email_verified": true,
+            "two_factor_enabled": false,
+        });
+        let router = Router::new().route(
+            "/v1/auth/magic-link/verify",
+            axum::routing::post(move || {
+                let user = user.clone();
+                async move { axum::Json(json!({ "data": { "user": user } })) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener.local_addr().expect("the mock API has an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
+    fn request(uri: &str) -> Request<Body> {
+        let mut req = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request builds");
+        req.extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
+        req
+    }
+
+    #[tokio::test]
+    async fn redirect_target_survives_through_safe_redirect() {
+        let api_url = mock_api().await;
+        let response = app(&api_url)
+            .oneshot(request("/magic-link?token=abc&redirect=/foo"))
+            .await
+            .expect("the router serves the request");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("a successful verify redirects")
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "/foo");
+    }
+
+    #[tokio::test]
+    async fn no_redirect_param_falls_back_to_dashboard() {
+        let api_url = mock_api().await;
+        let response = app(&api_url)
+            .oneshot(request("/magic-link?token=abc"))
+            .await
+            .expect("the router serves the request");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("a successful verify redirects")
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "/dashboard");
     }
 }
 
