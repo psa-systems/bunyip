@@ -283,7 +283,10 @@ mod tests {
     #[test]
     fn stats_card_renders_uptime_and_pool_counts() {
         let html = stats_card(&sample_health()).into_string();
-        assert!(html.contains("1d 1h"), "25h uptime formats as 1d 1h: {html}");
+        assert!(
+            html.contains("1d 1h"),
+            "25h uptime formats as 1d 1h: {html}"
+        );
         assert!(html.contains("7"), "idle count: {html}");
         assert!(html.contains("10"), "pool size: {html}");
     }
