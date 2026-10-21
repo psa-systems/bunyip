@@ -93,18 +93,13 @@ fn check_sender_mimicry(input: &SpamClassifierInput<'_>) -> Option<String> {
     let recipient_apex = recipient_apex.to_ascii_lowercase();
     // First-party: the sender's domain IS the recipient apex, or a
     // subdomain of it. Clean.
-    if domain == recipient_apex
-        || domain.ends_with(&format!(".{recipient_apex}"))
-    {
+    if domain == recipient_apex || domain.ends_with(&format!(".{recipient_apex}")) {
         return None;
     }
     // Mimic iff a dot-separated segment of the sender's domain contains
     // the recipient's registrable word. `search-psa.systems` has a
     // segment `search-psa` that contains `psa`; `example.com` does not.
-    if !domain
-        .split('.')
-        .any(|seg| seg.contains(&recipient_word))
-    {
+    if !domain.split('.').any(|seg| seg.contains(&recipient_word)) {
         return None;
     }
     Some(format!(
@@ -249,7 +244,10 @@ mod tests {
             Some("Comcast Cable Communications"),
             Some("psa"),
         ));
-        assert!(got.is_none(), "legitimate submission does not flag: {got:?}");
+        assert!(
+            got.is_none(),
+            "legitimate submission does not flag: {got:?}"
+        );
     }
 
     /// A known-sender submission (same domain as the recipient) with four
@@ -281,11 +279,7 @@ mod tests {
     /// domain flags on the URL+tags signal (mimicry does not fire).
     #[test]
     fn hosting_asn_plus_urls_and_tags_flags_on_urls_signal() {
-        let tags = vec![
-            "Bug".to_string(),
-            "Feature".to_string(),
-            "Flow".to_string(),
-        ];
+        let tags = vec!["Bug".to_string(), "Feature".to_string(), "Flow".to_string()];
         let got = classify_feedback_spam(&input(
             Some("promo@unrelated.example"),
             "Check out https://buylinks.cheap for backlinks!",

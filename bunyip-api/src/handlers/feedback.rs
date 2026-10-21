@@ -41,9 +41,7 @@ pub(super) fn deployment_registrable_word(base_url: &str) -> Option<String> {
     if parts.len() < 2 {
         return None;
     }
-    parts
-        .get(parts.len() - 2)
-        .map(|w| w.to_ascii_lowercase())
+    parts.get(parts.len() - 2).map(|w| w.to_ascii_lowercase())
 }
 
 /// BUNYIP-934: the deployment's full apex host (`psa.systems` for a
@@ -550,8 +548,8 @@ pub async fn submit_feedback(
     // never un-flags a honeypot hit (short-circuits on OR). The
     // registrable word comes from the deployment's base URL; if no base
     // URL is set (dev standalone) the mimicry signal cannot fire.
-    let classifier_reason = feedback_classifier::classify_feedback_spam(
-        &feedback_classifier::SpamClassifierInput {
+    let classifier_reason =
+        feedback_classifier::classify_feedback_spam(&feedback_classifier::SpamClassifierInput {
             sender_email: email.as_deref(),
             message: &message,
             tags: &tags,
@@ -563,8 +561,7 @@ pub async fn submit_feedback(
             recipient_domain_registrable_word: deployment_registrable_word(&config.email.base_url)
                 .as_deref(),
             recipient_domain_apex: deployment_apex_host(&config.email.base_url).as_deref(),
-        },
-    );
+        });
     let is_spam = honeypot_flagged || classifier_reason.is_some();
 
     if let Some(name) = &name {
@@ -786,10 +783,9 @@ pub async fn get_feedback(
     // row; the admin UI shows it inline so an admin can see WHY the row
     // was flagged before deciding to reverse. Honeypot-only flags have no
     // reason row and read as `null`.
-    let spam_reason =
-        crate::repositories::FeedbackSpamReasonsRepository::find(&pool, feedback.id)
-            .await?
-            .map(|r| r.reason);
+    let spam_reason = crate::repositories::FeedbackSpamReasonsRepository::find(&pool, feedback.id)
+        .await?
+        .map(|r| r.reason);
     let detail = feedback.to_admin_detail(attachments);
     // Attach the reason by converting through JSON so the dunite struct
     // stays untouched. One extra field, same shape otherwise.

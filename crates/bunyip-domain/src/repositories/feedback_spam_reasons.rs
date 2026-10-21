@@ -23,11 +23,7 @@ impl FeedbackSpamReasonsRepository {
     /// Record the classifier verdict for one feedback row. Upsert on
     /// `(feedback_id)` keeps the admin UI stable if a replay (e.g. a demo
     /// seed) re-submits the same id.
-    pub async fn insert(
-        pool: &PgPool,
-        feedback_id: Uuid,
-        reason: &str,
-    ) -> Result<(), AppError> {
+    pub async fn insert(pool: &PgPool, feedback_id: Uuid, reason: &str) -> Result<(), AppError> {
         sqlx::query(
             "INSERT INTO feedback_spam_reasons (feedback_id, reason) \
              VALUES ($1, $2) \
