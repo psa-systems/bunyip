@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::errors::AppError;
+use crate::handlers::feedback_classifier;
 use crate::middleware::{extract_client_ip, AdminUser, VerifiedAdminUser};
 use crate::models::{
     AuditAction, CreateAdminNotification, CreateAuditLog, CreateFeedback, FeedbackStatus,
@@ -22,6 +23,113 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success};
 use crate::services::EmailService;
+
+/// BUNYIP-934: pull the deployment's registrable domain word out of its
+/// base URL. For `https://psa.systems` returns `Some("psa")`, for a
+/// subdomain like `https://app.psa.systems` still returns `Some("psa")`
+/// by taking the second-to-last dot-separated segment. Returns `None` for
+/// an empty base URL (dev standalone) or a shape that cannot be parsed.
+///
+/// Deliberately simple: a public-suffix-aware extraction (handling
+/// `.co.uk` compound suffixes) is a follow-up. The current users are
+/// `.systems`, `.com`, `.io`, `.app`, `.co`, `.net`, `.org`, `.dev` and
+/// `.run`, all single-segment TLDs for which this heuristic matches an
+/// eTLD+1 extraction exactly.
+pub(super) fn deployment_registrable_word(base_url: &str) -> Option<String> {
+    let host = deployment_host(base_url)?;
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    parts.get(parts.len() - 2).map(|w| w.to_ascii_lowercase())
+}
+
+/// BUNYIP-934: the deployment's full apex host (`psa.systems` for a
+/// deployment serving at `https://app.psa.systems`), used by the
+/// mimicry signal to distinguish a legitimate subdomain of the recipient
+/// from a mimicking sender. For a single-segment host (localhost, raw
+/// IP) returns `None`.
+pub(super) fn deployment_apex_host(base_url: &str) -> Option<String> {
+    let host = deployment_host(base_url)?;
+    let parts: Vec<&str> = host.split('.').collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    // Take the last two dot-separated segments. For `psa.systems` returns
+    // `psa.systems`; for `app.psa.systems` returns `psa.systems`.
+    let last_two = &parts[parts.len() - 2..];
+    Some(last_two.join(".").to_ascii_lowercase())
+}
+
+fn deployment_host(base_url: &str) -> Option<String> {
+    let base = base_url.trim();
+    if base.is_empty() {
+        return None;
+    }
+    let host = base
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()?
+        .split(':')
+        .next()?;
+    if host.is_empty() {
+        return None;
+    }
+    Some(host.to_string())
+}
+
+#[cfg(test)]
+mod registrable_word_tests {
+    use super::{deployment_apex_host, deployment_registrable_word};
+
+    #[test]
+    fn apex_host_returns_last_two_segments() {
+        assert_eq!(
+            deployment_apex_host("https://psa.systems").as_deref(),
+            Some("psa.systems")
+        );
+        assert_eq!(
+            deployment_apex_host("https://app.psa.systems/path").as_deref(),
+            Some("psa.systems")
+        );
+        assert_eq!(deployment_apex_host("http://localhost:4401"), None);
+    }
+
+    #[test]
+    fn apex_host_picks_the_registrable_word() {
+        assert_eq!(
+            deployment_registrable_word("https://psa.systems").as_deref(),
+            Some("psa")
+        );
+    }
+
+    #[test]
+    fn subdomain_still_picks_the_registrable_word() {
+        assert_eq!(
+            deployment_registrable_word("https://app.psa.systems/path").as_deref(),
+            Some("psa")
+        );
+    }
+
+    #[test]
+    fn host_with_port_strips_the_port() {
+        assert_eq!(
+            deployment_registrable_word("http://localhost:4401").as_deref(),
+            None
+        );
+        assert_eq!(
+            deployment_registrable_word("http://psa.systems:4401").as_deref(),
+            Some("psa")
+        );
+    }
+
+    #[test]
+    fn empty_or_unparseable_returns_none() {
+        assert_eq!(deployment_registrable_word(""), None);
+        assert_eq!(deployment_registrable_word("psa"), None);
+    }
+}
 
 const MAX_ATTACHMENT_SIZE: usize = 5 * 1024 * 1024;
 const MAX_ATTACHMENTS: usize = 3;
@@ -434,7 +542,27 @@ pub async fn submit_feedback(
         .map(str::trim)
         .unwrap_or_default()
         .to_string();
-    let is_spam = !honeypot.is_empty();
+    let honeypot_flagged = !honeypot.is_empty();
+    // BUNYIP-934: composite classifier. Runs even when the honeypot
+    // already flagged, so the admin UI gets a reason either way, but
+    // never un-flags a honeypot hit (short-circuits on OR). The
+    // registrable word comes from the deployment's base URL; if no base
+    // URL is set (dev standalone) the mimicry signal cannot fire.
+    let classifier_reason =
+        feedback_classifier::classify_feedback_spam(&feedback_classifier::SpamClassifierInput {
+            sender_email: email.as_deref(),
+            message: &message,
+            tags: &tags,
+            // BUNYIP-474 enrichment is per-request upstream; the submit
+            // path does not have the ASN cheaply here yet. Pass `None`
+            // until that wiring lands (follow-up); the other two signals
+            // still fire.
+            ip_asn_name: None,
+            recipient_domain_registrable_word: deployment_registrable_word(&config.email.base_url)
+                .as_deref(),
+            recipient_domain_apex: deployment_apex_host(&config.email.base_url).as_deref(),
+        });
+    let is_spam = honeypot_flagged || classifier_reason.is_some();
 
     if let Some(name) = &name {
         validate_length("name", name, 100)?;
@@ -486,6 +614,14 @@ pub async fn submit_feedback(
 
     if !attachment_parts.is_empty() {
         FeedbackRepository::save_attachments(&pool, feedback.id, attachment_parts).await?;
+    }
+
+    // BUNYIP-934: when the composite classifier flagged, record the reason
+    // so the admin UI can show WHY. Honeypot-only hits do not get a reason
+    // row (the honeypot IS the reason, and the admin UI knows that).
+    if let Some(reason) = &classifier_reason {
+        crate::repositories::FeedbackSpamReasonsRepository::insert(&pool, feedback.id, reason)
+            .await?;
     }
 
     // BUNYIP-411: mirror the request metadata into the audit log so feedback
@@ -643,7 +779,25 @@ pub async fn get_feedback(
         .ok_or_else(|| AppError::not_found("Feedback"))?;
 
     let attachments = FeedbackRepository::find_attachments(&pool, feedback.id).await?;
-    Ok(success(feedback.to_admin_detail(attachments), request_id))
+    // BUNYIP-934: the composite classifier records a reason for a flagged
+    // row; the admin UI shows it inline so an admin can see WHY the row
+    // was flagged before deciding to reverse. Honeypot-only flags have no
+    // reason row and read as `null`.
+    let spam_reason = crate::repositories::FeedbackSpamReasonsRepository::find(&pool, feedback.id)
+        .await?
+        .map(|r| r.reason);
+    let detail = feedback.to_admin_detail(attachments);
+    // Attach the reason by converting through JSON so the dunite struct
+    // stays untouched. One extra field, same shape otherwise.
+    let mut payload = serde_json::to_value(detail)
+        .map_err(|e| AppError::internal(format!("serialize feedback detail: {e}")))?;
+    if let serde_json::Value::Object(ref mut map) = payload {
+        map.insert(
+            "spam_reason".to_string(),
+            serde_json::to_value(spam_reason).unwrap_or(serde_json::Value::Null),
+        );
+    }
+    Ok(success(payload, request_id))
 }
 
 pub async fn respond_to_feedback(

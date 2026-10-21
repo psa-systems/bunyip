@@ -1202,6 +1202,12 @@ pub struct AdminFeedbackDetail {
     pub submitter_ip: Option<String>,
     #[serde(default)]
     pub user_agent: Option<String>,
+    /// BUNYIP-934: short human-readable summary of why the composite
+    /// classifier flagged this row. `None` for a clean row or a
+    /// honeypot-only flag. Rendered inline on the admin detail page so
+    /// an admin reversing the call has context.
+    #[serde(default)]
+    pub spam_reason: Option<String>,
 }
 
 /// Per-file metadata on a feedback detail response. Mirrors bunyip-api's

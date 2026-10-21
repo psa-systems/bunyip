@@ -2975,6 +2975,7 @@ mod rate_limit_management_tests {
             responded_at: None,
             attachments: vec![],
             submitter_ip: Some("203.0.113.7".to_string()),
+            spam_reason: None,
             user_agent: Some("Mozilla/5.0 Firefox/121.0".to_string()),
         };
         let html = super::feedback_detail_view(&detail, super::FeedbackTab::Spam, None, None)
@@ -3010,6 +3011,7 @@ mod rate_limit_management_tests {
             responded_at: Some("2026-08-01T01:00:00Z".to_string()),
             attachments: vec![],
             submitter_ip: None,
+            spam_reason: None,
             user_agent: None,
         };
         let html = feedback_detail_view(
