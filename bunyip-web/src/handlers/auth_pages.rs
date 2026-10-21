@@ -63,6 +63,23 @@ fn bunyip_2fa_cookie_clear(secure: bool) -> String {
     format!("bunyip_2fa=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
 }
 
+/// BUNYIP-944: same TTL/shape as `bunyip_2fa` for the login-approval challenge
+/// token, carried between `/login` (or `/magic-link`) and `/login/approval`.
+const BUNYIP_APPROVAL_COOKIE_MAX_AGE_SECS: u64 = 600;
+
+fn bunyip_approval_cookie_set(secure: bool, challenge_token: &str) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "bunyip_approval={challenge_token}; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age={}",
+        BUNYIP_APPROVAL_COOKIE_MAX_AGE_SECS
+    )
+}
+
+fn bunyip_approval_cookie_clear(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("bunyip_approval=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
+}
+
 /// BUNYIP-323: defense-in-depth clearing cookies emitted by bunyip-web's
 /// own `/logout` handler, independent of whatever bunyip-api returns.
 /// bunyip-api is meant to emit these too (POST /v1/auth/logout was widened
@@ -390,6 +407,17 @@ pub async fn login_post(
             };
             redirect_cookies(&path, &cookies)
         }
+        Ok((LoginOutcome::ApprovalRequired { challenge_token }, mut cookies)) => {
+            let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+            cookies.push(bunyip_approval_cookie_set(secure, &challenge_token));
+            // Carry the original ?redirect= forward so the OIDC return-URL
+            // survives the approval step.
+            let path = match f.redirect.as_deref().filter(|s| !s.is_empty()) {
+                Some(r) => format!("/login/approval?redirect={}", urlencoding::encode(r)),
+                None => "/login/approval".to_string(),
+            };
+            redirect_cookies(&path, &cookies)
+        }
         Err(e) => {
             // public_applications() dropped, per its removal
             // from the public chrome.
@@ -423,8 +451,9 @@ pub async fn logout(
     for defensive in bunyip_auth_cookie_clears(&st.cfg, secure) {
         cleared.push(defensive);
     }
-    // Also drop any pending-2FA cookie.
+    // Also drop any pending-2FA / pending-approval cookie.
     cleared.push(bunyip_2fa_cookie_clear(secure));
+    cleared.push(bunyip_approval_cookie_clear(secure));
     // Logout lands on the public homepage by default: a user who
     // clicked "Logout" wanted to be done, not be shown another login
     // form. Callers that DO want the post-logout login-then-redirect
@@ -750,6 +779,11 @@ pub async fn magic_link_get(
                 cookies.push(bunyip_2fa_cookie_set(secure, &challenge_token));
                 redirect_cookies("/login/2fa", &cookies)
             }
+            Ok((LoginOutcome::ApprovalRequired { challenge_token }, mut cookies)) => {
+                let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+                cookies.push(bunyip_approval_cookie_set(secure, &challenge_token));
+                redirect_cookies("/login/approval", &cookies)
+            }
             Err(e) => {
                 let card = auth_card(
                     "alert-circle",
@@ -1065,6 +1099,99 @@ pub async fn twofa_verify_post(
                     f.redirect.as_deref(),
                     recovery_mode,
                 ),
+            )
+            .await
+        }
+    }
+}
+
+// ===========================================================================
+// Login approval (BUNYIP-944: suspicious-login approval gate, BUNYIP-373)
+// ===========================================================================
+
+#[derive(Deserialize)]
+pub struct LoginApprovalForm {
+    pub code: String,
+    pub redirect: Option<String>,
+}
+
+fn login_approval_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
+    let redirect = redirect.unwrap_or_default();
+    auth_card(
+        "shield",
+        "bg-primary/10 text-primary-text",
+        "Confirm It's You",
+        "We noticed something unusual about this login. Enter the code we emailed you to finish signing in.",
+        html! {
+            form method="post" action="/login/approval" class="space-y-4" {
+                @if !redirect.is_empty() {
+                    input type="hidden" name="redirect" value=(redirect);
+                }
+                @if let Some(e) = error { (error_box(e)) }
+                div class="space-y-2" {
+                    label for="code" class="text-sm font-medium leading-none" { "Verification Code" }
+                    input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" minlength="6" required placeholder="000 000" autocomplete="one-time-code" autofocus data-otp-autosubmit class={ (dashboard_input()) " text-center text-lg tracking-widest" };
+                }
+                (submit_btn("Verify"))
+            }
+            div class="mt-4 flex flex-col items-center gap-2" {
+                (back_link("/login", "Back to sign in"))
+            }
+        },
+    )
+}
+
+pub async fn login_approval_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<RedirectQuery>,
+) -> Response {
+    if cookie_value(&headers, "bunyip_approval").is_none() {
+        let card = auth_card(
+            "shield",
+            "bg-primary/10 text-primary-text",
+            "No pending verification",
+            "Please log in first.",
+            html! {
+                a href="/login" class=(button_class("default", "default", "w-full")) { "Back to sign in" }
+            },
+        );
+        return auth_page(&st, &headers, "Confirm it's you", card).await;
+    }
+    auth_page(
+        &st,
+        &headers,
+        "Confirm it's you",
+        login_approval_card(None, q.redirect.as_deref()),
+    )
+    .await
+}
+
+pub async fn login_approval_post(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Form(f): Form<LoginApprovalForm>,
+) -> Response {
+    let Some(challenge) = cookie_value(&headers, "bunyip_approval") else {
+        return redirect("/login");
+    };
+    let cookie = cookie_of(&headers);
+    let target = safe_redirect(f.redirect.as_deref(), &st.cfg.oidc_issuer);
+    match auth_api::verify_login_approval(&st.api, cookie.as_deref(), &challenge, f.code.trim())
+        .await
+    {
+        Ok((_, mut cookies)) => {
+            let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
+            cookies.push(bunyip_approval_cookie_clear(secure));
+            redirect_cookies(&target, &cookies)
+        }
+        Err(e) => {
+            auth_page(
+                &st,
+                &headers,
+                "Confirm it's you",
+                login_approval_card(Some(&e.user_message()), f.redirect.as_deref()),
             )
             .await
         }
