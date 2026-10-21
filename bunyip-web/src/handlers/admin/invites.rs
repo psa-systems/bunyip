@@ -113,7 +113,7 @@ const INVITE_STATUS_OPTIONS: &[(&str, &str)] = &[
 
 fn invite_filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
     html! {
-        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" onchange="this.form.submit()" {
+        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
             @for (value, label) in options {
                 option value=(value) selected[current == *value] { (label) }
             }
