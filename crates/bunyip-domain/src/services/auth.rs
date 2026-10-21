@@ -2475,6 +2475,17 @@ impl AuthService {
                 self.password.validate_strength(&password)?;
                 self.password
                     .validate_not_contains_email(&password, &invite.email)?;
+
+                // BUNYIP-947 F6: admin-invite acceptance is the highest-
+                // privilege account-creation path and was missed by
+                // BUNYIP-253's breach-corpus backstop; match `register()`.
+                if crate::services::password_breach::is_breached(&password).await {
+                    return Err(AppError::validation(
+                        "password",
+                        "Password has appeared in a known data breach - pick a different one.",
+                    ));
+                }
+
                 let password_hash = argon2_offload::hash_password(password).await?;
 
                 // Create user as admin
@@ -2949,4 +2960,94 @@ mod tests {
 
     // BUNYIP-366: only genuinely public client IPs may drive a country-change
     // alert; loopback / RFC1918 / link-local / unspecified must be ignored.
+
+    /// BUNYIP-947 F6: DB-backed. Skipped when `DATABASE_URL` is unset (matches
+    /// the convention in the repository crates).
+    async fn maybe_pool() -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL").ok()?;
+        PgPool::connect(&url).await.ok()
+    }
+
+    fn test_auth_service(pool: PgPool) -> AuthService {
+        let jwt = JwtService::new(crate::services::JwtConfig::from_secret(
+            "bunyip-947-test-secret-at-least-32-bytes-long",
+            "bunyip-test",
+        ));
+        let tier_config = Arc::new(RwLock::new(TierConfig::from_env()));
+        let email_service = Arc::new(EmailService::new_dev());
+        AuthService::new(
+            pool,
+            jwt,
+            tier_config,
+            None,
+            email_service,
+            None,
+            false,
+            vec![],
+            vec![],
+        )
+    }
+
+    /// BUNYIP-947 F6: `accept_admin_invite`'s new-user branch predates (or was
+    /// missed by) BUNYIP-253's breach-corpus backstop. A password that is
+    /// otherwise valid but reported breached must be refused and must not
+    /// create the account.
+    #[tokio::test]
+    async fn accept_admin_invite_refuses_a_breached_password_and_creates_no_user() {
+        let Some(pool) = maybe_pool().await else {
+            return;
+        };
+        let service = test_auth_service(pool.clone());
+
+        let inviter_email = format!("inviter-947-{}@example.test", Uuid::new_v4().simple());
+        let inviter = UserRepository::create(
+            &pool,
+            CreateUser {
+                email: inviter_email,
+                password_hash: Some("x".to_string()),
+                role: UserRole::Admin,
+            },
+        )
+        .await
+        .expect("seed inviter admin");
+
+        let invite_email = format!("invitee-947-{}@example.test", Uuid::new_v4().simple());
+        let raw_token = generate_secure_token(32);
+        let token_hash = service.hash_token(&raw_token);
+        InviteRepository::create(
+            &pool,
+            CreateAdminInvite {
+                email: invite_email.clone(),
+                token_hash,
+                invited_by: inviter.id,
+                role: "admin".to_string(),
+                expires_at: Utc::now() + Duration::days(1),
+            },
+        )
+        .await
+        .expect("seed invite");
+
+        crate::services::password_breach::test_support::set_breach_override(Some(true));
+        let result = service
+            .accept_admin_invite(
+                raw_token,
+                Some("Correct-Strength-Pw1!".to_string()),
+                None,
+                None,
+            )
+            .await;
+        crate::services::password_breach::test_support::set_breach_override(None);
+
+        assert!(
+            result.is_err(),
+            "a breached password must refuse admin-invite acceptance"
+        );
+        assert!(
+            UserRepository::find_by_email(&pool, &invite_email)
+                .await
+                .expect("query user")
+                .is_none(),
+            "no user row must be created when the password is breached"
+        );
+    }
 }
