@@ -415,6 +415,26 @@ impl AuditSeverity {
             AuditSeverity::Critical => "critical",
         }
     }
+
+    /// BUNYIP-936: parse the stored spelling back. Case-insensitive on the
+    /// enum variants' lowercase form.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "info" => Some(Self::Info),
+            "warning" => Some(Self::Warning),
+            "error" => Some(Self::Error),
+            "critical" => Some(Self::Critical),
+            _ => None,
+        }
+    }
+
+    /// Every variant, for the Admin filter dropdown.
+    pub const ALL: &'static [AuditSeverity] = &[
+        AuditSeverity::Info,
+        AuditSeverity::Warning,
+        AuditSeverity::Error,
+        AuditSeverity::Critical,
+    ];
 }
 
 /// Audit log database model
