@@ -19,9 +19,14 @@ use super::title_case;
 pub struct AuditQuery {
     pub page: Option<u32>,
     pub admin_only: Option<String>,
+    /// BUNYIP-930: narrow the view to one user's actions, from the "View full
+    /// audit log" link on the user detail page.
+    pub user_id: Option<String>,
 }
 
-fn audit_row(log: &AdminAuditLog) -> Markup {
+/// BUNYIP-930: public so the user-detail page can render the user's own
+/// activity using the same row shape as the global audit page.
+pub fn audit_row(log: &AdminAuditLog) -> Markup {
     let ic = match log.action.as_str() {
         a if a.contains("login") => "log-in",
         a if a.contains("membership") || a.contains("payment") => "credit-card",
@@ -64,16 +69,22 @@ pub async fn audit_logs(
     };
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
-    let result = admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only).await;
+    let user_id = q.user_id.as_deref();
+    let result =
+        admin_api::audit_logs(&st.api, c.forward.as_deref(), page, 50, admin_only, user_id).await;
     let fetch_error = result.as_ref().err().cloned();
     let data = result.ok();
     let items = data.as_ref().map(|p| p.items.clone()).unwrap_or_default();
     let total_pages = data.as_ref().map(|p| p.total_pages).unwrap_or(1);
-    let base = if admin_only {
-        "/admin/audit-logs?admin_only=true"
-    } else {
-        "/admin/audit-logs"
+    // BUNYIP-930: the pager carries the filter, so page 2 of a filtered view
+    // stays filtered.
+    let base_owned: String = match (admin_only, user_id) {
+        (true, Some(uid)) => format!("/admin/audit-logs?admin_only=true&user_id={uid}"),
+        (true, None) => "/admin/audit-logs?admin_only=true".to_string(),
+        (false, Some(uid)) => format!("/admin/audit-logs?user_id={uid}"),
+        (false, None) => "/admin/audit-logs".to_string(),
     };
+    let base = base_owned.as_str();
 
     let content = html! {
         div class="space-y-6" {

@@ -156,6 +156,17 @@ impl RateLimitRepository {
         key: &str,
         config: &RateLimitConfig,
     ) -> Result<(i32, bool), AppError> {
+        // BUNYIP-933: whitelist short-circuit. A whitelisted principal
+        // skips every per-route cap: no counter increment, no history
+        // record, no traffic rollup. The check is one indexed point lookup
+        // and only runs for a (kind:value) shaped key, so the common path
+        // for a non-whitelisted request pays nothing it did not already.
+        if super::rate_limit_whitelist::RateLimitWhitelistRepository::is_whitelisted(pool, key)
+            .await?
+        {
+            return Ok((0, false));
+        }
+
         let config = &RateLimitConfigRepository::effective(pool, config).await?;
         let window_start = Utc::now() - Duration::seconds(config.window_seconds);
 

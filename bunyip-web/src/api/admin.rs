@@ -5,14 +5,14 @@ use serde_json::{json, Value};
 use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
-    AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminStatsResponse, AdminUser, AppDoc,
-    ApplicationGroup, ApplicationGroupList, ArchivedFeedback, AutoBanConfigResponse,
-    EmailConfigResponse, ErrorLogsResponse, FeedbackStatus, ImportSummary, IntegrationStatus,
-    IntegrationStatusResponse, IpEnrichment, MailerSuppression, PaginatedResponse, PricingStatus,
-    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
-    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
-    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
-    UserEntitlement,
+    AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminRateLimitWhitelistEntry,
+    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
+    ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
+    FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
+    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
+    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
+    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
+    TestEmailResult, TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -540,10 +540,17 @@ pub async fn audit_logs(
     page: u32,
     page_size: u32,
     admin_only: bool,
+    // BUNYIP-930: optional single-user filter. The API already accepts
+    // `user_id`; the admin audit page and the user-detail page both read
+    // through this one helper so a change to the filter surface stays local.
+    user_id: Option<&str>,
 ) -> Result<PaginatedResponse<AdminAuditLog>, ApiError> {
     let mut path = format!("/admin/audit-logs?page={page}&per_page={page_size}");
     if admin_only {
         path.push_str("&admin_only=true");
+    }
+    if let Some(uid) = user_id {
+        path.push_str(&format!("&user_id={uid}"));
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -772,6 +779,53 @@ pub async fn reset_rate_limit(
             "/admin/rate-limits/reset",
             cookie,
             Some(json!({ "action": action, "key": key })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-933: list every row in the rate-limit whitelist. Wraps
+/// `GET /v1/admin/rate-limits/whitelist`, whose `data` is a bare array.
+pub async fn rate_limit_whitelist(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<Vec<AdminRateLimitWhitelistEntry>, ApiError> {
+    parse(api.get("/admin/rate-limits/whitelist", cookie).await?)
+}
+
+/// BUNYIP-933: add a `(kind, value)` pair to the whitelist. Wraps
+/// `POST /v1/admin/rate-limits/whitelist`. The API audits the add and
+/// 400s on an unknown `kind`.
+pub async fn add_rate_limit_whitelist(
+    api: &Api,
+    cookie: Option<&str>,
+    kind: &str,
+    value: &str,
+    reason: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .post(
+            "/admin/rate-limits/whitelist",
+            cookie,
+            Some(json!({ "kind": kind, "value": value, "reason": reason })),
+        )
+        .await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-933: delete one whitelist row by id. Wraps
+/// `DELETE /v1/admin/rate-limits/whitelist/{id}`. The API audits the
+/// removal and 404s on an unknown id.
+pub async fn delete_rate_limit_whitelist(
+    api: &Api,
+    cookie: Option<&str>,
+    id: &str,
+) -> Result<(), ApiError> {
+    let r = api
+        .delete(
+            &format!("/admin/rate-limits/whitelist/{}", urlenc(id)),
+            cookie,
+            None,
         )
         .await?;
     ok_data(&r).map(|_| ())

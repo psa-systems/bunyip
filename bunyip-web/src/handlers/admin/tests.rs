@@ -2641,6 +2641,8 @@ mod identity_cell_clipping_tests {
             last_login_at: None,
             grace_period_end: None,
             suspended,
+            first_name: None,
+            last_name: None,
         }
     }
 
@@ -2692,6 +2694,8 @@ mod admin_action_confirm_tests {
             last_login_at: None,
             grace_period_end: None,
             suspended: false,
+            first_name: None,
+            last_name: None,
         }
     }
 
@@ -2761,6 +2765,8 @@ mod tier_change_tests {
             last_login_at: None,
             grace_period_end: None,
             suspended: false,
+            first_name: None,
+            last_name: None,
         }
     }
 
