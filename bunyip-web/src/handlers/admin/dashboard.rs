@@ -113,7 +113,14 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     let (stats_data, health, logs_data) = tokio::join!(
         admin_api::stats(&st.api, fwd),
         admin_api::system_health(&st.api, fwd),
-        admin_api::audit_logs(&st.api, fwd, 1, 5, false, admin_api::AuditFilters::default())
+        admin_api::audit_logs(
+            &st.api,
+            fwd,
+            1,
+            5,
+            false,
+            admin_api::AuditFilters::default()
+        )
     );
     let stats_fetch_error = stats_data.as_ref().err().cloned();
     let stats = stats_data.ok();

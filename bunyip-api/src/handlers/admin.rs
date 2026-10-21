@@ -1356,10 +1356,7 @@ pub async fn list_audit_logs(
         .filter(|v| !v.is_empty())
         .map(|v| {
             crate::models::AuditSeverity::parse(v).ok_or_else(|| {
-                AppError::validation(
-                    "severity",
-                    "must be one of: info, warning, error, critical",
-                )
+                AppError::validation("severity", "must be one of: info, warning, error, critical")
             })
         })
         .transpose()?;
@@ -1372,17 +1369,10 @@ pub async fn list_audit_logs(
         .transpose()?;
     // BUNYIP-937: 128-char cap on `q`; longer is a 400 so an operator does
     // not drag the DB with a 10k pattern.
-    let search = query
-        .q
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty());
+    let search = query.q.as_deref().map(str::trim).filter(|v| !v.is_empty());
     if let Some(s) = search {
         if s.len() > 128 {
-            return Err(AppError::validation(
-                "q",
-                "must be at most 128 characters",
-            ));
+            return Err(AppError::validation("q", "must be at most 128 characters"));
         }
     }
 
