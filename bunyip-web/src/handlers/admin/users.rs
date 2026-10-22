@@ -626,7 +626,11 @@ pub(super) fn users_panel(
                         @if !uq.verified.is_empty() { input type="hidden" name="verified" value=(uq.verified); }
                         @if !uq.sort.is_empty() { input type="hidden" name="sort" value=(uq.sort); input type="hidden" name="dir" value=(uq.dir); }
                         @if uq.page_size != 20 { input type="hidden" name="page_size" value=(uq.page_size.to_string()); }
-                        input type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
+                        // hx-preserve keeps this element verbatim across the
+                        // #users-panel outerHTML swap, so focus and caret
+                        // position survive each keystroke-triggered refetch
+                        // instead of restarting at a fresh input.
+                        input id="admin-users-search" hx-preserve="true" type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
                     }
                     (filter_dropdown("Verification", ver_current, &ver_opts))
                     (filter_dropdown("Tier", tier_slug_label(&uq.tier), &tier_opts))
@@ -1319,7 +1323,40 @@ pub async fn user_detail(
 
 #[cfg(test)]
 mod tests {
-    use super::{htmx_script, is_real_user};
+    use super::{htmx_script, is_real_user, users_panel, UsersQ};
+
+    fn default_users_q() -> UsersQ {
+        UsersQ {
+            search: String::new(),
+            status: "active".into(),
+            tier: String::new(),
+            verified: String::new(),
+            sort: String::new(),
+            dir: "desc".into(),
+            page: 1,
+            page_size: 20,
+        }
+    }
+
+    /// Each keystroke in the search box triggers an outerHTML swap on
+    /// `#users-panel` that includes the search input itself. Without
+    /// `hx-preserve` the swap would replace the focused element, so after the
+    /// first result the admin's caret would land in a fresh input and they
+    /// could not keep typing. Pin both the id and the attribute so a careless
+    /// future rename of either regresses the fix.
+    #[test]
+    fn admin_users_search_input_is_preserved_across_swaps() {
+        let uq = default_users_q();
+        let html = users_panel(&uq, None, None, None).into_string();
+        assert!(
+            html.contains("id=\"admin-users-search\""),
+            "the search input has the stable id hx-preserve matches on"
+        );
+        assert!(
+            html.contains("hx-preserve=\"true\""),
+            "the search input carries hx-preserve so the keystroke swap keeps focus"
+        );
+    }
 
     /// BUNYIP-742: `/admin/users` is the one page whose `hx-` attributes use
     /// htmx (BUNYIP-424), so it - and only it - must carry the vendored
