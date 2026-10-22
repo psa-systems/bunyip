@@ -1938,6 +1938,12 @@ pub struct CreateAdminInviteRequest {
 pub struct ListAdminInvitesQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
+    /// BUNYIP-939: derived-state filter. One of `pending`, `accepted`,
+    /// `revoked`, `expired`; anything else is a 400.
+    pub status: Option<String>,
+    /// BUNYIP-939: email substring filter. 128-char cap; longer is a
+    /// 400.
+    pub email: Option<String>,
 }
 
 /// POST /v1/admin/invites
@@ -1993,7 +1999,41 @@ pub async fn list_admin_invites(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
 
-    let (invites, total) = InviteRepository::list_all(&pool, page, per_page).await?;
+    // BUNYIP-939: validate `status` against the closed set so an unknown
+    // value is a per-field 400 rather than silently returning the full
+    // (unfiltered) list.
+    let status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if let Some(s) = status {
+        match s {
+            "pending" | "accepted" | "revoked" | "expired" => {}
+            _ => {
+                return Err(AppError::validation(
+                    "status",
+                    "must be one of pending, accepted, revoked, expired",
+                ));
+            }
+        }
+    }
+    let email = query
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if let Some(e) = email {
+        if e.len() > 128 {
+            return Err(AppError::validation(
+                "email",
+                "must be at most 128 characters",
+            ));
+        }
+    }
+
+    let (invites, total) =
+        InviteRepository::list_filtered(&pool, page, per_page, status, email).await?;
 
     Ok(paginated(invites, total, page, per_page, request_id))
 }
