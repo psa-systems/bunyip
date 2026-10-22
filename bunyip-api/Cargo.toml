@@ -155,3 +155,7 @@ data-encoding = "2"
 # tests/rate_limit_traffic.rs hashes rate-limit keys the same way
 # RateLimitTrafficRepository::record does so it can look up rows by key_hash.
 sha2 = "0.10"
+# tests/webhook.rs signs its Stripe event payloads the same way
+# dunite-stripe-core's verifier checks them.
+hmac = "0.12"
+hex = "0.4"
