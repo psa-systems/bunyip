@@ -6,7 +6,7 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
     AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminRateLimitWhitelistEntry,
-    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
+    AdminStatsResponse, AdminUser, AppDoc, ApiVersion, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
     MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
@@ -28,6 +28,14 @@ pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse
 pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHealth, ApiError> {
     let resp: SystemHealthResponse = parse(api.get("/admin/health", cookie).await?)?;
     Ok(resp.health)
+}
+
+/// The running build the bunyip-api process serves: version, short revision,
+/// and the update-check status when configured. Fetched from the root-level
+/// `GET /version` (NOT `/v1/version`), the same endpoint an operator would
+/// `curl` by hand. A failed fetch is surfaced as "Unknown" by the caller.
+pub async fn api_version(api: &Api) -> Result<ApiVersion, ApiError> {
+    parse(api.get_root("/version").await?)
 }
 
 /// Per-integration status (BUNYIP-623): the Configured / Unconfigured / Failing

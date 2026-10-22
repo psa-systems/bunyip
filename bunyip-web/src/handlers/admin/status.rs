@@ -13,7 +13,7 @@ use axum::response::Response;
 use maud::{html, Markup};
 
 use crate::api::admin as admin_api;
-use crate::api::types::{IntegrationState, IntegrationStatus, SystemHealth};
+use crate::api::types::{ApiVersion, IntegrationState, IntegrationStatus, SystemHealth};
 use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::views::ui::{badge, error_box_for};
@@ -127,15 +127,93 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
+/// Short-form summary of the API's update-check block. The payload is opaque
+/// JSON here (its full shape lives in a dunite crate), so this reads the
+/// bits the operator cares about ("a newer version is available: X") and
+/// elides the rest. An unexpected shape renders nothing rather than guessing.
+fn update_summary(update: Option<&serde_json::Value>) -> Option<String> {
+    let obj = update?.as_object()?;
+    let available = obj.get("available").and_then(|v| v.as_bool()).unwrap_or(false);
+    if !available {
+        return None;
+    }
+    let latest = obj
+        .get("latest_version")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if latest.is_empty() {
+        Some("A newer version is available upstream.".to_string())
+    } else {
+        Some(format!("A newer version is available upstream: {latest}."))
+    }
+}
+
+/// Version card: the API's version/revision alongside bunyip-web's own, so
+/// an admin can tell what is deployed without `curl /version` by hand and
+/// can also catch a half-deploy where one half of the pair fell behind.
+/// A failed API fetch degrades to "Unknown" rather than breaking the card.
+fn version_card(api_version: Option<&ApiVersion>, api_error: Option<&ApiError>) -> Markup {
+    let short_api_revision: Option<String> = api_version
+        .map(|v| v.revision.chars().take(12).collect::<String>())
+        .filter(|s| !s.is_empty());
+    let web_revision: String = env!("GIT_COMMIT").chars().take(12).collect();
+    let web_version = env!("CARGO_PKG_VERSION");
+    let web_tag = env!("GIT_TAG");
+    html! {
+        div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+            div class="flex flex-col space-y-1.5 p-6" {
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Version" }
+                p class="text-sm text-muted-foreground" { "The exact releases this instance is running: bunyip-api (the backend) and bunyip-web (this page). A mismatch after a deploy means one half of the pair fell behind." }
+            }
+            div class="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 text-sm" {
+                div class="space-y-1" {
+                    p class="font-medium" { "API (bunyip-api)" }
+                    @match api_version {
+                        Some(v) => {
+                            div { span class="text-muted-foreground" { "Version: " } (if v.version.is_empty() { "Unknown" } else { v.version.as_str() }) }
+                            div {
+                                span class="text-muted-foreground" { "Revision: " }
+                                @match short_api_revision.as_deref() {
+                                    Some(r) if !r.is_empty() => code class="font-mono" { (r) },
+                                    _ => span { "Unknown" },
+                                }
+                            }
+                            @if let Some(msg) = update_summary(v.update.as_ref()) {
+                                p class="mt-1 text-xs text-amber-700 dark:text-amber-400" { (msg) }
+                            }
+                        }
+                        None => {
+                            div { span class="text-muted-foreground" { "Version: " } "Unknown" }
+                            div { span class="text-muted-foreground" { "Revision: " } "Unknown" }
+                            @if let Some(e) = api_error {
+                                p class="mt-1 text-xs text-muted-foreground" { "The API's /version endpoint did not respond: " (e.message) }
+                            }
+                        }
+                    }
+                }
+                div class="space-y-1" {
+                    p class="font-medium" { "Web (bunyip-web)" }
+                    div { span class="text-muted-foreground" { "Version: " } (web_version) }
+                    div { span class="text-muted-foreground" { "Revision: " } code class="font-mono" { (web_revision) } }
+                    div { span class="text-muted-foreground" { "Describe: " } code class="font-mono" { (web_tag) } }
+                }
+            }
+        }
+    }
+}
+
 fn status_content(
     health: Option<&SystemHealth>,
     integrations: &[IntegrationStatus],
     fetch_error: Option<&ApiError>,
     health_error: Option<&ApiError>,
+    api_version: Option<&ApiVersion>,
+    api_version_error: Option<&ApiError>,
 ) -> Markup {
     html! {
         div class="space-y-6" {
             div { h1 class="text-3xl font-bold" { "System Status" } p class="mt-2 text-muted-foreground" { "The running build, live process stats, and each optional integration's state." } }
+            (version_card(api_version, api_version_error))
             @if let Some(h) = health {
                 (build_card(h))
                 (stats_card(h))
@@ -165,11 +243,17 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
     let fetched_health = admin_api::system_health(&st.api, c.forward.as_deref()).await;
     let health_error = fetched_health.as_ref().err().cloned();
     let health = fetched_health.ok();
+    // Root-level `/version` is unauthenticated, so no cookie is forwarded.
+    let fetched_api_version = admin_api::api_version(&st.api).await;
+    let api_version_error = fetched_api_version.as_ref().err().cloned();
+    let api_version = fetched_api_version.ok();
     let content = status_content(
         health.as_ref(),
         &integrations,
         fetch_error.as_ref(),
         health_error.as_ref(),
+        api_version.as_ref(),
+        api_version_error.as_ref(),
     );
     admin_response(&c, &user, "/admin/status", "System Status", content)
 }
@@ -299,5 +383,66 @@ mod tests {
         assert_eq!(format_uptime(65), "1m 5s");
         assert_eq!(format_uptime(3_725), "1h 2m");
         assert_eq!(format_uptime(86_400 + 7_200), "1d 2h");
+    }
+
+    fn sample_api_version() -> ApiVersion {
+        ApiVersion {
+            version: "v0.19.0".into(),
+            revision: "deadbeefcafebabe1234567890abcdef12345678".into(),
+            update: None,
+        }
+    }
+
+    /// Version card prints the API's version and a short revision
+    /// alongside the web's own build info, so an admin reads what each
+    /// half of the deployment is actually running without `curl`.
+    #[test]
+    fn version_card_shows_api_and_web_sides() {
+        let html = version_card(Some(&sample_api_version()), None).into_string();
+        assert!(html.contains("API (bunyip-api)"), "API label: {html}");
+        assert!(html.contains("v0.19.0"), "API version string: {html}");
+        assert!(
+            html.contains("deadbeefcafe"),
+            "API short revision: {html}"
+        );
+        assert!(
+            !html.contains("deadbeefcafebabe1234567890"),
+            "full API commit must be truncated: {html}"
+        );
+        assert!(
+            html.contains("Web (bunyip-web)"),
+            "web label is distinct: {html}"
+        );
+    }
+
+    /// A failed `/version` fetch degrades the card to "Unknown" without
+    /// breaking the page, since the integrations and health cards below
+    /// still carry useful information even when `/version` is unreachable.
+    #[test]
+    fn version_card_degrades_to_unknown_on_fetch_error() {
+        let html = version_card(None, Some(&load_error())).into_string();
+        assert!(
+            html.contains("Unknown"),
+            "version/revision read Unknown on error: {html}"
+        );
+        assert!(
+            html.contains("Failed to load integration status"),
+            "the error message is surfaced for the operator: {html}"
+        );
+    }
+
+    /// `update.available = true` with a `latest_version` renders the amber
+    /// hint operators look for; `available = false` renders nothing so a
+    /// current build does not shout.
+    #[test]
+    fn update_summary_only_shows_when_an_upgrade_is_available() {
+        let none =
+            update_summary(Some(&serde_json::json!({ "available": false, "latest_version": "v9.9.9" })));
+        assert!(none.is_none(), "nothing to surface when not available");
+        let msg = update_summary(Some(
+            &serde_json::json!({ "available": true, "latest_version": "v0.20.0" }),
+        ))
+        .expect("available=true should surface");
+        assert!(msg.contains("v0.20.0"), "the latest version is named: {msg}");
     }
 }

@@ -137,7 +137,7 @@ pub(super) fn system_settings_content(
     html! {
         div class="space-y-6" {
             div {
-                h1 class="text-3xl font-bold" { "System" }
+                h1 class="text-3xl font-bold" { "System Settings" }
                 p class="mt-2 text-muted-foreground" {
                     "Application-level deployment settings, stored in the file configuration layer rather than the database. "
                     "System-level origins and domains are set through the environment, not here. "
@@ -195,7 +195,7 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
         .map(SystemSettingsValues::from_config)
         .unwrap_or_default();
     let content = system_settings_content(cfg.as_ref(), &values, None);
-    admin_response(&c, &user, "/admin/system-config", "System", content)
+    admin_response(&c, &user, "/admin/system-config", "System Settings", content)
 }
 
 #[derive(Deserialize)]
@@ -248,7 +248,7 @@ pub async fn system_config_save(
     // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
     let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let content = system_settings_content(cfg.as_ref(), &values, Some(&error));
-    admin_response(&c, &user, "/admin/system-config", "System", content)
+    admin_response(&c, &user, "/admin/system-config", "System Settings", content)
 }
 
 #[cfg(test)]

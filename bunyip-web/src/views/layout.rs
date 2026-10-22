@@ -701,7 +701,7 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
             badge: None,
         },
         NavItem {
-            title: "System",
+            title: "System Settings",
             href: "/admin/system-config",
             icon: "settings",
             external: false,
