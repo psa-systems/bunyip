@@ -269,30 +269,39 @@ pub async fn admin_reset_password(
 }
 
 /// Grant lifetime membership. Creates a $0 Stripe subscription on the backend
-/// so invoices still flow.
+/// so invoices still flow. BUNYIP-943: gated on the acting admin's 2FA code,
+/// the same as `set_user_tier`; the API returns a validation error on a
+/// bad/absent code and makes no change.
 pub async fn grant_lifetime(
     api: &Api,
     cookie: Option<&str>,
     user_id: &str,
+    totp_code: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/users/{user_id}/lifetime"), cookie, None)
+        .post(
+            &format!("/admin/users/{user_id}/lifetime"),
+            cookie,
+            Some(json!({ "totp_code": totp_code })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
 
 /// Revoke a previously-granted lifetime membership. Returns the user to the
-/// standard tier with no active subscription.
+/// standard tier with no active subscription. BUNYIP-943: gated on the acting
+/// admin's 2FA code, same as `grant_lifetime`.
 pub async fn revoke_lifetime(
     api: &Api,
     cookie: Option<&str>,
     user_id: &str,
+    totp_code: &str,
 ) -> Result<(), ApiError> {
     let r = api
         .post(
             &format!("/admin/users/{user_id}/lifetime/revoke"),
             cookie,
-            None,
+            Some(json!({ "totp_code": totp_code })),
         )
         .await?;
     ok_data(&r).map(|_| ())

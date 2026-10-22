@@ -2497,6 +2497,14 @@ pub async fn update_stripe_config(
 // Subscription Management
 // =============================================================================
 
+/// BUNYIP-943: the acting admin's current 2FA code, required on both lifetime
+/// grant and revoke since they have the exact billing-consequential effect
+/// `set_user_tier` requires it for (BUNYIP-431).
+#[derive(Debug, Deserialize)]
+pub struct LifetimeMembershipRequest {
+    pub totp_code: String,
+}
+
 /// POST /v1/admin/users/{user_id}/lifetime
 /// Grant lifetime membership to a user.
 /// Creates a $0 Stripe subscription so the user receives invoices.
@@ -2507,10 +2515,23 @@ pub async fn grant_lifetime_membership(
     stripe: web::Data<Arc<StripeService>>,
     tier_config: web::Data<Arc<std::sync::RwLock<TierConfig>>>,
     bus: web::Data<Arc<EventBus>>,
+    totp_service: web::Data<Arc<TotpService>>,
     path: web::Path<uuid::Uuid>,
+    body: web::Json<LifetimeMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let user_id = path.into_inner();
+
+    // BUNYIP-943: 2FA gate, BEFORE any mutation, mirroring set_user_tier so a
+    // cancelled or wrong code leaves lifetime_member and the $0 invoice
+    // subscription untouched.
+    let totp_valid = totp_service
+        .verify_code(admin.0.sub, body.totp_code.trim())
+        .await
+        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+    if !totp_valid {
+        return Err(AppError::validation("totp_code", "Invalid 2FA code"));
+    }
 
     let user = UserRepository::grant_lifetime_membership(&pool, user_id, admin.0.sub).await?;
 
@@ -2570,10 +2591,21 @@ pub async fn revoke_lifetime_membership(
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     bus: web::Data<Arc<EventBus>>,
+    totp_service: web::Data<Arc<TotpService>>,
     path: web::Path<uuid::Uuid>,
+    body: web::Json<LifetimeMembershipRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let user_id = path.into_inner();
+
+    // BUNYIP-943: same 2FA gate as grant_lifetime_membership, before any mutation.
+    let totp_valid = totp_service
+        .verify_code(admin.0.sub, body.totp_code.trim())
+        .await
+        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+    if !totp_valid {
+        return Err(AppError::validation("totp_code", "Invalid 2FA code"));
+    }
 
     let user = UserRepository::revoke_lifetime_membership(&pool, user_id).await?;
 

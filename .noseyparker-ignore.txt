@@ -9,6 +9,7 @@
 /bunyip-api/tests/feature_toggles.rs
 /bunyip-api/tests/feedback_new_count.rs
 /bunyip-api/tests/hub_refresh_op_session.rs
+/bunyip-api/tests/lifetime_totp_gate.rs
 /bunyip-api/tests/login_approval.rs
 /bunyip-api/tests/mailer_relay.rs
 /bunyip-api/tests/pms709_repro.rs
@@ -18,6 +19,7 @@
 /bunyip-api/tests/totp_setup_token.rs
 /bunyip-api/tests/totp_single_use.rs
 /bunyip-api/tests/verified_admin_gate.rs
+/bunyip-api/tests/webhook.rs
 /compose.dev.yml
 /crates/bunyip-core/src/config.rs
 /crates/bunyip-domain/src/config.rs

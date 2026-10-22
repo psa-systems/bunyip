@@ -765,6 +765,8 @@ dependencies = [
  "dunite-image-upload",
  "dunite-update-check",
  "futures-util",
+ "hex",
+ "hmac",
  "image",
  "imagesize",
  "infer 0.16.0",
