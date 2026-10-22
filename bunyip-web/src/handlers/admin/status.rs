@@ -236,18 +236,23 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
     };
     // BUNYIP-546: keep the reachable flag beside the fallback, so "could not
     // load" stays distinct from "everything is configured".
-    let fetched = admin_api::integration_status(&st.api, c.forward.as_deref()).await;
-    let fetch_error = fetched.as_ref().err().cloned();
-    let integrations = fetched.unwrap_or_default();
     // BUNYIP-931: build info + stats come from the same /admin/health endpoint
     // the dashboard's Datasets card already reads. Two reads are tolerated: the
     // page is admin-only and renders at human cadence, so one extra API call
     // beats inventing a combined endpoint only this page would use.
-    let fetched_health = admin_api::system_health(&st.api, c.forward.as_deref()).await;
+    // Root-level `/version` is unauthenticated, so no cookie is forwarded.
+    // BUNYIP-963: none of the three fetches consumes another's result, so they
+    // run concurrently via `join!`, not `try_join!`: each keeps its own
+    // fallback below.
+    let (fetched, fetched_health, fetched_api_version) = tokio::join!(
+        admin_api::integration_status(&st.api, c.forward.as_deref()),
+        admin_api::system_health(&st.api, c.forward.as_deref()),
+        admin_api::api_version(&st.api)
+    );
+    let fetch_error = fetched.as_ref().err().cloned();
+    let integrations = fetched.unwrap_or_default();
     let health_error = fetched_health.as_ref().err().cloned();
     let health = fetched_health.ok();
-    // Root-level `/version` is unauthenticated, so no cookie is forwarded.
-    let fetched_api_version = admin_api::api_version(&st.api).await;
     let api_version_error = fetched_api_version.as_ref().err().cloned();
     let api_version = fetched_api_version.ok();
     let content = status_content(
