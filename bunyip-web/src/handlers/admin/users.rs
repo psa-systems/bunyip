@@ -1426,7 +1426,11 @@ mod tests {
     fn admin_names_present_matches_trim_edge() {
         assert!(!admin_names_present(&mk_user(None, None, true)));
         assert!(!admin_names_present(&mk_user(Some(""), Some(""), true)));
-        assert!(!admin_names_present(&mk_user(Some("   "), Some("\t"), true)));
+        assert!(!admin_names_present(&mk_user(
+            Some("   "),
+            Some("\t"),
+            true
+        )));
         assert!(!admin_names_present(&mk_user(Some("Ada"), None, true)));
         assert!(!admin_names_present(&mk_user(None, Some("Lovelace"), true)));
         assert!(admin_names_present(&mk_user(
