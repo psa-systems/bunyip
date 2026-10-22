@@ -441,7 +441,7 @@ mod rate_limit_tests {
             html.contains(&format!(r#"href="/admin/users/{ROW_UID}""#)),
             "active row links to the detail view"
         );
-        assert!(html.contains("Verified"), "verified indicator shown");
+        assert!(html.contains("Email verified"), "verified indicator shown");
         // Every management action lives on the detail view (BUNYIP-405): the list
         // row carries none of them, and no forms at all.
         for action in [
@@ -463,8 +463,8 @@ mod rate_limit_tests {
     #[test]
     fn unverified_user_row_shows_unverified_status() {
         let html = super::user_grid_row(&admin_user("new@example.com", false, false)).into_string();
-        assert!(html.contains("Unverified"), "unverified status shown");
-        assert!(!html.contains(">Verified<"));
+        assert!(html.contains("Email unverified"), "unverified status shown");
+        assert!(!html.contains(">Email verified<"));
     }
 
     #[test]
@@ -491,7 +491,7 @@ mod rate_limit_tests {
         // alongside the verification indicator.
         let html = super::user_grid_row(&admin_user("ada@example.com", true, false)).into_string();
         assert!(html.contains("Standard"), "tier badge shown on the row");
-        assert!(html.contains("Verified"));
+        assert!(html.contains("Email verified"));
     }
 
     fn q(status: &str, tier: &str, verified: &str, search: &str) -> super::UsersQ {
