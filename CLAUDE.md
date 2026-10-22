@@ -139,7 +139,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 
 ### Performance and caching
 
-- [Rate limiting](docs/invariants/performance.md#rate-limiting-bunyip-426-bunyip-413-bunyip-645-bunyip-556) (BUNYIP-426/413/645/556): `RateLimitFloor` caps every api route from a cached snapshot.
+- [Rate limiting](docs/invariants/performance.md#rate-limiting-bunyip-426-bunyip-413-bunyip-645-bunyip-556-bunyip-962) (BUNYIP-426/413/645/556/962): `RateLimitFloor` caps every api route from a cached snapshot; the whitelist check is cached too.
 - [One verification per request](docs/invariants/performance.md#one-verification-per-request-bunyip-557-bunyip-564) (BUNYIP-557/564/229): Verify tokens once via `verify_once`; reuse the row.
 - [BFF chrome fetches](docs/invariants/performance.md#bff-chrome-fetches-bunyip-518-bunyip-555-bunyip-667) (BUNYIP-518/555/667/682/683/635): Read per-render payloads via `TtlCache` on `AppState`.
 - [Response compression](docs/invariants/performance.md#response-compression-bunyip-559) (BUNYIP-559): api `Compress` wraps the primary stack; streamed responses call `mark_uncompressed`.
