@@ -675,4 +675,18 @@
       if (submitLabel) submitLabel.textContent = 'Sending…';
     });
   })();
+
+  // -------------------------------------------------- data-submit-on-change --
+  // BUNYIP-936 / BUNYIP-938 / BUNYIP-939 / BUNYIP-940: admin filter chips.
+  // A `<select data-submit-on-change>` submits its enclosing <form> on
+  // `change`, so picking a new option reloads the page with the filter in
+  // the query string. Delegated here (not an inline `onchange=`) so the
+  // CSP's `script-src 'self'` continues to forbid inline scripts and
+  // event handlers (BUNYIP-424).
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el || !el.matches || !el.matches('[data-submit-on-change]')) return;
+    var form = el.form || (el.closest ? el.closest('form') : null);
+    if (form && typeof form.submit === 'function') form.submit();
+  });
 })();

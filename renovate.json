@@ -1,0 +1,43 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":prHourlyLimitNone"
+  ],
+  "platform": "forgejo",
+  "endpoint": "https://dev.a8n.run/api/v1/",
+  "gitAuthor": "renovate-bot <renovate-bot@users.noreply.dev.a8n.run>",
+  "autodiscover": false,
+  "onboarding": false,
+  "prConcurrentLimit": 10,
+  "rangeStrategy": "bump",
+  "rebaseWhen": "behind-base-branch",
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  },
+  "osvVulnerabilityAlerts": true,
+  "enabledManagers": [
+    "cargo",
+    "npm",
+    "docker-compose",
+    "dockerfile",
+    "github-actions"
+  ],
+  "npm": {
+    "managerFilePatterns": [
+      "/^bunyip-web/package\\.json$/"
+    ]
+  },
+  "packageRules": [
+    { "groupName": "rust toolchain", "matchPackageNames": ["rust", "rustc"] },
+    { "groupName": "dunite crates", "matchPackageNames": ["/^dunite-/"] },
+    { "groupName": "actix family", "matchPackagePatterns": ["^actix"] },
+    { "groupName": "sqlx family", "matchPackagePatterns": ["^sqlx"] },
+    { "groupName": "serde family", "matchPackagePatterns": ["^serde"] },
+    { "groupName": "tokio family", "matchPackagePatterns": ["^tokio"] },
+    { "groupName": "tower family", "matchPackagePatterns": ["^tower"] },
+    { "groupName": "reqwest family", "matchPackagePatterns": ["^reqwest"] }
+  ]
+}

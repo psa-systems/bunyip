@@ -12,13 +12,16 @@ pub struct AuditLogRepository;
 /// Push the optional admin-filter predicates onto a `QueryBuilder`, binding
 /// each value so placeholders and bindings can never drift apart. Used for
 /// both the page query and the count query in `list_paginated`.
+#[allow(clippy::too_many_arguments)]
 fn push_audit_filters<'a>(
     qb: &mut QueryBuilder<'a, Postgres>,
     actor_id: Option<Uuid>,
     action: Option<&'a str>,
+    severity: Option<&'a str>,
     admin_only: bool,
     start_date: Option<DateTime<Utc>>,
     end_date: Option<DateTime<Utc>>,
+    search: Option<&'a str>,
 ) {
     let mut sep = " WHERE ";
     if let Some(actor_id) = actor_id {
@@ -27,6 +30,12 @@ fn push_audit_filters<'a>(
     }
     if let Some(action) = action {
         qb.push(sep).push("action = ").push_bind(action);
+        sep = " AND ";
+    }
+    // BUNYIP-936: severity is stored as the enum's string form; the caller
+    // validates against AuditSeverity::parse before passing it in.
+    if let Some(severity) = severity {
+        qb.push(sep).push("severity = ").push_bind(severity);
         sep = " AND ";
     }
     if admin_only {
@@ -39,6 +48,20 @@ fn push_audit_filters<'a>(
     }
     if let Some(end_date) = end_date {
         qb.push(sep).push("created_at <= ").push_bind(end_date);
+        sep = " AND ";
+    }
+    // BUNYIP-937: text search over the two columns operators filter on in
+    // practice. ILIKE because actor_email is case-insensitive by convention
+    // and resource_id::text covers UUID fragments. The caller caps `search`
+    // at 128 chars so the LIKE operand is bounded.
+    if let Some(search) = search {
+        let pattern = format!("%{search}%");
+        qb.push(sep)
+            .push("(actor_email ILIKE ")
+            .push_bind(pattern.clone())
+            .push(" OR resource_id::text ILIKE ")
+            .push_bind(pattern)
+            .push(")");
     }
 }
 
@@ -86,16 +109,23 @@ impl AuditLogRepository {
         Ok(log)
     }
 
-    /// List audit logs with pagination and filters
+    /// List audit logs with pagination and filters.
+    ///
+    /// BUNYIP-936 / BUNYIP-937 added `severity` and `search`; the caller
+    /// validates severity against `AuditSeverity::parse` and caps search
+    /// at 128 chars before passing them in.
+    #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
         per_page: i32,
         actor_id: Option<Uuid>,
         action: Option<&str>,
+        severity: Option<&str>,
         admin_only: bool,
         start_date: Option<DateTime<Utc>>,
         end_date: Option<DateTime<Utc>>,
+        search: Option<&str>,
     ) -> Result<(Vec<AuditLog>, i64), AppError> {
         let offset = (page - 1) * per_page;
 
@@ -105,7 +135,7 @@ impl AuditLogRepository {
         // `$1`/`$2`, so any actor/action filter 500'd at runtime).
         let mut query = QueryBuilder::new("SELECT * FROM audit_logs");
         push_audit_filters(
-            &mut query, actor_id, action, admin_only, start_date, end_date,
+            &mut query, actor_id, action, severity, admin_only, start_date, end_date, search,
         );
         query
             .push(" ORDER BY created_at DESC LIMIT ")
@@ -118,9 +148,11 @@ impl AuditLogRepository {
             &mut count_query,
             actor_id,
             action,
+            severity,
             admin_only,
             start_date,
             end_date,
+            search,
         );
 
         let logs = query.build_query_as::<AuditLog>().fetch_all(pool).await?;

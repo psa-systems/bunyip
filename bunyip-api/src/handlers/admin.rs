@@ -1299,6 +1299,38 @@ pub struct ListAuditLogsQuery {
     pub user_id: Option<uuid::Uuid>,
     pub action: Option<String>,
     pub admin_only: Option<bool>,
+    /// BUNYIP-936: optional severity filter (`info`, `warning`, `error`,
+    /// `critical`). Rejected with 400 if it does not round-trip through
+    /// `AuditSeverity::parse`.
+    pub severity: Option<String>,
+    /// BUNYIP-936: optional time window. Accepts an ISO 8601 timestamp OR a
+    /// short vocabulary (`1h`, `24h`, `7d`, `30d`). Resolves to a
+    /// `created_at >=` lower bound.
+    pub since: Option<String>,
+    /// BUNYIP-937: free-text search over `actor_email` and
+    /// `resource_id::text`. 128-char cap; longer is a 400.
+    pub q: Option<String>,
+}
+
+/// Resolve the `since` query parameter into a UTC lower bound.
+/// Accepts an ISO 8601 timestamp OR one of the short forms (`1h`, `24h`,
+/// `7d`, `30d`). Anything else is a 400.
+fn resolve_since(raw: &str) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
+    let raw = raw.trim();
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(raw) {
+        return Ok(ts.with_timezone(&chrono::Utc));
+    }
+    let now = chrono::Utc::now();
+    match raw {
+        "1h" => Ok(now - chrono::Duration::hours(1)),
+        "24h" => Ok(now - chrono::Duration::hours(24)),
+        "7d" => Ok(now - chrono::Duration::days(7)),
+        "30d" => Ok(now - chrono::Duration::days(30)),
+        _ => Err(AppError::validation(
+            "since",
+            "must be an RFC3339 timestamp or one of: 1h, 24h, 7d, 30d",
+        )),
+    }
 }
 
 /// GET /v1/admin/audit-logs
@@ -1314,15 +1346,47 @@ pub async fn list_audit_logs(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(50).min(100);
 
+    // BUNYIP-936: severity is validated against the enum before touching
+    // the repository, so a stored row with an unknown value never masks a
+    // bad request.
+    let severity = query
+        .severity
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            crate::models::AuditSeverity::parse(v).ok_or_else(|| {
+                AppError::validation("severity", "must be one of: info, warning, error, critical")
+            })
+        })
+        .transpose()?;
+    let since = query
+        .since
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(resolve_since)
+        .transpose()?;
+    // BUNYIP-937: 128-char cap on `q`; longer is a 400 so an operator does
+    // not drag the DB with a 10k pattern.
+    let search = query.q.as_deref().map(str::trim).filter(|v| !v.is_empty());
+    if let Some(s) = search {
+        if s.len() > 128 {
+            return Err(AppError::validation("q", "must be at most 128 characters"));
+        }
+    }
+
     let (logs, total) = AuditLogRepository::list_paginated(
         &pool,
         page,
         per_page,
         query.user_id,
         query.action.as_deref(),
+        severity.as_ref().map(|s| s.as_str()),
         query.admin_only.unwrap_or(false),
-        None, // start_date
+        since,
         None, // end_date
+        search,
     )
     .await?;
 
@@ -1874,6 +1938,12 @@ pub struct CreateAdminInviteRequest {
 pub struct ListAdminInvitesQuery {
     pub page: Option<i32>,
     pub per_page: Option<i32>,
+    /// BUNYIP-939: derived-state filter. One of `pending`, `accepted`,
+    /// `revoked`, `expired`; anything else is a 400.
+    pub status: Option<String>,
+    /// BUNYIP-939: email substring filter. 128-char cap; longer is a
+    /// 400.
+    pub email: Option<String>,
 }
 
 /// POST /v1/admin/invites
@@ -1929,7 +1999,41 @@ pub async fn list_admin_invites(
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
 
-    let (invites, total) = InviteRepository::list_all(&pool, page, per_page).await?;
+    // BUNYIP-939: validate `status` against the closed set so an unknown
+    // value is a per-field 400 rather than silently returning the full
+    // (unfiltered) list.
+    let status = query
+        .status
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if let Some(s) = status {
+        match s {
+            "pending" | "accepted" | "revoked" | "expired" => {}
+            _ => {
+                return Err(AppError::validation(
+                    "status",
+                    "must be one of pending, accepted, revoked, expired",
+                ));
+            }
+        }
+    }
+    let email = query
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if let Some(e) = email {
+        if e.len() > 128 {
+            return Err(AppError::validation(
+                "email",
+                "must be at most 128 characters",
+            ));
+        }
+    }
+
+    let (invites, total) =
+        InviteRepository::list_filtered(&pool, page, per_page, status, email).await?;
 
     Ok(paginated(invites, total, page, per_page, request_id))
 }

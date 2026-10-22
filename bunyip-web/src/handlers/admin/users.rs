@@ -380,13 +380,41 @@ fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
     }
 }
 
-/// The verification indicator (green check / amber alert), shared by rows.
+/// Email-verification indicator (green check / amber alert), shared by rows.
+/// Explicitly labelled "Email verified" / "Email unverified" so an admin does
+/// not read it as "the whole account is verified" and miss that names and
+/// activity are separate signals (see `profile_complete_indicator`,
+/// `is_real_user`).
 fn verified_indicator(verified: bool) -> Markup {
     html! {
         @if verified {
-            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Verified" }
+            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Email verified" }
         } @else {
-            span class="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400" { (icon("alert-circle", "h-4 w-4")) "Unverified" }
+            span class="inline-flex items-center gap-1 text-xs font-medium text-amber-700 dark:text-amber-400" { (icon("alert-circle", "h-4 w-4")) "Email unverified" }
+        }
+    }
+}
+
+/// Whether both first and last name are supplied (whitespace does not count),
+/// mirroring the shape of `handlers::names_present` which takes a `User`.
+fn admin_names_present(u: &crate::api::types::AdminUser) -> bool {
+    fn present(v: Option<&str>) -> bool {
+        matches!(v.map(str::trim), Some(s) if !s.is_empty())
+    }
+    present(u.first_name.as_deref()) && present(u.last_name.as_deref())
+}
+
+/// Profile-completeness indicator: supplied names versus the "Name missing"
+/// nudge. Separate from the email-verified indicator so an admin can tell the
+/// two apart on a row: a spam sign-up often clears email verification but
+/// never supplies a name, and a real sign-up may verify email long after
+/// filling the profile.
+fn profile_complete_indicator(complete: bool) -> Markup {
+    html! {
+        @if complete {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-teal-600 dark:text-teal-400" { (icon("check-circle", "h-4 w-4")) "Profile complete" }
+        } @else {
+            span class="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground" { (icon("user", "h-4 w-4")) "Name missing" }
         }
     }
 }
@@ -407,6 +435,16 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
     let avatar = html! {
         span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-indigo-500 text-white text-xs font-semibold" aria-hidden="true" { (initial) }
     };
+    let display_name: Option<String> = {
+        let f = u.first_name.as_deref().map(str::trim).unwrap_or("");
+        let l = u.last_name.as_deref().map(str::trim).unwrap_or("");
+        match (f.is_empty(), l.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(f.to_string()),
+            (true, false) => Some(l.to_string()),
+            (false, false) => Some(format!("{f} {l}")),
+        }
+    };
     let identity = html! {
         div class="min-w-0" {
             // `truncate` must sit on the text span, not on this flex row:
@@ -414,20 +452,32 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
             // took its full width and pushed the badges outside the row's
             // `overflow:hidden`, clipping them away entirely (BUNYIP-421).
             p class="font-medium flex items-center gap-2 min-w-0" {
-                span class="truncate" { (u.email) }
+                span class="truncate" { @if let Some(n) = &display_name { (n) } @else { (u.email) } }
                 @if is_admin { (badge("default", "Admin")) }
                 @if u.suspended { (badge("outline", "Suspended")) }
+            }
+            // Secondary line: the email once the primary line holds a real
+            // name, so an admin reads the person first and the credential
+            // second. Hidden when there is no name, to avoid a duplicate.
+            @if display_name.is_some() {
+                p class="text-xs text-muted-foreground truncate" { (u.email) }
             }
         }
     };
     let tier = html! { (badge("secondary", tier_label(&u.membership_tier))) };
+    let indicators = html! {
+        div class="flex flex-col gap-0.5" {
+            (verified_indicator(u.email_verified))
+            (profile_complete_indicator(admin_names_present(u)))
+        }
+    };
     let joined = html! {
         span class="text-xs text-muted-foreground" { "Joined " (rel_time(&u.created_at)) }
     };
     if u.suspended {
         html! {
             div style=(USERS_GRID) class="py-2.5 px-2 -mx-2 rounded-md" {
-                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                (avatar) (identity) (tier) (indicators) (joined)
                 form method="post" action=(format!("/admin/users/{}/reactivate", u.id)) data-confirm="Reactivate this user? They will be able to sign in again." {
                     button type="submit" class=(button_class("outline", "xs", "text-xs")) { "Reactivate" }
                 }
@@ -438,7 +488,7 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
             a href=(format!("/admin/users/{}", u.id))
               style=(USERS_GRID)
               class="py-2.5 px-2 -mx-2 rounded-md hover:bg-accent hover:text-accent-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2" {
-                (avatar) (identity) (tier) (verified_indicator(u.email_verified)) (joined)
+                (avatar) (identity) (tier) (indicators) (joined)
                 span class="flex justify-end" { (icon("chevron-right", "h-4 w-4 text-muted-foreground")) }
             }
         }
@@ -626,7 +676,11 @@ pub(super) fn users_panel(
                         @if !uq.verified.is_empty() { input type="hidden" name="verified" value=(uq.verified); }
                         @if !uq.sort.is_empty() { input type="hidden" name="sort" value=(uq.sort); input type="hidden" name="dir" value=(uq.dir); }
                         @if uq.page_size != 20 { input type="hidden" name="page_size" value=(uq.page_size.to_string()); }
-                        input type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
+                        // hx-preserve keeps this element verbatim across the
+                        // #users-panel outerHTML swap, so focus and caret
+                        // position survive each keystroke-triggered refetch
+                        // instead of restarting at a fresh input.
+                        input id="admin-users-search" hx-preserve="true" type="search" name="search" value=(uq.search) placeholder="Search by email…" aria-label="Search users by email" class=(dashboard_input());
                     }
                     (filter_dropdown("Verification", ver_current, &ver_opts))
                     (filter_dropdown("Tier", tier_slug_label(&uq.tier), &tier_opts))
@@ -1163,7 +1217,10 @@ pub async fn user_detail(
         1,
         25,
         false,
-        Some(target.id.as_str()),
+        admin_api::AuditFilters {
+            user_id: Some(target.id.as_str()),
+            ..Default::default()
+        },
     )
     .await;
     let audit_error = fetched_audit.as_ref().err().cloned();
@@ -1183,11 +1240,21 @@ pub async fn user_detail(
         div class="space-y-6" {
             div class="flex items-center justify-between" {
                 div {
+                    @let detail_display_name: Option<String> = {
+                        let f = target.first_name.as_deref().map(str::trim).unwrap_or("");
+                        let l = target.last_name.as_deref().map(str::trim).unwrap_or("");
+                        match (f.is_empty(), l.is_empty()) {
+                            (true, true) => None,
+                            (false, true) => Some(f.to_string()),
+                            (true, false) => Some(l.to_string()),
+                            (false, false) => Some(format!("{f} {l}")),
+                        }
+                    };
                     h1 class="text-3xl font-bold flex items-center gap-2" {
-                        (target.email)
+                        @if let Some(n) = &detail_display_name { (n) } @else { (target.email) }
                         @if is_admin_target { (badge("default", "Admin")) }
                         @if target.lifetime_member { (badge("default", "Lifetime")) }
-                        @if !target.email_verified { (badge("outline", "Unverified")) }
+                        @if !target.email_verified { (badge("outline", "Email unverified")) }
                         // BUNYIP-930: 3-of-4 signal classifier. Success badge for
                         // Yes, outline for No, so the chip stays legible beside
                         // the existing Admin/Lifetime badges.
@@ -1316,7 +1383,136 @@ pub async fn user_detail(
 
 #[cfg(test)]
 mod tests {
-    use super::{htmx_script, is_real_user};
+    use super::{
+        admin_names_present, htmx_script, is_real_user, profile_complete_indicator, user_grid_row,
+        users_panel, verified_indicator, UsersQ,
+    };
+    use crate::api::types::{AdminUser, MembershipStatus, MembershipTier, UserRole};
+
+    fn default_users_q() -> UsersQ {
+        UsersQ {
+            search: String::new(),
+            status: "active".into(),
+            tier: String::new(),
+            verified: String::new(),
+            sort: String::new(),
+            dir: "desc".into(),
+            page: 1,
+            page_size: 20,
+        }
+    }
+
+    fn mk_user(first: Option<&str>, last: Option<&str>, verified: bool) -> AdminUser {
+        AdminUser {
+            id: "11111111-1111-1111-1111-111111111111".into(),
+            email: "person@example.com".into(),
+            role: UserRole::Subscriber,
+            email_verified: verified,
+            two_factor_enabled: false,
+            membership_status: MembershipStatus::None,
+            membership_tier: MembershipTier::Standard,
+            lifetime_member: false,
+            created_at: "2026-01-01T00:00:00Z".into(),
+            last_login_at: None,
+            grace_period_end: None,
+            suspended: false,
+            first_name: first.map(str::to_string),
+            last_name: last.map(str::to_string),
+        }
+    }
+
+    /// Each keystroke in the search box triggers an outerHTML swap on
+    /// `#users-panel` that includes the search input itself. Without
+    /// `hx-preserve` the swap would replace the focused element, so after the
+    /// first result the admin's caret would land in a fresh input and they
+    /// could not keep typing. Pin both the id and the attribute so a careless
+    /// future rename of either regresses the fix.
+    #[test]
+    fn admin_users_search_input_is_preserved_across_swaps() {
+        let uq = default_users_q();
+        let html = users_panel(&uq, None, None, None).into_string();
+        assert!(
+            html.contains("id=\"admin-users-search\""),
+            "the search input has the stable id hx-preserve matches on"
+        );
+        assert!(
+            html.contains("hx-preserve=\"true\""),
+            "the search input carries hx-preserve so the keystroke swap keeps focus"
+        );
+    }
+
+    /// Email-verification indicator spells out "Email" so an admin cannot read
+    /// it as "the whole account is verified"; the two complaints in the
+    /// 2026-10-20 standup were a `Verified` label that meant only the email,
+    /// and a sign-up with a name that the row did not surface.
+    #[test]
+    fn verified_indicator_labels_the_email_half() {
+        let yes = verified_indicator(true).into_string();
+        let no = verified_indicator(false).into_string();
+        assert!(yes.contains("Email verified"), "yes label is explicit");
+        assert!(!yes.contains(">Verified<"), "no bare \"Verified\" label");
+        assert!(no.contains("Email unverified"), "no label is explicit");
+        assert!(!no.contains(">Unverified<"), "no bare \"Unverified\" label");
+    }
+
+    /// `admin_names_present` matches `handlers::names_present` on the trim
+    /// edge case: whitespace-only is empty, so a row with `"   "` reads as
+    /// missing a name rather than a profile that just happens to render a
+    /// blank space.
+    #[test]
+    fn admin_names_present_matches_trim_edge() {
+        assert!(!admin_names_present(&mk_user(None, None, true)));
+        assert!(!admin_names_present(&mk_user(Some(""), Some(""), true)));
+        assert!(!admin_names_present(&mk_user(
+            Some("   "),
+            Some("\t"),
+            true
+        )));
+        assert!(!admin_names_present(&mk_user(Some("Ada"), None, true)));
+        assert!(!admin_names_present(&mk_user(None, Some("Lovelace"), true)));
+        assert!(admin_names_present(&mk_user(
+            Some("Ada"),
+            Some("Lovelace"),
+            true
+        )));
+    }
+
+    /// Profile-completeness indicator renders both tones distinctly, so an
+    /// admin reading the row sees "Name missing" rather than another
+    /// generic Unverified amber chip overlapping with the email half.
+    #[test]
+    fn profile_complete_indicator_distinguishes_both_states() {
+        let yes = profile_complete_indicator(true).into_string();
+        let no = profile_complete_indicator(false).into_string();
+        assert!(yes.contains("Profile complete"));
+        assert!(no.contains("Name missing"));
+    }
+
+    /// The list row renders the person's name as the primary line when both
+    /// first and last are supplied, with the email demoted to a secondary
+    /// line; a nameless row still falls back to showing the email as the
+    /// primary line (so an identity cell is never blank).
+    #[test]
+    fn user_grid_row_shows_the_name_once_set() {
+        let named = user_grid_row(&mk_user(Some("Ada"), Some("Lovelace"), true)).into_string();
+        assert!(
+            named.contains("Ada Lovelace"),
+            "the primary line is the person's name"
+        );
+        assert!(
+            named.contains("person@example.com"),
+            "the email is still visible as a secondary line"
+        );
+        let anon = user_grid_row(&mk_user(None, None, true)).into_string();
+        assert!(
+            anon.contains("person@example.com"),
+            "a nameless row falls back to email as the primary line"
+        );
+        assert!(
+            !anon.contains("Ada"),
+            "no name is rendered when none is set"
+        );
+    }
 
     /// BUNYIP-742: `/admin/users` is the one page whose `hx-` attributes use
     /// htmx (BUNYIP-424), so it - and only it - must carry the vendored
