@@ -87,8 +87,10 @@ async function probe(url) {
 
 // Hub /healthz probe. bunyip-web returns a soft-404 fallback (HTTP 200 + HTML)
 // for unknown paths, so a 200 alone does NOT prove /healthz is the real endpoint
-// - require the JSON liveness body `{"status":"ok"}`. `soft` downgrades a
-// missing/blank endpoint to a warning; a network failure is always fatal.
+// - require the JSON liveness body `{"status":"ok"}`. `soft` downgrades both a
+// missing/blank endpoint AND a network failure (DNS, TCP reset, TLS handshake
+// fail, connect timeout, fetch abort) to a warning, since a transient staging
+// outage must not block an unrelated PR.
 //
 // Two callers set `soft: true` today:
 // - `hubIsProdApex` (BUNYIP-185): psa.systems does not yet serve /healthz.
@@ -132,6 +134,10 @@ async function probeHub(url, { soft = false } = {}) {
     console.log(`${url} -> 200 {"status":"ok"} ok.`);
     return true;
   } catch (err) {
+    if (soft) {
+      console.warn(`${url} -> fetch failed: ${String(err)}; hub probe soft (prod-apex carve-out or E2E_HUB_SOFT), continuing.`);
+      return false;
+    }
     console.error(`Could not reach ${url}: ${String(err)}`);
     process.exit(1);
   } finally {
