@@ -247,21 +247,18 @@ impl Api {
                 bucket: None,
             })?;
         let status = resp.status().as_u16();
-        let request_id = resp
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
-        let retry_after_header = resp
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_string);
+        let retry_after_header = retry_after_from_headers(resp.headers());
+        let request_id = request_id_from_headers(resp.headers());
         let text = resp.text().await.unwrap_or_default();
+        let body = if text.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(Value::Null)
+        };
         Ok(Resp {
-            status,
-            text,
             path: path.to_string(),
+            status,
+            body,
             set_cookies: Vec::new(),
             retry_after_header,
             request_id,
