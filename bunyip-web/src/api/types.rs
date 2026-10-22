@@ -570,6 +570,20 @@ pub struct SystemHealthResponse {
     pub health: SystemHealth,
 }
 
+/// `GET /version` on the bunyip-api root (served by `routes::version`). The
+/// `update` block comes from `UpdateChecker::status()` and is left as an
+/// opaque value so the SPA renders a short summary without pinning the full
+/// `UpdateStatus` shape, which lives in a dunite crate.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiVersion {
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub revision: String,
+    #[serde(default)]
+    pub update: Option<serde_json::Value>,
+}
+
 wire_enum! {
     /// One integration's state on the admin System Status page (BUNYIP-623).
     /// Mirrors `bunyip_domain::services::IntegrationState`.
