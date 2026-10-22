@@ -682,20 +682,29 @@ pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), A
 
 // --- admin invites (BUNYIP-760) ---------------------------------------------
 
+/// BUNYIP-939: filter parameters for the admin invites list.
+#[derive(Debug, Default, Clone)]
+pub struct InviteFilters<'a> {
+    pub status: Option<&'a str>,
+    pub email: Option<&'a str>,
+}
+
 /// List pending/past admin invites. Wraps `GET /v1/admin/invites`, paginated.
 pub async fn admin_invites(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     per_page: u32,
+    filters: InviteFilters<'_>,
 ) -> Result<PaginatedResponse<AdminInvite>, ApiError> {
-    parse(
-        api.get(
-            &format!("/admin/invites?page={page}&per_page={per_page}"),
-            cookie,
-        )
-        .await?,
-    )
+    let mut path = format!("/admin/invites?page={page}&per_page={per_page}");
+    if let Some(status) = filters.status {
+        path.push_str(&format!("&status={}", urlenc(status)));
+    }
+    if let Some(email) = filters.email {
+        path.push_str(&format!("&email={}", urlenc(email)));
+    }
+    parse(api.get(&path, cookie).await?)
 }
 
 /// Invite `email` as an admin. Wraps `POST /v1/admin/invites`, which emails the
