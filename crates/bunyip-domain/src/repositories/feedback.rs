@@ -9,6 +9,117 @@
 
 pub use dunite_feedback::FeedbackRepository;
 
+/// BUNYIP-938: filter parameters the admin feedback list carries beyond
+/// the bucket (tab). Grouped so adding a filter does not reshape every
+/// caller. All optional; empty strings should be filtered to `None` by
+/// the caller.
+#[derive(Debug, Default, Clone)]
+pub struct FeedbackFilters<'a> {
+    pub tag: Option<&'a str>,
+    pub has_attachment: Option<bool>,
+    pub has_response: Option<bool>,
+    /// Free-text search over subject, message, and email. 128-char cap
+    /// enforced by the caller.
+    pub search: Option<&'a str>,
+}
+
+/// BUNYIP-938: paginated feedback list with the extended filter set.
+///
+/// Owned here rather than added to the pinned `dunite_feedback::FeedbackRepository`,
+/// matching the `count_new_feedback` precedent above: avoids a dunite
+/// `rev` bump across all four dunite crates (BUNYIP-426 F6). The bucket
+/// semantics mirror dunite's `list_paginated` byte-for-byte so callers
+/// swapping between the two see the same tab behaviour.
+pub async fn list_paginated_filtered(
+    pool: &sqlx::PgPool,
+    page: i32,
+    per_page: i32,
+    bucket: Option<&str>,
+    filters: FeedbackFilters<'_>,
+) -> Result<(Vec<dunite_feedback::models::Feedback>, i64), sqlx::Error> {
+    use sqlx::QueryBuilder;
+
+    let offset = (page - 1) * per_page;
+    let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
+        "active" => Some("is_spam = FALSE AND status <> 'closed'"),
+        "closed" => Some("is_spam = FALSE AND status = 'closed'"),
+        "spam" => Some("is_spam = TRUE"),
+        _ => None,
+    };
+
+    fn push_where<'a>(
+        qb: &mut QueryBuilder<'a, sqlx::Postgres>,
+        bucket_predicate: Option<&'static str>,
+        filters: &FeedbackFilters<'a>,
+    ) {
+        let mut sep = " WHERE ";
+        if let Some(p) = bucket_predicate {
+            qb.push(sep).push(p);
+            sep = " AND ";
+        }
+        if let Some(tag) = filters.tag {
+            qb.push(sep).push_bind(tag).push(" = ANY(tags)");
+            sep = " AND ";
+        }
+        match filters.has_attachment {
+            Some(true) => {
+                qb.push(sep).push(
+                    "EXISTS (SELECT 1 FROM feedback_attachments fa WHERE fa.feedback_id = feedback.id)",
+                );
+                sep = " AND ";
+            }
+            Some(false) => {
+                qb.push(sep).push(
+                    "NOT EXISTS (SELECT 1 FROM feedback_attachments fa WHERE fa.feedback_id = feedback.id)",
+                );
+                sep = " AND ";
+            }
+            None => {}
+        }
+        match filters.has_response {
+            Some(true) => {
+                qb.push(sep)
+                    .push("admin_response IS NOT NULL AND trim(admin_response) <> ''");
+                sep = " AND ";
+            }
+            Some(false) => {
+                qb.push(sep)
+                    .push("(admin_response IS NULL OR trim(admin_response) = '')");
+                sep = " AND ";
+            }
+            None => {}
+        }
+        if let Some(search) = filters.search {
+            let pattern = format!("%{search}%");
+            qb.push(sep)
+                .push("(subject ILIKE ")
+                .push_bind(pattern.clone())
+                .push(" OR message ILIKE ")
+                .push_bind(pattern.clone())
+                .push(" OR email ILIKE ")
+                .push_bind(pattern)
+                .push(")");
+        }
+    }
+
+    let mut q = QueryBuilder::new("SELECT * FROM feedback");
+    push_where(&mut q, bucket_predicate, &filters);
+    q.push(" ORDER BY created_at DESC LIMIT ")
+        .push_bind(per_page)
+        .push(" OFFSET ")
+        .push_bind(offset);
+
+    let mut c = QueryBuilder::new("SELECT COUNT(*)::BIGINT FROM feedback");
+    push_where(&mut c, bucket_predicate, &filters);
+
+    let feedback = q
+        .build_query_as::<dunite_feedback::models::Feedback>()
+        .fetch_all(pool)
+        .await?;
+    let total: (i64,) = c.build_query_as().fetch_one(pool).await?;
+    Ok((feedback, total.0))
+}
+
 /// Count the feedback rows that still need an admin's attention: `status = 'new'`
 /// and not spam (BUNYIP-919). Owned here, next to the `dunite_feedback`
 /// re-export, rather than added to the pinned `FeedbackRepository`, so the
