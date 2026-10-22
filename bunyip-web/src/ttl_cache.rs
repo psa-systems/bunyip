@@ -71,6 +71,11 @@ pub struct TtlCache<T> {
     /// What the page loses when this fetch fails, so the log says why it matters.
     note: &'static str,
     slot: RwLock<Option<(Instant, Arc<T>)>>,
+    /// Gates concurrent fetches to one in flight: a caller that misses the
+    /// cache awaits this before fetching, then rechecks the slot so a caller
+    /// that lost the race serves the winner's fresh value instead of fetching
+    /// again.
+    fetch_gate: tokio::sync::Mutex<()>,
 }
 
 impl<T: Send + Sync> TtlCache<T> {
@@ -86,6 +91,7 @@ impl<T: Send + Sync> TtlCache<T> {
             target,
             note,
             slot: RwLock::new(None),
+            fetch_gate: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -95,7 +101,9 @@ impl<T: Send + Sync> TtlCache<T> {
     /// (with the HTTP status and the target type, BUNYIP-506/518) and never
     /// silently becomes an empty payload: the last-read value is served if
     /// there is one, else the `ApiError` is returned so the caller can render
-    /// it (BUNYIP-844) or apply its own documented fallback.
+    /// it (BUNYIP-844) or apply its own documented fallback. Concurrent misses
+    /// are single-flighted through `fetch_gate`: at most one `fetch` call is
+    /// in flight at a time, and every other caller serves its result.
     pub async fn get_or_fetch<F, Fut>(&self, fetch: F) -> Result<Arc<T>, ApiError>
     where
         F: FnOnce() -> Fut,
@@ -103,6 +111,14 @@ impl<T: Send + Sync> TtlCache<T> {
     {
         let (value, _) = self.get_or_fetch_traced(fetch).await;
         value
+    }
+
+    /// The cached value, if a read within the TTL is already sitting in the
+    /// slot.
+    fn fresh_hit(&self) -> Option<Arc<T>> {
+        let slot = self.slot.read().unwrap_or_else(|e| e.into_inner());
+        let (at, hit) = slot.as_ref()?;
+        (at.elapsed() < self.ttl).then(|| Arc::clone(hit))
     }
 
     /// [`Self::get_or_fetch`] plus the [`CacheSource`], for tests.
@@ -114,10 +130,16 @@ impl<T: Send + Sync> TtlCache<T> {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<T, ApiError>>,
     {
-        if let Some((at, hit)) = self.slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            if at.elapsed() < self.ttl {
-                return (Ok(Arc::clone(hit)), CacheSource::CacheHit);
-            }
+        if let Some(hit) = self.fresh_hit() {
+            return (Ok(hit), CacheSource::CacheHit);
+        }
+        // Expired or empty: queue behind any fetch already in flight, then
+        // recheck. A caller that lost the race to the gate finds the slot
+        // the winner just filled and serves that instead of fetching again,
+        // so a burst of concurrent callers makes at most one upstream call.
+        let _gate = self.fetch_gate.lock().await;
+        if let Some(hit) = self.fresh_hit() {
+            return (Ok(hit), CacheSource::CacheHit);
         }
         match fetch().await {
             Ok(fresh) => {
@@ -233,6 +255,53 @@ mod tests {
         assert_eq!(s1, CacheSource::Fetched);
         assert_eq!(s2, CacheSource::CacheHit, "second render must not fetch");
         assert_eq!(calls.load(Ordering::SeqCst), 1, "exactly one upstream call");
+    }
+
+    /// BUNYIP-950 AC: a burst of concurrent callers landing after TTL expiry
+    /// (or on a cold cache) must coalesce into exactly one upstream `fetch`,
+    /// not one per caller. Each spawned task races to the gate; the loser
+    /// tasks awaiting the gate must serve the winner's fresh value instead of
+    /// each starting their own fetch.
+    #[tokio::test]
+    async fn concurrent_misses_after_ttl_coalesce_to_one_fetch() {
+        let cache = Arc::new(pricing_cache(60));
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                let calls = Arc::clone(&calls);
+                tokio::spawn(async move {
+                    let fetch = || async {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        // Hold the gate long enough that every other spawned
+                        // task has a chance to reach it before this resolves,
+                        // so a bug that fetches per-caller would show up as
+                        // more than one call.
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        Ok(published())
+                    };
+                    cache.get_or_fetch_traced(fetch).await
+                })
+            })
+            .collect();
+
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            results.push(handle.await.expect("task must not panic"));
+        }
+
+        assert!(
+            results
+                .iter()
+                .all(|(r, _)| r.as_ref().is_ok_and(|p| p.published())),
+            "every caller gets the published payload"
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a concurrent burst must make exactly one upstream call"
+        );
     }
 
     /// BUNYIP-518 AC: a 429 must not silently unpublish the page. With a payload

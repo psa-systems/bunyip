@@ -534,23 +534,44 @@ pub async fn set_application_restricted(
 
 // --- audit logs -------------------------------------------------------------
 
+/// BUNYIP-936 / BUNYIP-937: filter parameters the admin audit page carries.
+/// Grouped into a struct so the helper signature does not grow a parameter
+/// per field as new filters land.
+#[derive(Debug, Default, Clone)]
+pub struct AuditFilters<'a> {
+    pub user_id: Option<&'a str>,
+    pub action: Option<&'a str>,
+    pub severity: Option<&'a str>,
+    pub since: Option<&'a str>,
+    pub q: Option<&'a str>,
+}
+
 pub async fn audit_logs(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
     admin_only: bool,
-    // BUNYIP-930: optional single-user filter. The API already accepts
-    // `user_id`; the admin audit page and the user-detail page both read
-    // through this one helper so a change to the filter surface stays local.
-    user_id: Option<&str>,
+    filters: AuditFilters<'_>,
 ) -> Result<PaginatedResponse<AdminAuditLog>, ApiError> {
     let mut path = format!("/admin/audit-logs?page={page}&per_page={page_size}");
     if admin_only {
         path.push_str("&admin_only=true");
     }
-    if let Some(uid) = user_id {
-        path.push_str(&format!("&user_id={uid}"));
+    if let Some(uid) = filters.user_id {
+        path.push_str(&format!("&user_id={}", urlenc(uid)));
+    }
+    if let Some(action) = filters.action {
+        path.push_str(&format!("&action={}", urlenc(action)));
+    }
+    if let Some(severity) = filters.severity {
+        path.push_str(&format!("&severity={}", urlenc(severity)));
+    }
+    if let Some(since) = filters.since {
+        path.push_str(&format!("&since={}", urlenc(since)));
+    }
+    if let Some(q) = filters.q {
+        path.push_str(&format!("&q={}", urlenc(q)));
     }
     parse(api.get(&path, cookie).await?)
 }
