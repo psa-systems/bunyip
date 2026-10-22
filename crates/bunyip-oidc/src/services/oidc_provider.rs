@@ -35,6 +35,25 @@ pub use dunite_oidc_op::{
     OpSession, RotatedRefreshDeadlines,
 };
 
+/// BUNYIP-947 F16: `now == deadline` is expired, matching
+/// `check_op_session_alive`'s convention (BUNYIP-852) so a refresh-token
+/// rotation and the op-session alive check it calls a few lines later never
+/// disagree at the exact boundary instant. Pure, so unit-tested without a DB.
+fn refresh_token_expired(
+    now: DateTime<Utc>,
+    idle_exp: DateTime<Utc>,
+    abs_exp: DateTime<Utc>,
+) -> bool {
+    now >= idle_exp || now >= abs_exp
+}
+
+/// BUNYIP-947 F16: same equality convention as [`refresh_token_expired`] and
+/// `check_op_session_alive`, applied to an authorization code's single
+/// deadline.
+fn auth_code_expired(now: DateTime<Utc>, expires_at: DateTime<Utc>) -> bool {
+    now >= expires_at
+}
+
 // ── Access token claims (RFC 9068) ────────────────────────────────────────────
 
 /// Claims for an RFC 9068 JWT access token (`typ: at+jwt`).
@@ -657,7 +676,7 @@ impl OidcProvider {
         }
 
         // Expiry
-        if row.expires_at < Utc::now() {
+        if auth_code_expired(Utc::now(), row.expires_at) {
             return Err(AppError::OidcInvalidGrant(
                 "authorization code expired".into(),
             ));
@@ -1000,7 +1019,7 @@ impl OidcProvider {
         let now = Utc::now();
         let idle_exp: DateTime<Utc> = old.idle_expires_at;
         let abs_exp: DateTime<Utc> = old.absolute_expires_at;
-        if now > idle_exp || now > abs_exp {
+        if refresh_token_expired(now, idle_exp, abs_exp) {
             return Err(AppError::OidcInvalidGrant("refresh token expired".into()));
         }
 
@@ -2492,6 +2511,57 @@ mod tests {
                 "drift at now = {now:?} (expires_at = {expires_at:?}, idle_expires_at = {idle_expires_at:?})",
             );
         }
+    }
+
+    // BUNYIP-947 F16: `rotate_refresh_token`'s own expiry check used `>`
+    // (still valid at `now == deadline`) while `check_op_session_alive`, a
+    // few lines later in the same function, uses `>=` (expired at the
+    // instant). These pin the refresh-token check to the same convention.
+    #[test]
+    fn refresh_token_expired_at_the_idle_deadline_instant() {
+        let now = Utc::now();
+        let idle_exp = now;
+        let abs_exp = now + Duration::hours(1);
+        assert!(
+            refresh_token_expired(now, idle_exp, abs_exp),
+            "now == idle_expires_at must be treated as expired"
+        );
+    }
+
+    #[test]
+    fn refresh_token_expired_at_the_absolute_deadline_instant() {
+        let now = Utc::now();
+        let idle_exp = now + Duration::minutes(30);
+        let abs_exp = now;
+        assert!(
+            refresh_token_expired(now, idle_exp, abs_exp),
+            "now == absolute_expires_at must be treated as expired"
+        );
+    }
+
+    #[test]
+    fn refresh_token_not_expired_one_second_before_either_deadline() {
+        let now = Utc::now();
+        let idle_exp = now + Duration::seconds(1);
+        let abs_exp = now + Duration::hours(1);
+        assert!(!refresh_token_expired(now, idle_exp, abs_exp));
+    }
+
+    // BUNYIP-947 F16: `consume_authorization_code`'s own expiry check had the
+    // same "equality still valid" direction as the refresh-token check above.
+    #[test]
+    fn auth_code_expired_at_the_deadline_instant() {
+        let now = Utc::now();
+        assert!(
+            auth_code_expired(now, now),
+            "now == expires_at must be treated as expired"
+        );
+    }
+
+    #[test]
+    fn auth_code_not_expired_one_second_before_the_deadline() {
+        let now = Utc::now();
+        assert!(!auth_code_expired(now, now + Duration::seconds(1)));
     }
 
     // BUNYIP-636 PR 3: the rotated refresh token's deadlines are capped at

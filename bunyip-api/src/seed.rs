@@ -777,9 +777,9 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
             UserRepository::update_profile(
                 pool,
                 user.id,
-                u.first_name.as_deref(),
-                u.last_name.as_deref(),
-                u.phone.as_deref(),
+                Some(u.first_name.as_deref()),
+                Some(u.last_name.as_deref()),
+                Some(u.phone.as_deref()),
             )
             .await?;
         }

@@ -6,13 +6,13 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use sqlx::PgPool;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use crate::config::Config;
+use crate::config::{Config, TierConfig};
 use crate::errors::AppError;
 use crate::handlers::user::self_user;
 use crate::middleware::{AuthCookies, AuthenticatedUser};
-use crate::models::MembershipResponse;
+use crate::models::{MembershipResponse, StripePriceResponse};
 use crate::repositories::UserRepository;
 use crate::responses::{get_request_id, success};
 use crate::services::{stripe_err, JwtService, StripeService};
@@ -98,6 +98,7 @@ pub async fn create_checkout(
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,
     stripe: web::Data<Arc<StripeService>>,
+    tier_config: web::Data<Arc<RwLock<TierConfig>>>,
     body: web::Json<CheckoutRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -117,16 +118,20 @@ pub async fn create_checkout(
         return Err(AppError::conflict("You already have an active membership"));
     }
 
-    // Use the provided price_id, or discover the first active price from Stripe
+    // Use the provided price_id, or fall back to the standard tier's active
+    // price. BUNYIP-942: BUNYIP-517's model allows free/lifetime, early-adopter
+    // and standard prices to be simultaneously active on different products, so
+    // the fallback must resolve the standard tier's product specifically rather
+    // than take the first active price Stripe happens to list.
     let price_id = match &body.price_id {
         Some(id) => id.clone(),
         None => {
+            let cfg = tier_config
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let prices = stripe.list_prices(None).await.map_err(stripe_err)?;
-            prices
-                .into_iter()
-                .find(|p| p.active)
-                .map(|p| p.id)
-                .ok_or_else(|| AppError::validation("price_id", "No active price configured"))?
+            standard_tier_fallback_price(&cfg, &prices)?
         }
     };
 
@@ -170,6 +175,26 @@ pub async fn create_checkout(
         },
         request_id,
     ))
+}
+
+/// Resolve the no-`price_id` checkout fallback to the standard tier's active
+/// price. `prices` is the full app-tagged, possibly multi-product list
+/// `list_prices(None)` returns; this filters it to the one product
+/// `resolve_tier_for_product` (`webhook.rs`) also treats as standard, instead
+/// of taking the first active price regardless of product (BUNYIP-942).
+fn standard_tier_fallback_price(
+    tc: &TierConfig,
+    prices: &[StripePriceResponse],
+) -> Result<String, AppError> {
+    let standard_product_id = tc
+        .standard_product_id
+        .as_deref()
+        .ok_or_else(|| AppError::validation("price_id", "No active price configured"))?;
+    prices
+        .iter()
+        .find(|p| p.active && p.product_id == standard_product_id)
+        .map(|p| p.id.clone())
+        .ok_or_else(|| AppError::validation("price_id", "No active price configured"))
 }
 
 /// POST /v1/memberships/cancel
@@ -435,4 +460,61 @@ pub async fn get_payment_history(
 #[derive(Debug, Deserialize)]
 pub struct PaginationQuery {
     pub per_page: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn price(id: &str, product_id: &str, active: bool) -> StripePriceResponse {
+        StripePriceResponse {
+            id: id.into(),
+            product_id: product_id.into(),
+            unit_amount: Some(100),
+            currency: "usd".into(),
+            recurring_interval: Some("month".into()),
+            recurring_interval_count: Some(1),
+            active,
+        }
+    }
+
+    fn tier_config_with_products() -> TierConfig {
+        let mut tc = TierConfig::from_env();
+        tc.lifetime_product_id = Some("prod_life".into());
+        tc.early_adopter_product_id = Some("prod_ea".into());
+        tc.standard_product_id = Some("prod_std".into());
+        tc
+    }
+
+    /// BUNYIP-942 AC: three active prices on three different products, each
+    /// matching one of `tc.{lifetime,early_adopter,standard}_product_id`; the
+    /// no-`price_id` fallback must resolve to the one on `standard_product_id`,
+    /// not whichever Stripe lists first.
+    #[test]
+    fn fallback_resolves_the_standard_products_price_not_the_first_active_one() {
+        let tc = tier_config_with_products();
+        let prices = vec![
+            price("price_life", "prod_life", true),
+            price("price_ea", "prod_ea", true),
+            price("price_std", "prod_std", true),
+        ];
+        assert_eq!(
+            standard_tier_fallback_price(&tc, &prices).unwrap(),
+            "price_std"
+        );
+    }
+
+    #[test]
+    fn fallback_ignores_an_inactive_standard_price() {
+        let tc = tier_config_with_products();
+        let prices = vec![price("price_std_old", "prod_std", false)];
+        assert!(standard_tier_fallback_price(&tc, &prices).is_err());
+    }
+
+    #[test]
+    fn fallback_errors_when_no_standard_product_is_configured() {
+        let tc = TierConfig::from_env();
+        let prices = vec![price("price_std", "prod_std", true)];
+        assert!(standard_tier_fallback_price(&tc, &prices).is_err());
+    }
 }

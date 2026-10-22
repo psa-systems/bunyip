@@ -143,28 +143,39 @@ impl UserRepository {
     }
 
     /// BUNYIP-139: update the user's optional profile fields (first_name,
-    /// last_name, phone). Each Option is interpreted at the SQL level: `Some`
-    /// writes the value; `None` clears the column to NULL. Whitespace
-    /// normalization (trim, "" -> NULL) is the caller's responsibility - this
-    /// method writes verbatim. Returns the updated user row.
+    /// last_name, phone). Each parameter is a nested `Option` interpreted at
+    /// the SQL level: the outer `None` leaves the column untouched, `Some(None)`
+    /// clears it to NULL, `Some(Some(v))` writes `v`. "Untouched" is resolved by
+    /// a `CASE WHEN` inside the same `UPDATE` statement (BUNYIP-951) rather than
+    /// by the caller reading a snapshot and writing it back, so two concurrent
+    /// partial updates that each touch a different field can never clobber the
+    /// other's write with a stale value. Whitespace normalization (trim, ""
+    /// -> NULL) is the caller's responsibility - this method writes verbatim.
+    /// Returns the updated user row.
     pub async fn update_profile(
         pool: &PgPool,
         user_id: Uuid,
-        first_name: Option<&str>,
-        last_name: Option<&str>,
-        phone: Option<&str>,
+        first_name: Option<Option<&str>>,
+        last_name: Option<Option<&str>>,
+        phone: Option<Option<&str>>,
     ) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
             UPDATE users
-            SET first_name = $1, last_name = $2, phone = $3, updated_at = NOW()
-            WHERE id = $4 AND deleted_at IS NULL
+            SET first_name = CASE WHEN $1 THEN $2 ELSE first_name END,
+                last_name = CASE WHEN $3 THEN $4 ELSE last_name END,
+                phone = CASE WHEN $5 THEN $6 ELSE phone END,
+                updated_at = NOW()
+            WHERE id = $7 AND deleted_at IS NULL
             RETURNING *
             "#,
         )
-        .bind(first_name)
-        .bind(last_name)
-        .bind(phone)
+        .bind(first_name.is_some())
+        .bind(first_name.flatten())
+        .bind(last_name.is_some())
+        .bind(last_name.flatten())
+        .bind(phone.is_some())
+        .bind(phone.flatten())
         .bind(user_id)
         .fetch_optional(pool)
         .await?
