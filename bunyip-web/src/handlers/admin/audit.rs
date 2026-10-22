@@ -15,7 +15,7 @@ use crate::web::AppState;
 
 use super::title_case;
 
-#[derive(Deserialize, Default)]
+#[derive(Clone, Deserialize, Default)]
 pub struct AuditQuery {
     pub page: Option<u32>,
     pub admin_only: Option<String>,
@@ -187,6 +187,22 @@ pub async fn audit_logs(
     };
     let page = q.page.unwrap_or(1).max(1);
     let admin_only = q.admin_only.as_deref() == Some("true");
+    // Resolve the user_id filter to the owner's email so the chip reads as
+    // "Filtered to person@example.com", not an opaque UUID. A failed lookup
+    // degrades to the id itself: that still answers the "which account is this
+    // filtered to" question, and the row data below is unaffected.
+    let user_filter_label: Option<String> = match q
+        .user_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(uid) => match admin_api::get_user(&st.api, c.forward.as_deref(), uid).await {
+            Ok(u) => Some(u.email),
+            Err(_) => Some(uid.to_string()),
+        },
+        None => None,
+    };
     let filters = admin_api::AuditFilters {
         user_id: q.user_id.as_deref().filter(|s| !s.is_empty()),
         action: q.action.as_deref().filter(|s| !s.is_empty()),
@@ -233,6 +249,21 @@ pub async fn audit_logs(
                             }
                         }
                     }
+                    // `user_id` filter chip: when the admin reaches this page
+                    // from a specific user's detail view (the "View full audit
+                    // log" link), name the person the view is scoped to with a
+                    // Clear link that drops the user_id but keeps the other
+                    // filters. Separate from the filter_select row below
+                    // because the chip is a navigational scope marker, not an
+                    // editable filter control.
+                    @if let Some(label) = user_filter_label.as_deref() {
+                        @let clear_user = pager_base(&AuditQuery { user_id: None, ..q.clone() }, admin_only);
+                        div class="mt-4 flex items-center gap-2 text-sm" {
+                            span class="text-muted-foreground" { "Filtered to " }
+                            (badge("secondary", label))
+                            a href=(clear_user) class=(button_class("ghost", "sm", "")) { "Clear" }
+                        }
+                    }
                     // BUNYIP-936 / BUNYIP-937: filter chips + search. One
                     // form wraps the row so any `onchange` or Enter submit
                     // carries every chip to the server.
@@ -262,4 +293,76 @@ pub async fn audit_logs(
         }
     };
     admin_response(&c, &user, "/admin/audit-logs", "Audit Logs", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pager_base, preserved_hidden, AuditQuery};
+
+    /// The pager base URL carries `user_id` so clicking Next on a
+    /// user-scoped audit view does not drop the scope between pages. If this
+    /// test fails, pagination silently escapes the user filter.
+    #[test]
+    fn pager_base_preserves_the_user_id_filter() {
+        let q = AuditQuery {
+            user_id: Some("11111111-1111-1111-1111-111111111111".into()),
+            ..Default::default()
+        };
+        let url = pager_base(&q, false);
+        assert!(
+            url.contains("user_id=11111111-1111-1111-1111-111111111111"),
+            "pager base must preserve user_id, got {url}"
+        );
+    }
+
+    /// Hidden inputs on the filter-chip form include the current `user_id`
+    /// so a chip submit (action / severity / since / search) also keeps the
+    /// user-scope filter alive.
+    #[test]
+    fn preserved_hidden_round_trips_user_id() {
+        let q = AuditQuery {
+            user_id: Some("22222222-2222-2222-2222-222222222222".into()),
+            ..Default::default()
+        };
+        let html = preserved_hidden(&q).into_string();
+        assert!(
+            html.contains(r#"name="user_id""#),
+            "hidden input for user_id missing"
+        );
+        assert!(
+            html.contains("22222222-2222-2222-2222-222222222222"),
+            "the user_id value is round-tripped"
+        );
+    }
+
+    /// Clearing the filter-chip row keeps the user_id scope: the Clear link
+    /// resets action/severity/since/q but hands back the same `user_id` so
+    /// the scope marker stays after an admin re-opens the full event list
+    /// for that user.
+    #[test]
+    fn clearing_the_chip_row_keeps_user_id() {
+        let q = AuditQuery {
+            user_id: Some("33333333-3333-3333-3333-333333333333".into()),
+            action: Some("login".into()),
+            severity: Some("info".into()),
+            ..Default::default()
+        };
+        // Mirrors the inline `clear` expression on the chip row.
+        let clear = pager_base(
+            &AuditQuery {
+                user_id: q.user_id.clone(),
+                admin_only: q.admin_only.clone(),
+                ..Default::default()
+            },
+            false,
+        );
+        assert!(
+            clear.contains("user_id=33333333-3333-3333-3333-333333333333"),
+            "Clear preserves the user_id scope, got {clear}"
+        );
+        assert!(
+            !clear.contains("action="),
+            "Clear drops the action chip, got {clear}"
+        );
+    }
 }
