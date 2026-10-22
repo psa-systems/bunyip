@@ -221,6 +221,49 @@ impl Api {
     pub async fn get(&self, path: &str, cookie: Option<&str>) -> Result<Resp, ApiError> {
         self.send(Method::GET, path, cookie, None).await
     }
+
+    /// GET a root-level path (no `/v1` prefix). bunyip-api serves a handful of
+    /// endpoints at the application root rather than inside `/v1`: `/health`,
+    /// `/healthz`, `/version`. Those need to bypass the `base_v1` prefix the
+    /// normal `send` builds.
+    pub async fn get_root(&self, path: &str) -> Result<Resp, ApiError> {
+        let url = format!(
+            "{}{}",
+            self.base_v1.strip_suffix("/v1").unwrap_or(&self.base_v1),
+            path
+        );
+        let resp = self
+            .http
+            .request(Method::GET, &url)
+            .header(ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(|e| ApiError {
+                status: 0,
+                code: "FETCH_FAILED".into(),
+                message: format!("GET {url}: {e}"),
+                retry_after: None,
+                request_id: None,
+                bucket: None,
+            })?;
+        let status = resp.status().as_u16();
+        let retry_after_header = retry_after_from_headers(resp.headers());
+        let request_id = request_id_from_headers(resp.headers());
+        let text = resp.text().await.unwrap_or_default();
+        let body = if text.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(Value::Null)
+        };
+        Ok(Resp {
+            path: path.to_string(),
+            status,
+            body,
+            set_cookies: Vec::new(),
+            retry_after_header,
+            request_id,
+        })
+    }
     pub async fn post(
         &self,
         path: &str,

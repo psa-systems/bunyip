@@ -77,10 +77,30 @@ pub(super) fn ip_ban_add_card(prefill_ip: Option<&str>) -> Markup {
 /// Query for the IP bans page. `ip` prefills the add-ban form so a
 /// "Ban this address" link (BUNYIP-436: from the feedback detail IP) arrives
 /// ready to submit.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct IpBansQuery {
     pub ip: Option<String>,
+    /// BUNYIP-940: IP prefix filter (max 45 chars - IPv6 max). Matches via
+    /// `starts_with` on the serialized ip string.
+    pub search: Option<String>,
+    /// BUNYIP-940: reason substring filter (max 128 chars). ILIKE on the
+    /// reason string.
+    pub reason: Option<String>,
+    /// BUNYIP-940: sort key. One of `strikes_desc`, `strikes_asc`,
+    /// `expires_soonest`, `expires_latest`, `banned_newest` (default),
+    /// `banned_oldest`.
+    pub sort: Option<String>,
 }
+
+/// BUNYIP-940: the six sort orders the chip offers.
+const IP_BANS_SORT_OPTIONS: &[(&str, &str)] = &[
+    ("banned_newest", "Banned (newest first)"),
+    ("banned_oldest", "Banned (oldest first)"),
+    ("strikes_desc", "Strikes (most)"),
+    ("strikes_asc", "Strikes (fewest)"),
+    ("expires_soonest", "Expires (soonest)"),
+    ("expires_latest", "Expires (latest)"),
+];
 
 /// One labelled field in the enrichment panel, rendered only when present.
 fn enrich_field(label: &str, value: Option<&str>) -> Markup {
@@ -162,7 +182,40 @@ pub async fn ip_bans(
     let data = admin_api::ip_bans(&st.api, c.forward.as_deref()).await;
     let fetch_error = data.as_ref().err().cloned();
     let reachable = data.is_ok();
-    let bans = data.unwrap_or_default();
+    let total_before_filter = data.as_ref().map(|v| v.len()).unwrap_or(0);
+    let mut bans = data.unwrap_or_default();
+
+    // BUNYIP-940: filter + sort client-side. The API returns the live
+    // in-memory ban map in one shot (not paginated), so the chip-driven
+    // narrowing happens here in the handler instead of as query params on
+    // the API.
+    let search = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let reason_q = q.reason.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(prefix) = search {
+        let prefix_lc = prefix.to_ascii_lowercase();
+        bans.retain(|b| b.ip.to_ascii_lowercase().starts_with(&prefix_lc));
+    }
+    if let Some(r) = reason_q {
+        let r_lc = r.to_ascii_lowercase();
+        bans.retain(|b| b.reason.to_ascii_lowercase().contains(&r_lc));
+    }
+    let sort = q
+        .sort
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("banned_newest");
+    match sort {
+        "strikes_desc" => bans.sort_by_key(|b| std::cmp::Reverse(b.strikes)),
+        "strikes_asc" => bans.sort_by_key(|b| b.strikes),
+        "expires_soonest" => bans.sort_by(|a, b| a.expires_at.cmp(&b.expires_at)),
+        "expires_latest" => bans.sort_by(|a, b| b.expires_at.cmp(&a.expires_at)),
+        "banned_oldest" => bans.sort_by(|a, b| a.banned_at.cmp(&b.banned_at)),
+        _ => bans.sort_by(|a, b| b.banned_at.cmp(&a.banned_at)), // banned_newest (default)
+    }
+    let any_filter_active = search.is_some() || reason_q.is_some() || sort != "banned_newest";
+    let search_value = q.search.as_deref().unwrap_or("");
+    let reason_value = q.reason.as_deref().unwrap_or("");
 
     // BUNYIP-437: when the page is opened for a specific address (a "look up /
     // ban this address" link), fetch its advisory ASN / VPN enrichment. A failed
@@ -191,7 +244,30 @@ pub async fn ip_bans(
             div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                 div class="flex flex-col space-y-1.5 p-6" {
                     div class="flex items-center gap-3" { (icon("shield-off", "h-5 w-5 text-destructive")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active Bans" } }
-                    @if reachable { p class="text-sm text-muted-foreground" { (bans.len()) " active." } }
+                    @if reachable {
+                        p class="text-sm text-muted-foreground" {
+                            @if any_filter_active {
+                                (bans.len()) " of " (total_before_filter) " active."
+                            } @else {
+                                (bans.len()) " active."
+                            }
+                        }
+                    }
+                    // BUNYIP-940: filter + sort chips. One form so a submit
+                    // on any control carries every value to the server.
+                    form method="get" action="/admin/ip-bans" class="mt-4 flex flex-wrap items-center gap-2" {
+                        input type="text" name="search" value=(search_value) placeholder="IP prefix (e.g. 45.3.)" maxlength="45" class="h-9 w-48 rounded-md border border-input bg-background px-3 text-sm";
+                        input type="text" name="reason" value=(reason_value) placeholder="Reason contains…" maxlength="128" class="h-9 flex-1 min-w-[12rem] rounded-md border border-input bg-background px-3 text-sm";
+                        select name="sort" class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
+                            @for (value, label) in IP_BANS_SORT_OPTIONS {
+                                option value=(value) selected[sort == *value] { (label) }
+                            }
+                        }
+                        button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
+                        @if any_filter_active {
+                            a href="/admin/ip-bans" class=(button_class("ghost", "sm", "")) { "Clear" }
+                        }
+                    }
                 }
                 div class="p-6 pt-0" {
                     @if let Some(e) = &fetch_error {

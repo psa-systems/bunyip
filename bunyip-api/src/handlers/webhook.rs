@@ -571,8 +571,10 @@ async fn handle_subscription_updated(
 
         let mut tx = pool.begin().await?;
         UserRepository::update_membership_status(&mut *tx, user.id, user_status).await?;
-        if let Some(ref tier) = resolved_tier {
-            UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+        if grants_access {
+            if let Some(ref tier) = resolved_tier {
+                UserRepository::upgrade_membership_tier(&mut *tx, user.id, tier).await?;
+            }
         }
         tx.commit().await?;
 

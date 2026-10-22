@@ -326,6 +326,29 @@ jobs:
           ./scripts/check-publish-triggers.nu --self-test
           ./scripts/check-publish-triggers.nu
 
+      - name: Ensure cargo-binstall is on PATH
+        # check-dependency-audit.nu's `ensure-audit` uses cargo-binstall when
+        # it is available and falls back to `cargo install --locked cargo-audit`
+        # when it is not. The CI runner image ships no binstall, so the
+        # fallback compiled cargo-audit from source: aws-lc-sys wrote ~2 GB
+        # of scratch into /tmp and the runner's /tmp ran out of space partway
+        # through, failing with `No space left on device`. Install the pinned
+        # cargo-binstall release tarball directly into CARGO_HOME so the audit
+        # step takes the binary-download path. On a warm runner (either
+        # binstall or cargo-audit already in CARGO_HOME) this step is a no-op.
+        run: |
+          if (which cargo-binstall | is-empty) {
+              let ver = "1.14.3"
+              let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+              let tmp = (mktemp --tmpdir --suffix .tgz)
+              http get $url | save --force $tmp
+              mkdir ~/.cargo/bin
+              ^tar -xzf $tmp -C ~/.cargo/bin cargo-binstall
+              rm $tmp
+          } else {
+              print "cargo-binstall is already on PATH; skipping download"
+          }
+
       - name: Dependency audit
         # Cargo.lock against the RustSec advisory database: an uncovered
         # vulnerability fails, a warning is reported only, and the one

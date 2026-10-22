@@ -19,6 +19,7 @@
 /bunyip-api/tests/totp_setup_token.rs
 /bunyip-api/tests/totp_single_use.rs
 /bunyip-api/tests/verified_admin_gate.rs
+/bunyip-api/tests/webhook.rs
 /compose.dev.yml
 /crates/bunyip-core/src/config.rs
 /crates/bunyip-domain/src/config.rs
