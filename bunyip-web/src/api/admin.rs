@@ -6,7 +6,7 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
     AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminRateLimitWhitelistEntry,
-    AdminStatsResponse, AdminUser, AppDoc, ApiVersion, ApplicationGroup, ApplicationGroupList,
+    AdminStatsResponse, AdminUser, ApiVersion, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
     MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,

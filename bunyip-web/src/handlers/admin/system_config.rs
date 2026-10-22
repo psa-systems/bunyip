@@ -195,7 +195,13 @@ pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Re
         .map(SystemSettingsValues::from_config)
         .unwrap_or_default();
     let content = system_settings_content(cfg.as_ref(), &values, None);
-    admin_response(&c, &user, "/admin/system-config", "System Settings", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/system-config",
+        "System Settings",
+        content,
+    )
 }
 
 #[derive(Deserialize)]
@@ -248,7 +254,13 @@ pub async fn system_config_save(
     // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
     let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;
     let content = system_settings_content(cfg.as_ref(), &values, Some(&error));
-    admin_response(&c, &user, "/admin/system-config", "System Settings", content)
+    admin_response(
+        &c,
+        &user,
+        "/admin/system-config",
+        "System Settings",
+        content,
+    )
 }
 
 #[cfg(test)]

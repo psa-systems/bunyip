@@ -133,7 +133,10 @@ fn format_uptime(secs: u64) -> String {
 /// elides the rest. An unexpected shape renders nothing rather than guessing.
 fn update_summary(update: Option<&serde_json::Value>) -> Option<String> {
     let obj = update?.as_object()?;
-    let available = obj.get("available").and_then(|v| v.as_bool()).unwrap_or(false);
+    let available = obj
+        .get("available")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if !available {
         return None;
     }
@@ -401,10 +404,7 @@ mod tests {
         let html = version_card(Some(&sample_api_version()), None).into_string();
         assert!(html.contains("API (bunyip-api)"), "API label: {html}");
         assert!(html.contains("v0.19.0"), "API version string: {html}");
-        assert!(
-            html.contains("deadbeefcafe"),
-            "API short revision: {html}"
-        );
+        assert!(html.contains("deadbeefcafe"), "API short revision: {html}");
         assert!(
             !html.contains("deadbeefcafebabe1234567890"),
             "full API commit must be truncated: {html}"
@@ -436,13 +436,17 @@ mod tests {
     /// current build does not shout.
     #[test]
     fn update_summary_only_shows_when_an_upgrade_is_available() {
-        let none =
-            update_summary(Some(&serde_json::json!({ "available": false, "latest_version": "v9.9.9" })));
+        let none = update_summary(Some(
+            &serde_json::json!({ "available": false, "latest_version": "v9.9.9" }),
+        ));
         assert!(none.is_none(), "nothing to surface when not available");
         let msg = update_summary(Some(
             &serde_json::json!({ "available": true, "latest_version": "v0.20.0" }),
         ))
         .expect("available=true should surface");
-        assert!(msg.contains("v0.20.0"), "the latest version is named: {msg}");
+        assert!(
+            msg.contains("v0.20.0"),
+            "the latest version is named: {msg}"
+        );
     }
 }
