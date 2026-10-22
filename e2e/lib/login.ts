@@ -335,7 +335,7 @@ async function fillTotpStep(page: Page): Promise<void> {
 // Logout is a POST (BUNYIP-907, CSRF under SameSite=Lax), so this opens the
 // profile menu and clicks "Log out" rather than navigating directly.
 export async function logoutViaHub(page: Page): Promise<void> {
-  await page.locator('[data-menu] summary').click();
+  await page.locator('[data-menu]:not([data-mobile-nav]) summary').click();
   await page.getByRole('button', { name: 'Log out' }).click();
 }
 
