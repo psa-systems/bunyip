@@ -49,6 +49,12 @@ pub async fn revoke_trusted_device(
 pub enum LoginOutcome {
     SignedIn(User),
     TwoFactorRequired { challenge_token: String },
+    // BUNYIP-944: bunyip-api's suspicious-login approval gate (BUNYIP-373)
+    // returns `{"requires_approval": true, "challenge_token": "..."}` with no
+    // `user` field when it trips. Without this variant the response fell
+    // through to the `AuthResponse` decode below and failed as a generic
+    // `ApiError`, leaving the user with no way to complete sign-in.
+    ApprovalRequired { challenge_token: String },
 }
 
 fn parse_login(path: &str, value: Value) -> Result<LoginOutcome, ApiError> {
@@ -63,6 +69,18 @@ fn parse_login(path: &str, value: Value) -> Result<LoginOutcome, ApiError> {
             .unwrap_or_default()
             .to_string();
         return Ok(LoginOutcome::TwoFactorRequired { challenge_token });
+    }
+    if value
+        .get("requires_approval")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let challenge_token = value
+            .get("challenge_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        return Ok(LoginOutcome::ApprovalRequired { challenge_token });
     }
     let auth: AuthResponse =
         serde_json::from_value(value).map_err(|e| decode_error::<AuthResponse>(path, &e))?;
@@ -135,6 +153,31 @@ pub async fn verify_2fa(
     let data = ok_data(&r)?.clone();
     let auth: AuthResponse = serde_json::from_value(data)
         .map_err(|e| decode_error::<AuthResponse>("/auth/2fa/verify", &e))?;
+    Ok((auth.user, cookies))
+}
+
+/// BUNYIP-944: complete a login withheld by the suspicious-login approval gate
+/// (BUNYIP-373) by posting the emailed code to `/auth/login-approval/verify`.
+pub async fn verify_login_approval(
+    api: &Api,
+    cookie: Option<&str>,
+    challenge_token: &str,
+    code: &str,
+) -> Result<(User, Vec<String>), ApiError> {
+    let r = api
+        .post(
+            "/auth/login-approval/verify",
+            cookie,
+            Some(json!({
+                "challenge_token": challenge_token,
+                "code": code,
+            })),
+        )
+        .await?;
+    let cookies = r.set_cookies.clone();
+    let data = ok_data(&r)?.clone();
+    let auth: AuthResponse = serde_json::from_value(data)
+        .map_err(|e| decode_error::<AuthResponse>("/auth/login-approval/verify", &e))?;
     Ok((auth.user, cookies))
 }
 
@@ -519,4 +562,24 @@ pub async fn regenerate_recovery_codes(
         )
         .await?,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// BUNYIP-944: a `requires_approval` login response must decode as
+    /// `LoginOutcome::ApprovalRequired`, not fall through to the `AuthResponse`
+    /// decode and surface as a generic `ApiError`.
+    #[test]
+    fn parse_login_detects_requires_approval() {
+        let value = json!({ "requires_approval": true, "challenge_token": "x" });
+        let outcome = parse_login("/auth/login", value).expect("decodes without ApiError");
+        match outcome {
+            LoginOutcome::ApprovalRequired { challenge_token } => {
+                assert_eq!(challenge_token, "x");
+            }
+            _ => panic!("expected ApprovalRequired"),
+        }
+    }
 }
