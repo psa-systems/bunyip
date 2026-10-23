@@ -51,5 +51,5 @@ jobs:
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'release/v')
-    uses: psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
+    uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases API; this caller job runs no step and reads no secret itself
