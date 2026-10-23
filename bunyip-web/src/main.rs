@@ -186,6 +186,10 @@ async fn main() {
             "/login/2fa",
             get(ap::twofa_verify_get).post(ap::twofa_verify_post),
         )
+        .route(
+            "/login/approval",
+            get(ap::login_approval_get).post(ap::login_approval_post),
+        )
         .route("/logout", axum::routing::post(ap::logout))
         .route("/register", get(ap::register_get).post(ap::register_post))
         .route(
