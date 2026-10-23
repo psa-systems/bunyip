@@ -72,6 +72,10 @@ just create-release minor   # bump the workspace version, branch, push, open the
 
 `just check` runs the fuller fmt + clippy + build + docker-builder-stage sequence, but it needs a host toolchain; on a toolchain-less dev box use `just check-container`. Never `cargo build` on the host.
 
+### Parallel worktrees
+
+A linked `git worktree` of this repo (including `.claude/worktrees/*` agent worktrees) gets its own `/app/target` volume, named `dev-bunyip-cargo-target-${USER}-<hash>` where the hash is derived from the worktree's absolute path. The main checkout keeps the plain `dev-bunyip-cargo-target-${USER}` so its warm cache survives. Two worktrees can therefore run `just pre-push` (or `dev`) at the same time without corrupting each other's incremental state. `just dev-clean` from any checkout prunes every per-worktree target volume for the current user; registry and git caches stay shared.
+
 The `common` submodule's own `dev-local` / `dev-local-detach` recipes are also imported and show up in `just --list`, but neither depends on `ensure-oidc-keys` the way bunyip's `dev`, `dev-detach`, and `dev-sso` do: running `just dev-local` on a fresh clone skips OIDC key provisioning and the api fails to boot for want of `secrets/oidc/dev-2026.pem`. Use `just dev` / `just dev-detach` instead, or, if you do use `dev-local`, run `just ensure-oidc-keys` manually first. This is a gap in `common` itself, tracked as PC-75.
 
 ## Where things live

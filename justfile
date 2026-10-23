@@ -319,6 +319,12 @@ export HOST_GID := `id -g`
 # resolve them against the committed .sqlx cache so local cargo commands need no
 # database.
 export SQLX_OFFLINE := "true"
+# BUNYIP-856: isolate `/app/target` per git worktree so two worktrees building
+# at once do not corrupt each other's incremental state. The main checkout
+# (`.git/` is a directory) keeps the plain volume name so its warm cache
+# survives; linked worktrees (`.git` is a file) get a `-<hash>` suffix derived
+# from the worktree's absolute path. Registry and git caches stay shared.
+export WORKTREE_SUFFIX := `if [ -d .git ]; then echo ""; else printf -- "-%s" "$(git rev-parse --show-toplevel | sha1sum | cut -c1-7)"; fi`
 
 compose := "docker compose -f compose.dev.yml "
 compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
@@ -658,15 +664,21 @@ dev-clean:
     #!/usr/bin/env nu
     {{ compose }}down --remove-orphans
     let suffix = $env.USER
-    let vols = [
+    # BUNYIP-856: match every per-worktree cargo-target volume for this user,
+    # not just the one for the current checkout, so a tear-down from any
+    # worktree (including the main one) prunes the full set.
+    let existing = docker volume ls --quiet | lines
+    let cargo_target_pattern = $"dev-bunyip-cargo-target-($suffix)"
+    let cargo_target_vols = $existing | where {|v|
+        $v == $cargo_target_pattern or ($v | str starts-with $"($cargo_target_pattern)-")
+    }
+    let vols = ([
         $"dev-bunyip-postgres-($suffix)"
-        $"dev-bunyip-cargo-target-($suffix)"
         $"dev-bunyip-web-node-modules-($suffix)"
         $"dev-bunyip-download-cache-($suffix)"
         $"dev-bunyip-oci-cache-($suffix)"
         "bunyip-check-target"
-    ]
-    let existing = docker volume ls --quiet | lines
+    ] | append $cargo_target_vols)
     for vol in $vols {
         if $vol in $existing {
             docker volume rm $vol
