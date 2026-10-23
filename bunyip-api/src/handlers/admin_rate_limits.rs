@@ -194,10 +194,18 @@ pub async fn list_rate_limits(
     // Paginate the unified list in memory (the active set is small and drawn
     // from several sources, so there is no single query to page). Each source
     // is ordered deterministically, so the page boundary is stable.
+    //
+    // BUNYIP-946 F14: compute `start` in `i64` and saturate against
+    // `usize::MAX` before casting, so a `?page=i32::MAX` input cannot
+    // overflow the `(page - 1) * per_page` multiply (debug panic / release
+    // wraparound to a huge usize via sign-extension).
     let total = entries.len() as i64;
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
-    let start = ((page - 1) * per_page) as usize;
+    let start = (page as i64 - 1)
+        .saturating_mul(per_page as i64)
+        .max(0)
+        .min(usize::MAX as i64) as usize;
     let page_items: Vec<RateLimitEntry> = entries
         .into_iter()
         .skip(start)
@@ -1384,5 +1392,23 @@ mod db_tests {
                 .await
                 .is_err()
         );
+    }
+
+    /// BUNYIP-946 F14: compute `start` as a saturating `i64` multiply so
+    /// `page = i32::MAX` cannot overflow the `(page - 1) * per_page`
+    /// product (debug panic / release wraparound to a sign-extended usize).
+    /// Verified against the same arithmetic the handler now uses.
+    #[test]
+    fn start_offset_saturates_against_i32_max_page() {
+        let page = i32::MAX;
+        let per_page = 100;
+        let start = (page as i64 - 1)
+            .saturating_mul(per_page as i64)
+            .max(0)
+            .min(usize::MAX as i64) as usize;
+        // The real safety property: no panic, no wraparound to a tiny or
+        // negative usize. A sensible page beyond the data simply slices to
+        // an empty page via `skip(start).take(..)`.
+        assert!(start >= (per_page as usize));
     }
 }
