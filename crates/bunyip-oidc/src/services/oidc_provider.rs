@@ -329,6 +329,38 @@ pub struct LogoutTokenClaims {
     pub sid: String,
 }
 
+/// BUNYIP-864: the signing body of `mint_logout_token`, lifted so a test can
+/// verify a minted token against the JWKS the provider publishes without
+/// instantiating a full `OidcProvider` (which needs a `PgPool`).
+fn sign_logout_token(
+    keys: &OidcKeySet,
+    issuer: &str,
+    user_id: Uuid,
+    sid: &str,
+    client_id: Uuid,
+) -> Result<String, AppError> {
+    let now = Utc::now();
+
+    let mut header = Header::new(Algorithm::EdDSA);
+    header.kid = Some(keys.active_kid.clone());
+    header.typ = Some("logout+jwt".to_string());
+
+    let claims = LogoutTokenClaims {
+        iss: issuer.to_string(),
+        aud: client_id.to_string(),
+        iat: now.timestamp(),
+        jti: Uuid::new_v4().to_string(),
+        events: serde_json::json!({
+            "http://schemas.openid.net/event/backchannel-logout": {}
+        }),
+        sub: user_id.to_string(),
+        sid: sid.to_string(),
+    };
+
+    jsonwebtoken::encode(&header, &claims, &keys.encoding_key)
+        .map_err(|e| AppError::internal(format!("Failed to mint logout token: {e}")))
+}
+
 // ── OidcProvider ─────────────────────────────────────────────────────────────
 
 /// The OIDC Authorization Server / OpenID Provider.
@@ -1232,26 +1264,7 @@ impl OidcProvider {
         sid: &str,
         client_id: Uuid,
     ) -> Result<String, AppError> {
-        let now = Utc::now();
-
-        let mut header = Header::new(Algorithm::EdDSA);
-        header.kid = Some(self.keys.active_kid.clone());
-        header.typ = Some("logout+jwt".to_string());
-
-        let claims = LogoutTokenClaims {
-            iss: self.issuer().to_string(),
-            aud: client_id.to_string(),
-            iat: now.timestamp(),
-            jti: Uuid::new_v4().to_string(),
-            events: serde_json::json!({
-                "http://schemas.openid.net/event/backchannel-logout": {}
-            }),
-            sub: user_id.to_string(),
-            sid: sid.to_string(),
-        };
-
-        jsonwebtoken::encode(&header, &claims, &self.keys.encoding_key)
-            .map_err(|e| AppError::internal(format!("Failed to mint logout token: {e}")))
+        sign_logout_token(&self.keys, self.issuer(), user_id, sid, client_id)
     }
 
     // ── Back-channel logout ───────────────────────────────────────────────────
@@ -2703,5 +2716,76 @@ mod tests {
             amr: None,
         };
         assert!(!expired_idle.is_alive(base_now));
+    }
+
+    /// BUNYIP-864: a logout token signed by `sign_logout_token` must verify
+    /// against the published JWKS the way an RP does: kid lookup against the
+    /// key set, EdDSA signature, `typ=logout+jwt`. Catches a signing-vs-JWKS
+    /// mismatch before it goes out on the wire.
+    mod logout_token_jwks_round_trip {
+        use super::super::{sign_logout_token, LogoutTokenClaims};
+        use crate::services::oidc_keys::OidcKeySet;
+        use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
+        use uuid::Uuid;
+
+        const TEST_PRIV_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
+            MC4CAQAwBQYDK2VwBCIEIJ5gHv/Vi3V0Lk0k3jHN10sqRZ68P8fkNuLnF+sNtVKR\n\
+            -----END PRIVATE KEY-----\n";
+        const TEST_PUB_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
+            MCowBQYDK2VwAyEA8SW9WuSoCUQb2y3790FS9t71GdzYb9QJWL/NF7IQfKY=\n\
+            -----END PUBLIC KEY-----\n";
+
+        fn load_test_keys(dir: &tempfile::TempDir, kid: &str) -> OidcKeySet {
+            let priv_path = dir.path().join(format!("{kid}.pem"));
+            std::fs::write(&priv_path, TEST_PRIV_PEM).unwrap();
+            std::fs::write(dir.path().join(format!("{kid}.pub.pem")), TEST_PUB_PEM).unwrap();
+            OidcKeySet::load(
+                priv_path.to_str().unwrap(),
+                kid,
+                dir.path().to_str().unwrap(),
+            )
+            .unwrap()
+        }
+
+        #[test]
+        fn minted_logout_token_verifies_against_published_jwks() {
+            let dir = tempfile::tempdir().unwrap();
+            let kid = "test-kid-864";
+            let keys = load_test_keys(&dir, kid);
+
+            let issuer = "https://bunyip.test";
+            let user_id = Uuid::new_v4();
+            let client_id = Uuid::new_v4();
+            let sid = "sid-864";
+
+            let token = sign_logout_token(&keys, issuer, user_id, sid, client_id).unwrap();
+
+            let header = decode_header(&token).unwrap();
+            assert_eq!(header.alg, Algorithm::EdDSA);
+            assert_eq!(header.typ.as_deref(), Some("logout+jwt"));
+            let header_kid = header.kid.expect("logout header carries a kid");
+            assert_eq!(header_kid, kid);
+
+            let decoding_key = keys
+                .decoding_key(&header_kid)
+                .expect("header kid resolves against the published JWKS");
+
+            let mut validation = Validation::new(Algorithm::EdDSA);
+            validation.required_spec_claims.clear();
+            validation.validate_exp = false;
+            validation.validate_aud = false;
+            let data = decode::<LogoutTokenClaims>(&token, decoding_key, &validation)
+                .expect("signature verifies with the JWKS-published key");
+
+            assert_eq!(data.claims.iss, issuer);
+            assert_eq!(data.claims.aud, client_id.to_string());
+            assert_eq!(data.claims.sub, user_id.to_string());
+            assert_eq!(data.claims.sid, sid);
+            assert!(data
+                .claims
+                .events
+                .get("http://schemas.openid.net/event/backchannel-logout")
+                .is_some());
+        }
     }
 }
