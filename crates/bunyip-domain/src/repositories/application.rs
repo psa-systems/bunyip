@@ -87,11 +87,18 @@ impl ApplicationRepository {
 
     /// Toggle whether a product requires a per-product entitlement (BUNYIP-39).
     /// FALSE keeps it open to all members; TRUE gates it behind an entitlement.
-    pub async fn set_requires_entitlement(
-        pool: &PgPool,
+    ///
+    /// BUNYIP-945 F7: takes a generic executor so the handler can run this
+    /// and `backfill_for_application` in one transaction, atomic against a
+    /// backfill failure or a crash between the two statements.
+    pub async fn set_requires_entitlement<'e, E>(
+        executor: E,
         app_id: Uuid,
         requires_entitlement: bool,
-    ) -> Result<(), AppError> {
+    ) -> Result<(), AppError>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
         let result = sqlx::query(
             r#"
             UPDATE applications
@@ -101,7 +108,7 @@ impl ApplicationRepository {
         )
         .bind(requires_entitlement)
         .bind(app_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
         if result.rows_affected() == 0 {

@@ -593,14 +593,9 @@ async fn handle_subscription_updated(
             "Subscription updated"
         );
 
-        // Audit log
-        let action = if cancel_at_period_end {
-            AuditAction::MembershipCanceled
-        } else if status == "active" {
-            AuditAction::MembershipReactivated
-        } else {
-            AuditAction::MembershipCanceled
-        };
+        // BUNYIP-945 F5: classify through `grants_access`, not a literal
+        // `status == "active"` check (see `subscription_updated_audit_action`).
+        let action = subscription_updated_audit_action(cancel_at_period_end, grants_access);
 
         let audit_log = CreateAuditLog::new(action)
             .with_actor(user.id, &user.email, &user.role)
@@ -929,6 +924,28 @@ fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<Members
     None
 }
 
+/// BUNYIP-945 F5: audit-action classification for a Stripe
+/// `customer.subscription.updated` event. The handler's prior branch used
+/// `status == "active"` as the only "stayed accessible" case, which routed
+/// every other access-granting status (notably `trialing`) to
+/// `MembershipCanceled` even when nothing was canceled and the user still
+/// had access. `grants_access` is already computed from
+/// `membership_status_for(status).has_access()` for the row-write path, so
+/// reusing it keeps one source of truth for "did this event preserve
+/// access" instead of two.
+fn subscription_updated_audit_action(
+    cancel_at_period_end: bool,
+    grants_access: bool,
+) -> AuditAction {
+    if cancel_at_period_end {
+        AuditAction::MembershipCanceled
+    } else if grants_access {
+        AuditAction::MembershipReactivated
+    } else {
+        AuditAction::MembershipCanceled
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1117,5 +1134,48 @@ mod tests {
             grants_access,
             "an active created subscription must grant access, matching pre-BUNYIP-718 behaviour"
         );
+    }
+
+    /// BUNYIP-945 F5: a `trialing`, non-`cancel_at_period_end` update grants
+    /// access, so the audit action is `MembershipReactivated`, not
+    /// `MembershipCanceled`. The classifier is driven by `grants_access`,
+    /// which is `membership_status_for("trialing").has_access()`.
+    #[test]
+    fn trialing_update_without_cancel_logs_as_reactivated_not_canceled() {
+        let user_status = membership_status_for("trialing");
+        assert_eq!(user_status, MembershipStatus::Active);
+        let grants_access = user_status.has_access();
+        assert!(grants_access, "trialing must grant access");
+
+        let action = subscription_updated_audit_action(false, grants_access);
+        assert!(
+            !matches!(action, AuditAction::MembershipCanceled),
+            "a trialing, non-cancel_at_period_end update must not be audited \
+             as MembershipCanceled, got {action:?}"
+        );
+        assert!(matches!(action, AuditAction::MembershipReactivated));
+    }
+
+    /// A `cancel_at_period_end = true` update is MembershipCanceled whether
+    /// or not the current status still grants access. This is the invariant
+    /// the handler already relied on; pinning it so the F5 classifier swap
+    /// does not accidentally change it.
+    #[test]
+    fn cancel_at_period_end_wins_over_grants_access() {
+        let action = subscription_updated_audit_action(true, true);
+        assert!(matches!(action, AuditAction::MembershipCanceled));
+    }
+
+    /// A non-access-granting status (e.g. unpaid) with no explicit cancel
+    /// flag is still MembershipCanceled.
+    #[test]
+    fn non_access_granting_status_without_cancel_is_canceled() {
+        let user_status = membership_status_for("unpaid");
+        assert!(
+            !user_status.has_access(),
+            "unpaid must not grant access, otherwise this test case is wrong"
+        );
+        let action = subscription_updated_audit_action(false, user_status.has_access());
+        assert!(matches!(action, AuditAction::MembershipCanceled));
     }
 }
