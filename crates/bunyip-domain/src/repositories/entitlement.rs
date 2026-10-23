@@ -40,10 +40,17 @@ impl EntitlementRepository {
     /// members who could access it while it was open keep access (the
     /// "preserve current access" guarantee, extended past migration time).
     /// Existing grants are left untouched (`DO NOTHING`). Returns rows inserted.
-    pub async fn backfill_for_application(
-        pool: &PgPool,
+    ///
+    /// BUNYIP-945 F7: takes a generic executor so the handler can run this
+    /// and `set_requires_entitlement` in one transaction, atomic against a
+    /// backfill failure or a crash between the two statements.
+    pub async fn backfill_for_application<'e, E>(
+        executor: E,
         application_id: Uuid,
-    ) -> Result<u64, AppError> {
+    ) -> Result<u64, AppError>
+    where
+        E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+    {
         let affected = sqlx::query(
             r#"
             INSERT INTO application_entitlements (user_id, application_id, granted_by, source)
@@ -60,7 +67,7 @@ impl EntitlementRepository {
             "#,
         )
         .bind(application_id)
-        .execute(pool)
+        .execute(executor)
         .await?
         .rows_affected();
         Ok(affected)
