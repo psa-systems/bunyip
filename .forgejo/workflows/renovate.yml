@@ -19,7 +19,7 @@ on:
 
 jobs:
   renovate:
-    uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/renovate-reusable.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
+    uses: psa-systems/common/.forgejo/workflows/renovate-reusable.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     with:
       target_repository: ${{ github.repository }}
     secrets:
