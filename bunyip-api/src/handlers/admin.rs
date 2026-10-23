@@ -645,6 +645,13 @@ pub async fn revoke_membership(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
+    // BUNYIP-946 F9: fail fast on a nonexistent user instead of running three
+    // bare UPDATEs that update zero rows, then writing an audit log that
+    // claims the operation succeeded. Mirrors `grant_membership`'s pattern.
+    UserRepository::find_by_id(pool.get_ref(), body.user_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("User"))?;
+
     UserRepository::update_membership_status(
         pool.get_ref(),
         body.user_id,
@@ -1786,15 +1793,32 @@ pub async fn list_notifications(
     query: web::Query<ListNotificationsQuery>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).min(100);
 
+    // BUNYIP-946 F17: honour page/per_page on the unread branch too. The
+    // previous shape fetched every unread row, truncated to the first
+    // `per_page` client-side (via `paginated`'s positional args), and
+    // returned a `per_page: 100` envelope regardless of the caller's
+    // actual query - so a response of 300 unread rows claimed `per_page: 100`
+    // and ignored a `?per_page=10` input. Slicing the full fetch keeps the
+    // behavioural change minimal and leaves `list_unread`'s signature
+    // untouched for other callers; a follow-up can push the LIMIT/OFFSET
+    // into the SQL once an index-friendly plan is picked.
     if query.unread.unwrap_or(false) {
         let notifications = NotificationRepository::list_unread(&pool).await?;
         let total = notifications.len() as i64;
-        return Ok(paginated(notifications, total, 1, 100, request_id));
+        let start = (page as i64 - 1)
+            .saturating_mul(per_page as i64)
+            .max(0)
+            .min(usize::MAX as i64) as usize;
+        let page_items: Vec<_> = notifications
+            .into_iter()
+            .skip(start)
+            .take(per_page as usize)
+            .collect();
+        return Ok(paginated(page_items, total, page, per_page, request_id));
     }
-
-    let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
 
     let (notifications, total) =
         NotificationRepository::list_paginated(&pool, page, per_page).await?;
