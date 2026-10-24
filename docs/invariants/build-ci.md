@@ -33,3 +33,7 @@ Full text of the build, CI and repo tooling conventions indexed in [`CLAUDE.md`]
 ## No em-dashes
 
 **No em-dashes** in any output or artifact; use a hyphen, colon, parentheses, or a new sentence.
+
+## Renovate
+
+**Renovate**: `.forgejo/workflows/renovate.yml` is a thin caller, triggered on a `0 */4 * * *` cron (plus `workflow_dispatch`), that calls `psa-systems/common`'s reusable workflow `renovate-reusable.yml@main`; the definition lives there, this stub only owns the schedule so an operator changing bunyip's cadence does not have to touch common. The caller passes the org-level secret `RENOVATE_CI_TOKEN` (`write:repository` + `write:issue` scope) explicitly under the same name the reusable workflow reads; a caller that passes it under a different name (`RENOVATE_TOKEN`, or any other mismatch) makes the reusable workflow receive an empty token and fail initialization, as happened twice (BUNYIP-961, BUNYIP-966). Renovate scans the tree against the repo-root `renovate.json` (cargo, npm, docker-compose, dockerfile, github-actions managers), opening PRs grouped by family (sqlx-*, actix-*, serde-*, dunite-*, and others).
