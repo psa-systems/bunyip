@@ -172,3 +172,4 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Amber contrast](docs/invariants/ui.md#amber-contrast-bunyip-548) (BUNYIP-548): Amber text uses the measured shades and meets AA over the tinted composite.
 - [Fetched list states](docs/invariants/ui.md#fetched-list-states-bunyip-461-bunyip-546-bunyip-635) (BUNYIP-461/546/635): Fetched lists show unreachable, empty and populated distinctly.
 - [Toast dismissal](docs/invariants/ui.md#toast-dismissal-bunyip-610-bunyip-98) (BUNYIP-610, BUNYIP-98): Error toasts wait for a click; others auto-dismiss scaled to message length.
+- [Audit Log filters](docs/invariants/ui.md#audit-log-filters-bunyip-930-bunyip-936-bunyip-937) (BUNYIP-930, BUNYIP-936, BUNYIP-937): `user_id`, `since`/`severity`/`action` chips, and `q` search, with their fixed option lists.

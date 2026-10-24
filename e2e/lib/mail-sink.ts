@@ -3,12 +3,13 @@
 //
 // Staging bunyip-api delivers its outbound mail through the existing Stalwart
 // relay (mail.a8n.run). A mailbox there (currently nate@a8n.run; a dedicated
-// e2e@a8n.run later) receives the E2E mail; the email-driven specs address a
-// unique plus-subaddress per run (e.g. nate+<tag>@a8n.run), which Stalwart
-// delivers into that one mailbox, and read it back over JMAP. Reading by the
-// unique recipient means no mailbox clearing is needed; each matched message is
-// destroyed after it is read, and ONLY the exact subaddress is ever matched or
-// destroyed (see addressedTo) so a shared mailbox's real mail is never touched.
+// e2e@a8n.run later; tracked in BUNYIP-245) receives the E2E mail; the
+// email-driven specs address a unique plus-subaddress per run (e.g.
+// nate+<tag>@a8n.run), which Stalwart delivers into that one mailbox, and
+// read it back over JMAP. Reading by the unique recipient means no mailbox
+// clearing is needed; each matched message is destroyed after it is read,
+// and ONLY the exact subaddress is ever matched or destroyed (see
+// addressedTo) so a shared mailbox's real mail is never touched.
 //
 // E2E_MAIL_SINK_URL carries the JMAP host plus the mailbox credentials as
 // basicAuth userinfo, e.g. `https://nate%40a8n.run:password@mail.a8n.run`.
@@ -130,11 +131,12 @@ interface JmapEmail {
   bodyValues?: Record<string, { value?: string }>;
 }
 
-// The sink mailbox may be a shared/personal mailbox (e.g. nate@a8n.run), so a
-// message is only ever a match - and only ever destroyed - when its To header
-// carries the EXACT unique plus-subaddress this test used. This guards against
-// a JMAP `to` filter that normalises the subaddress to the base mailbox: real
-// mail addressed to the plain mailbox can never match or be deleted.
+// The sink mailbox may be a shared/personal mailbox (e.g. nate@a8n.run;
+// tracked in BUNYIP-245), so a message is only ever a match - and only ever
+// destroyed - when its To header carries the EXACT unique plus-subaddress
+// this test used. This guards against a JMAP `to` filter that normalises the
+// subaddress to the base mailbox: real mail addressed to the plain mailbox
+// can never match or be deleted.
 function addressedTo(email: JmapEmail, toAddress: string): boolean {
   const want = toAddress.toLowerCase();
   return (email.to ?? []).some((a) => (a.email ?? '').toLowerCase() === want);
