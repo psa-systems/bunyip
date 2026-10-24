@@ -123,7 +123,7 @@ anyhow = "1"
 
 # Auth / crypto / encoding (JwtService + token hashing live here; the primitive
 # encryption/password services come from dunite-core).
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 argon2 = "0.5"
 password-hash = "0.5"
 aes-gcm = "0.10"

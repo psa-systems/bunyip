@@ -771,7 +771,7 @@ dependencies = [
  "imagesize",
  "infer 0.16.0",
  "ipnetwork",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "mail-parser",
  "parking_lot",
  "rand 0.8.6",
@@ -833,7 +833,7 @@ dependencies = [
  "hex",
  "hmac",
  "ipnetwork",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "lazy_static",
  "lettre",
  "password-hash",
@@ -899,7 +899,7 @@ dependencies = [
  "chrono",
  "dunite-oidc",
  "dunite-oidc-op",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "password-hash",
  "rand 0.8.6",
  "reqwest 0.12.28",
@@ -1554,7 +1554,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "ipnetwork",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -1676,7 +1676,7 @@ dependencies = [
  "dunite-core",
  "futures-util",
  "hex",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "moka",
  "reqwest 0.11.27",
  "serde",
@@ -1698,7 +1698,7 @@ source = "git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc
 dependencies = [
  "base64 0.21.7",
  "dunite-core",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "serde",
 ]
 
@@ -1711,7 +1711,7 @@ dependencies = [
  "base64 0.21.7",
  "chrono",
  "dunite-oidc",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -1840,7 +1840,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2894,6 +2894,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "jsonwebtoken"
+version = "10.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature",
+ "simple_asn1",
+ "zeroize",
+]
+
+[[package]]
 name = "language-tags"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3235,7 +3252,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4240,7 +4257,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4690,7 +4707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5042,7 +5059,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5843,7 +5860,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6347,6 +6364,20 @@ name = "zeroize"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "zerotrie"
