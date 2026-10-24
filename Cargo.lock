@@ -760,7 +760,7 @@ dependencies = [
  "chrono",
  "data-encoding",
  "dotenvy",
- "dunite-core",
+ "dunite-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0)",
  "dunite-events",
  "dunite-image-upload",
  "dunite-update-check",
@@ -816,7 +816,7 @@ dependencies = [
  "data-encoding",
  "dotenvy",
  "dunite-argon2-offload",
- "dunite-core",
+ "dunite-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0)",
  "dunite-download",
  "dunite-events",
  "dunite-feedback",
@@ -1569,6 +1569,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "dunite-core"
+version = "0.1.0"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0#91e27f2b798128aa2cf54f742df8248564888bf0"
+dependencies = [
+ "actix-web",
+ "aes-gcm",
+ "argon2",
+ "async-trait",
+ "chrono",
+ "ipnetwork",
+ "jsonwebtoken",
+ "rand 0.8.6",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid 1.23.1",
+ "validator",
+]
+
+[[package]]
 name = "dunite-download"
 version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d#10e90faf9c7c4dbc0142bbc49d2a287f9940958d"
@@ -1576,7 +1601,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "dunite-core",
+ "dunite-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d)",
  "futures-util",
  "hex",
  "moka",
@@ -1673,7 +1698,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "chrono",
- "dunite-core",
+ "dunite-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d)",
  "futures-util",
  "hex",
  "jsonwebtoken",
@@ -1697,7 +1722,7 @@ version = "0.1.0"
 source = "git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d#10e90faf9c7c4dbc0142bbc49d2a287f9940958d"
 dependencies = [
  "base64 0.21.7",
- "dunite-core",
+ "dunite-core 0.1.0 (git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d)",
  "jsonwebtoken",
  "serde",
 ]

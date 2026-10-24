@@ -24,7 +24,7 @@ workspace = true
 # (A1/A3/A6/A7 only moved into dunite-oci, dunite-webhook, and a new leaf), but
 # the whole graph pins one rev so dunite-oci's `AppError` and bunyip-domain's
 # `AppError` are the same type after the bump.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres. Moves
 # with dunite-core.
