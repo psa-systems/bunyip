@@ -89,7 +89,7 @@ RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/regi
     && cd /app && cargo build --locked --release --bin bunyip-web
 
 # ---- Stage 2: run -----------------------------------------------------------
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+FROM debian:trixie-slim@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown
