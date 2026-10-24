@@ -158,6 +158,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Single-use tokens](docs/invariants/api-web.md#single-use-tokens-bunyip-426) (BUNYIP-426): Consume with a guarded `UPDATE ... used_at IS NULL` and branch on the result.
 - [OCI errors log their cause](docs/invariants/api-web.md#oci-errors-log-their-cause-bunyip-565) (BUNYIP-565): Every `OciError::Internal` goes through `errors::context`, which logs first.
 - [Two-factor setup](docs/invariants/api-web.md#two-factor-setup-bunyip-886) (BUNYIP-886): Setup 409s an enrolled account, needs the password, and binds confirm to a one-time setup token.
+- [Login approval](docs/invariants/api-web.md#login-approval-bunyip-373-bunyip-944) (BUNYIP-373, BUNYIP-944): `/login/approval` gates on the `bunyip_approval` cookie and clears it only on a verified code.
 
 ### UI
 
@@ -172,3 +173,4 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Amber contrast](docs/invariants/ui.md#amber-contrast-bunyip-548) (BUNYIP-548): Amber text uses the measured shades and meets AA over the tinted composite.
 - [Fetched list states](docs/invariants/ui.md#fetched-list-states-bunyip-461-bunyip-546-bunyip-635) (BUNYIP-461/546/635): Fetched lists show unreachable, empty and populated distinctly.
 - [Toast dismissal](docs/invariants/ui.md#toast-dismissal-bunyip-610-bunyip-98) (BUNYIP-610, BUNYIP-98): Error toasts wait for a click; others auto-dismiss scaled to message length.
+- [Audit Log filters](docs/invariants/ui.md#audit-log-filters-bunyip-930-bunyip-936-bunyip-937) (BUNYIP-930, BUNYIP-936, BUNYIP-937): `user_id`, `since`/`severity`/`action` chips, and `q` search, with their fixed option lists.
