@@ -1596,7 +1596,7 @@ dependencies = [
 [[package]]
 name = "dunite-events"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=1f536a2fa32b4db3df95945c444ee3ad7530fc57#1f536a2fa32b4db3df95945c444ee3ad7530fc57"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0#91e27f2b798128aa2cf54f742df8248564888bf0"
 dependencies = [
  "actix-web",
  "futures-util",
