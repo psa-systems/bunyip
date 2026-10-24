@@ -28,7 +28,7 @@ dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres. Moves
 # with dunite-core.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # OIDC OP-session kernel: the shared `check_op_session_alive` tri-arm liveness
 # predicate (BUNYIP-885). bunyip-oidc already pins this crate at the same rev;
 # the hub refresh path here calls the same predicate so the two op-session
