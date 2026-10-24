@@ -651,6 +651,19 @@ force on the next request there; another api process picks it up within the 30 s
 last good snapshot keeps being enforced and the failure is logged at `error`: a refresh failure never silently reverts
 the platform to its compile-time caps.
 
+A `rate_limit_whitelist` row (BUNYIP-933, same admin page) exempts one principal from every action's cap rather than
+raising it: `RateLimitWhitelistRepository::is_whitelisted` runs first in `check_and_increment` and, on a match, returns
+immediately with no counter increment, no history record and no traffic rollup for that request. A row is a `(kind,
+value)` pair in the same vocabulary as a rate-limit key, with `kind` one of `user`, `email` or `ip`, so an entry can
+exempt a specific account, a specific address, or a specific email regardless of which account signs in with it. An
+admin (not only the super-admin the cap fields require) adds and removes entries from the same page, backed by
+`GET`/`POST /v1/admin/rate-limits/whitelist` and `DELETE /v1/admin/rate-limits/whitelist/{id}` on the api
+(`bunyip-api/src/routes/admin.rs:221-232`) and `POST /admin/rate-limits/whitelist/add` /
+`/admin/rate-limits/whitelist/remove` on the web BFF (`bunyip-web/src/routes/admin.rs:46-53`); both the add and the
+remove path write an audit log entry. The whitelist set is cached the same way the cap table is (a 30-second
+snapshot, invalidated locally on the write and picked up by other api processes within the window), so adding or
+removing an exemption takes effect on the writing process immediately and everywhere else within 30 seconds.
+
 ### Feature toggles (`feature_toggles`, admin page: Feature Toggles)
 
 One row per feature, keyed by the `Feature` variant's key in `crates/bunyip-domain/src/feature_toggles.rs`, with
