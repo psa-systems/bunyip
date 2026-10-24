@@ -1641,7 +1641,7 @@ dependencies = [
 [[package]]
 name = "dunite-image-upload"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=ae62c276ab187852578daad1c4b9c823579b194a#ae62c276ab187852578daad1c4b9c823579b194a"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0#91e27f2b798128aa2cf54f742df8248564888bf0"
 dependencies = [
  "imagesize",
  "infer 0.16.0",
