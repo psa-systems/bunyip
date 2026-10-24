@@ -49,7 +49,7 @@ dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5d
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
 # merged rev in a follow-up.
-dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up.
