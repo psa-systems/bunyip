@@ -69,7 +69,7 @@ dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62
 # DEV-531: the login-location signal (IP2Location lookup, the non-public-address
 # filter, the record/unchanged/alert branch) extracted from this crate in
 # DEV-525 and shared with a8n-tools.
-dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # BUNYIP-437: the ASN / VPN enrichment counterpart to dunite-geoip. Reads an
 # IP2Proxy PX .BIN (address -> ASN, owning org, network category, VPN/proxy
 # likelihood); advisory only, never a spam verdict. Same offline, leaf, owns-its-
