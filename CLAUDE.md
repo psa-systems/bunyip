@@ -121,6 +121,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Conformance](docs/invariants/build-ci.md#conformance): Follow `../governance/`; version metadata is version + hash + date.
 - [Forgejo org](docs/invariants/build-ci.md#forgejo-org): Repo lives in `psa-systems`; images publish to `psa-systems-private`.
 - [No em-dashes](docs/invariants/build-ci.md#no-em-dashes): No em-dash in any output or artifact.
+- [Renovate](docs/invariants/build-ci.md#renovate) (BUNYIP-961, BUNYIP-966): The caller passes `RENOVATE_CI_TOKEN` under the name the reusable workflow reads.
 
 ### Configuration, secrets and feature flags
 
