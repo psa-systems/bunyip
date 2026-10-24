@@ -87,7 +87,7 @@ dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90f
 # ~100 ms / 64 MiB Argon2 hash off the request future. Extracted from
 # bunyip-domain into its own leaf (DUNITE-20); this crate's `argon2_offload`
 # module is now a thin shim mapping `OffloadError` to `AppError`.
-dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Wave 2 bump: shared mailer vocabulary (BUNYIP-602/603/604) extracted into
 # its own leaf (DUNITE-24): the `SuppressionList` + `SuppressionReason` +
 # `NoSuppression` + `RelayMessage` + `normalize_address` primitives that

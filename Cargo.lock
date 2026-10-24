@@ -1536,7 +1536,7 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 [[package]]
 name = "dunite-argon2-offload"
 version = "0.1.0"
-source = "git+https://dev.a8n.run/psa-systems/dunite?rev=10e90faf9c7c4dbc0142bbc49d2a287f9940958d#10e90faf9c7c4dbc0142bbc49d2a287f9940958d"
+source = "git+https://dev.a8n.run/psa-systems/dunite?rev=91e27f2b798128aa2cf54f742df8248564888bf0#91e27f2b798128aa2cf54f742df8248564888bf0"
 dependencies = [
  "thiserror 1.0.69",
  "tokio",
