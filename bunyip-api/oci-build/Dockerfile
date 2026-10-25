@@ -121,8 +121,15 @@ ARG BUILD_DATE=unknown
 
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata curl
-RUN adduser -D -u 1001 appuser
+# shadow provides usermod/groupmod, which gosu-entrypoint.sh needs for the
+# PUID/PGID remap; gosu is in the alpine 3.23 community repo (BUNYIP-957).
+RUN apk add --no-cache ca-certificates tzdata curl gosu shadow
+RUN addgroup -g 1001 appuser && adduser -D -H -u 1001 -G appuser appuser
+
+# Shared, byte-identical entrypoint (BUNYIP-957): never edit it here, edit the
+# copy in the issue/CONTAINER_UID_GID.md and resync both images.
+COPY bunyip-api/oci-build/gosu-entrypoint.sh /usr/local/bin/gosu-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/gosu-entrypoint.sh
 
 # Binary, migrations (run on startup), and the email templates.
 COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
@@ -140,10 +147,10 @@ COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 # BUNYIP-643/644: /app/config is the file configuration layer, one file per key,
 # read by the file provider and written by the admin System settings page, so it
 # must be appuser-writable (and normally a mounted volume so edits persist
-# across restarts).
-RUN mkdir -p /var/cache/bunyip-oci /var/cache/bunyip-downloads /app/config \
+# across restarts). /app/config is first in DATA_DIRS: it is the volume
+# deployments mount as the primary persistent one (compose.yml config-layer).
+RUN mkdir -p /app/config /var/cache/bunyip-oci /var/cache/bunyip-downloads \
  && chown -R appuser:appuser /app /var/cache/bunyip-oci /var/cache/bunyip-downloads
-USER appuser
 
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.description="Bunyip API (PSA Systems)" \
@@ -151,10 +158,15 @@ LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.version=${GIT_TAG} \
       org.opencontainers.image.created=${BUILD_DATE}
 
-ENV HOST_IP=0.0.0.0 APP_PORT=4401
+ENV HOST_IP=0.0.0.0 APP_PORT=4401 \
+    APP_USER=appuser \
+    DATA_DIRS="/app/config /var/cache/bunyip-oci /var/cache/bunyip-downloads"
 EXPOSE 4401
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl --silent --fail http://localhost:4401/v1/health || exit 1
 
-ENTRYPOINT ["/app/bunyip-api"]
+# Starts as root: gosu-entrypoint.sh remaps appuser to PUID/PGID (or the first
+# data dir's owner), chowns DATA_DIRS and drops to appuser via gosu. A compose
+# `user:` pin skips the remap and chown and runs directly as the pinned uid.
+ENTRYPOINT ["/usr/local/bin/gosu-entrypoint.sh", "/app/bunyip-api"]

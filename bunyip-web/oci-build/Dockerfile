@@ -95,19 +95,25 @@ ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown
 ARG BUILD_DATE=unknown
 
-# ca-certificates so reqwest (rustls) can validate the API's TLS cert.
-RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates \
+# ca-certificates so reqwest (rustls) can validate the API's TLS cert. gosu
+# drops root to appuser in the entrypoint (BUNYIP-957); usermod/groupmod
+# (needed for the PUID/PGID remap) ship in debian already.
+RUN apt-get update && apt-get install --yes --no-install-recommends ca-certificates gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as a non-root user (UID 1001), mirroring bunyip-api/oci-build/Dockerfile.
 RUN groupadd --gid 1001 appuser \
  && useradd --uid 1001 --gid 1001 --no-create-home appuser
 
+# Shared, byte-identical entrypoint (BUNYIP-957): never edit it here, edit the
+# copy in the issue/CONTAINER_UID_GID.md and resync both images.
+COPY bunyip-web/oci-build/gosu-entrypoint.sh /usr/local/bin/gosu-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/gosu-entrypoint.sh
+
 WORKDIR /app
 COPY --from=build /app/target/release/bunyip-web /app/bunyip-web
 COPY --from=build /app/bunyip-web/assets /app/assets
 RUN chown -R appuser:appuser /app
-USER appuser
 
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.description="Bunyip Web (PSA Systems)" \
@@ -115,8 +121,15 @@ LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.version=${GIT_TAG} \
       org.opencontainers.image.created=${BUILD_DATE}
 
-ENV BUNYIP_BIND_ADDR=0.0.0.0:4400
+ENV BUNYIP_BIND_ADDR=0.0.0.0:4400 \
+    APP_USER=appuser \
+    DATA_DIRS=""
 EXPOSE 4400
 
-# WORKDIR is /app so the server's ServeDir("assets") resolves to /app/assets.
+# Starts as root: gosu-entrypoint.sh drops to appuser via gosu (bunyip-web
+# writes nothing at runtime, so DATA_DIRS is empty and there is nothing to
+# chown). A compose `user:` pin skips the remap and runs directly as the
+# pinned uid. WORKDIR is /app so the server's ServeDir("assets") resolves to
+# /app/assets.
+ENTRYPOINT ["/usr/local/bin/gosu-entrypoint.sh"]
 CMD ["/app/bunyip-web"]
