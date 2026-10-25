@@ -8,7 +8,7 @@ A `pg_dump` does not replace this. A dump carries the users, the sessions, the a
 
 Both commands run as `docker compose exec api /app/bunyip-api <subcommand>` (or `docker compose run --rm api <subcommand>` when the api container is not up). Neither prints a setting value, a secret or a hash: the plan and the report name sections, columns, keys and counts only.
 
-The api service runs with `read_only: true` (BUNYIP-906), so `/tmp` is the only writable path inside the container; `compose.yml` mounts it as `tmpfs`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
+The api service's `/tmp` is a `tmpfs` mount in `compose.yml`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
 
 ## The passphrase
 

@@ -366,9 +366,16 @@ services:
       - mailer_webhook_secret
     security_opt:
       - no-new-privileges:true
+    # The image starts as root: gosu-entrypoint.sh remaps the user, chowns the
+    # data dirs and drops to appuser, so it needs these four caps and a writable
+    # /etc (hence no read_only).
     cap_drop:
       - ALL
-    read_only: true
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
     tmpfs:
       - /tmp
     volumes:
@@ -447,9 +454,15 @@ services:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_WEB_PORT:-4400}:4400"
     security_opt:
       - no-new-privileges:true
+    # Same as the api service: the gosu entrypoint needs these caps and a
+    # writable /etc.
     cap_drop:
       - ALL
-    read_only: true
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - DAC_OVERRIDE
     depends_on:
       - api
     networks:
