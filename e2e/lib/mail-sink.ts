@@ -3,7 +3,7 @@
 //
 // Staging bunyip-api delivers its outbound mail through the existing Stalwart
 // relay (mail.a8n.run). A mailbox there (currently nate@a8n.run; a dedicated
-// e2e@a8n.run later; tracked in BUNYIP-245) receives the E2E mail; the
+// e2e@a8n.run later; tracked in BUNYIP-978) receives the E2E mail; the
 // email-driven specs address a unique plus-subaddress per run (e.g.
 // nate+<tag>@a8n.run), which Stalwart delivers into that one mailbox, and
 // read it back over JMAP. Reading by the unique recipient means no mailbox
@@ -132,7 +132,7 @@ interface JmapEmail {
 }
 
 // The sink mailbox may be a shared/personal mailbox (e.g. nate@a8n.run;
-// tracked in BUNYIP-245), so a message is only ever a match - and only ever
+// tracked in BUNYIP-978), so a message is only ever a match - and only ever
 // destroyed - when its To header carries the EXACT unique plus-subaddress
 // this test used. This guards against a JMAP `to` filter that normalises the
 // subaddress to the base mailbox: real mail addressed to the plain mailbox

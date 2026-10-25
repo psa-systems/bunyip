@@ -139,7 +139,7 @@ PR gate is a separate workflow that declares only the two base URLs (see
 - **Mail sink (staging only, BUNYIP-150):** staging bunyip-api keeps sending
   through the existing Stalwart relay (`mail.a8n.run`); a mailbox there
   (currently `nate@a8n.run`; a dedicated `e2e@a8n.run` once it can be created;
-  tracked in BUNYIP-245) receives the E2E mail, and the email-driven specs
+  tracked in BUNYIP-978) receives the E2E mail, and the email-driven specs
   (`password-reset`, `magic-link`, `change-email`) read the token-links from
   it over Stalwart's JMAP API (`https://mail.a8n.run`). Each spec
   self-registers a throwaway bunyip
