@@ -126,6 +126,12 @@ WORKDIR /app
 RUN apk add --no-cache ca-certificates tzdata curl gosu shadow
 RUN addgroup -g 1001 appuser && adduser -D -H -u 1001 -G appuser appuser
 
+# BUNYIP-981: read_only mounts an empty tmpfs over /etc, so the entrypoint's
+# root-phase usermod/groupmod rewrite needs a pristine copy to restore from.
+# Must come after every RUN above that touches /etc (package installs, the
+# appuser group/user creation) and before the ENTRYPOINT runs.
+RUN cp -a /etc /etc.dist
+
 # Shared, byte-identical entrypoint (BUNYIP-957): never edit it here, edit the
 # copy in the issue/CONTAINER_UID_GID.md and resync both images.
 COPY bunyip-api/oci-build/gosu-entrypoint.sh /usr/local/bin/gosu-entrypoint.sh
