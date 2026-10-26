@@ -367,8 +367,12 @@ services:
     security_opt:
       - no-new-privileges:true
     # The image starts as root: gosu-entrypoint.sh remaps the user, chowns the
-    # data dirs and drops to appuser, so it needs these four caps and a writable
-    # /etc (hence no read_only).
+    # data dirs and drops to appuser, so it needs these four caps. BUNYIP-981:
+    # root filesystem is read-only; the entrypoint's root-phase usermod/groupmod
+    # rewrite only touches /etc (passwd/group/shadow/gshadow), so that gets its
+    # own tmpfs, and the chown loop only ever walks $DATA_DIRS, which are the
+    # named volumes below and already writable under read_only regardless of
+    # this flag. /app itself needs no runtime write access from either phase.
     cap_drop:
       - ALL
     cap_add:
@@ -376,8 +380,10 @@ services:
       - SETGID
       - CHOWN
       - DAC_OVERRIDE
+    read_only: true
     tmpfs:
       - /tmp
+      - /etc
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path
@@ -454,8 +460,10 @@ services:
       - "${HOST_IP:-127.0.0.1}:${BUNYIP_WEB_PORT:-4400}:4400"
     security_opt:
       - no-new-privileges:true
-    # Same as the api service: the gosu entrypoint needs these caps and a
-    # writable /etc.
+    # Same as the api service: the gosu entrypoint needs these caps. BUNYIP-981:
+    # root filesystem is read-only; the entrypoint's root-phase usermod/groupmod
+    # rewrite only touches /etc, so that gets its own tmpfs (DATA_DIRS is empty
+    # here, so there is no chown loop and nothing else needs a writable mount).
     cap_drop:
       - ALL
     cap_add:
@@ -463,6 +471,9 @@ services:
       - SETGID
       - CHOWN
       - DAC_OVERRIDE
+    read_only: true
+    tmpfs:
+      - /etc
     depends_on:
       - api
     networks:
