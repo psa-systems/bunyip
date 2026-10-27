@@ -96,9 +96,10 @@ jobs:
         run: just check-justfile
 
       - name: Check migration version numbers
-        # Unique + strictly increasing migration versions; blocks the suffix
-        # collisions that parallel branches reintroduce (BUNYIP-79).
-        run: ./scripts/check-migration-versions.nu
+        # Unique + uniform 14-digit prefix; blocks the suffix collisions that
+        # parallel branches reintroduce (BUNYIP-79). Delegates to the shared
+        # recipe in common.just (PC-79, BUNYIP-870).
+        run: just check-migration-versions
 
       - name: Check migration immutability
         # Reject edits/renames/deletes of already-committed migrations; sqlx
