@@ -49,13 +49,6 @@ pub struct Config {
     /// path (e.g. `https://chat.a8n.systems/auth/bunyip`) so the OIDC flow
     /// fires immediately rather than landing on Let's Chat's own login page.
     pub community_url: String,
-    /// MIRZAM-217: the subscribe endpoint of the Mirzam newsletter list the
-    /// landing page signs visitors up to (the `action` of the list's embed
-    /// snippet, `https://<mirzam host>/s/<form id>`). Empty hides the signup
-    /// section. The list's allowed origins must name this site's origin, and
-    /// the endpoint must be inside `form-action` (`https://*.{app_domain}`
-    /// covers a Mirzam host under the apex; `CSP_FORM_ACTION` adds any other).
-    pub newsletter_url: String,
     /// BUNYIP-311: CIDR ranges of the reverse proxies that front bunyip-web
     /// (typically Traefik). The inbound `X-Forwarded-For` / `X-Real-IP` is
     /// honoured (to resolve the end-user IP the BFF forwards to bunyip-api)
@@ -145,7 +138,6 @@ impl Config {
             api_public_origin,
             app_domain: var("BUNYIP_APP_DOMAIN").unwrap_or_default(),
             community_url: var("BUNYIP_COMMUNITY_URL").unwrap_or_default(),
-            newsletter_url: var("BUNYIP_NEWSLETTER_URL").unwrap_or_default(),
             // BUNYIP-311: the reverse proxies (Traefik) allowed to set the
             // inbound X-Forwarded-For the BFF trusts when resolving the
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
@@ -253,7 +245,6 @@ mod tests {
             oidc_issuer: "http://bunyip-api-app:4401".into(),
             app_domain: String::new(),
             community_url: String::new(),
-            newsletter_url: String::new(),
             trusted_proxies: trusted_proxies
                 .into_iter()
                 .map(|s| s.parse().unwrap())

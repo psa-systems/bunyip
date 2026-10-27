@@ -182,8 +182,8 @@ fn newsletter_blurb(brand_name: &str) -> String {
     }
 }
 
-/// MIRZAM-217: the newsletter signup, absent while `BUNYIP_NEWSLETTER_URL` is
-/// unset. A plain form posting straight to the Mirzam list's subscribe
+/// MIRZAM-217: the newsletter signup, absent while the branding record's
+/// `newsletter_url` (Admin, Branding, Newsletter) is blank. A plain form posting straight to the Mirzam list's subscribe
 /// endpoint, the shape of the list's own embed snippet: no script and no
 /// cookie, and Mirzam answers with its confirmation email and its thank-you
 /// page. `website` is Mirzam's honeypot, kept out of sight and out of the tab
@@ -334,7 +334,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             @if app_links_allowed {
                 (wired_apps_section(&apps, &st.cfg.app_domain))
             }
-            (newsletter_section(&st.cfg.newsletter_url, &branding.brand_name))
+            (newsletter_section(&branding.newsletter_url, &branding.brand_name))
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {

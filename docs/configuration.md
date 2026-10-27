@@ -570,6 +570,7 @@ committed code.
 | `tagline`                                                    | the hero caption, the footer line and the bunyip-web startup banner                                                 |
 | `meta_description`                                           | `<meta name="description">` and `og:description`                                                                    |
 | `og_image_url`                                               | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                                  |
+| `newsletter_url`                                             | the landing newsletter signup posts here: a Mirzam list's form address, absolute `http(s)://`; blank hides it       |
 | `theme_css`                                                  | CSS custom-property declarations emitted into `:root` (the brand ramp). No `<` or `>`; 4096 characters              |
 | `theme_color_light`, `theme_color_dark`                      | the two `<meta name="theme-color">` values (browser chrome). Hex colours (`#rgb`, `#rrggbb`, `#rrggbbaa`)           |
 | `mark_updated_at`, `favicon_updated_at`, `mascot_updated_at` | version markers for the three image slots. NULL means the slot is unset                                             |
@@ -703,7 +704,7 @@ deployment configuration, and are listed here only so the boundary is explicit.
 
 bunyip-web is a separate binary with its own configuration (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`,
 `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`,
-`BUNYIP_NEWSLETTER_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
+`TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
 secrets and reads none of the api variables above, so the api's inventory does not cover it.
 
 It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta description and Open Graph image are

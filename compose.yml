@@ -454,10 +454,6 @@ services:
       # ══ Integration: Let's Chat community ═════════════════════════════════
       # BUNYIP-329: empty hides the sidebar Community button entirely.
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
-
-      # ══ Integration: Mirzam newsletter ════════════════════════════════════
-      # MIRZAM-217: empty hides the landing page's newsletter signup.
-      BUNYIP_NEWSLETTER_URL: ${BUNYIP_NEWSLETTER_URL:-}
     expose:
       - "4400"
     ports:

@@ -153,6 +153,7 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "tagline",
             "meta_description",
             "og_image_url",
+            "newsletter_url",
             "theme_css",
             "theme_color_light",
             "theme_color_dark",
@@ -413,6 +414,10 @@ pub struct BrandingSection {
     pub tagline: String,
     pub meta_description: String,
     pub og_image_url: String,
+    /// MIRZAM-217. Defaulted so an archive written before the column existed
+    /// still reads.
+    #[serde(default)]
+    pub newsletter_url: String,
     pub theme_css: String,
     pub theme_color_light: String,
     pub theme_color_dark: String,
@@ -761,7 +766,7 @@ pub async fn export(
 
 async fn read_branding(pool: &PgPool) -> Result<BrandingSection, AppError> {
     Ok(sqlx::query_as::<_, BrandingSection>(
-        "SELECT brand_name, tagline, meta_description, og_image_url, theme_css, \
+        "SELECT brand_name, tagline, meta_description, og_image_url, newsletter_url, theme_css, \
          theme_color_light, theme_color_dark, mark_updated_at, favicon_updated_at, \
          mascot_updated_at FROM branding WHERE id = 1",
     )
@@ -1400,6 +1405,7 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
         tagline: branding.tagline.clone(),
         meta_description: branding.meta_description.clone(),
         og_image_url: branding.og_image_url.clone(),
+        newsletter_url: branding.newsletter_url.clone(),
         theme_css: branding.theme_css.clone(),
         theme_color_light: branding.theme_color_light.clone(),
         theme_color_dark: branding.theme_color_dark.clone(),
@@ -1805,7 +1811,7 @@ async fn write_database_sections(
         "UPDATE branding SET brand_name = $1, tagline = $2, meta_description = $3, \
          og_image_url = $4, theme_css = $5, theme_color_light = $6, theme_color_dark = $7, \
          mark_updated_at = $8, favicon_updated_at = $9, mascot_updated_at = $10, \
-         updated_at = NOW(), updated_by = $11 WHERE id = 1",
+         newsletter_url = $11, updated_at = NOW(), updated_by = $12 WHERE id = 1",
     )
     .bind(&b.brand_name)
     .bind(&b.tagline)
@@ -1817,6 +1823,7 @@ async fn write_database_sections(
     .bind(b.mark_updated_at)
     .bind(b.favicon_updated_at)
     .bind(b.mascot_updated_at)
+    .bind(&b.newsletter_url)
     .bind(updated_by)
     .execute(&mut *tx)
     .await?;
