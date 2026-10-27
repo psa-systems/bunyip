@@ -570,6 +570,7 @@ committed code.
 | `tagline`                                                    | the hero caption, the footer line and the bunyip-web startup banner                                                 |
 | `meta_description`                                           | `<meta name="description">` and `og:description`                                                                    |
 | `og_image_url`                                               | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                                  |
+| `newsletter_url`                                             | the landing newsletter signup posts here: a Mirzam list's form address, absolute `http(s)://`; blank hides it       |
 | `theme_css`                                                  | CSS custom-property declarations emitted into `:root` (the brand ramp). No `<` or `>`; 4096 characters              |
 | `theme_color_light`, `theme_color_dark`                      | the two `<meta name="theme-color">` values (browser chrome). Hex colours (`#rgb`, `#rrggbb`, `#rrggbbaa`)           |
 | `mark_updated_at`, `favicon_updated_at`, `mascot_updated_at` | version markers for the three image slots. NULL means the slot is unset                                             |

@@ -1412,6 +1412,10 @@ pub struct Branding {
     pub meta_description: String,
     #[serde(default)]
     pub og_image_url: String,
+    /// MIRZAM-217: the Mirzam subscribe endpoint the landing page's newsletter
+    /// signup posts to. Empty hides the signup.
+    #[serde(default)]
+    pub newsletter_url: String,
     /// BUNYIP-560: the palette. `theme_css` is the raw custom-property block
     /// emitted into `:root`; the two colours are the `theme-color` metas. Empty
     /// means omitted, exactly like the copy above.
