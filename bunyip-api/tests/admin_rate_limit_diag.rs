@@ -180,7 +180,9 @@ async fn history_since_is_clamped_to_the_24h_floor() {
     let app = build_app!(pool, jwt);
     // Ask for a since 72h ago; the server must clamp it to 24h and return
     // only the recent row.
-    let since = (now - Duration::hours(72)).to_rfc3339();
+    // `+` in the RFC 3339 offset is a space in a query string unless encoded,
+    // which the server then rejects as a bad `since` (BUNYIP-904).
+    let since = urlencoding::encode(&(now - Duration::hours(72)).to_rfc3339()).into_owned();
     let uri = format!("/admin/rate-limits/history?since={since}");
     let req = test::TestRequest::get()
         .uri(&uri)
