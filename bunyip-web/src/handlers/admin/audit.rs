@@ -10,7 +10,9 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminAuditLog;
 use crate::handlers::{admin_guard, admin_response};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
+use crate::views::ui::{
+    badge, button_class, empty_state, error_box_for, filter_chip_select, icon, pager,
+};
 use crate::web::AppState;
 
 use super::title_case;
@@ -109,20 +111,6 @@ const ACTION_OPTIONS: &[(&str, &str)] = &[
     ("admin_ip_ban_lifted", "IP ban lifted"),
     ("admin_feature_toggle_updated", "Feature toggle"),
 ];
-
-/// BUNYIP-936: render a `<select>` chip bound to one query key, so a
-/// submit on any chip reloads the page with that chip's value in the
-/// query string. One form wraps every chip + the search box so a single
-/// submit carries them all.
-fn filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
-    html! {
-        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
-            @for (value, label) in options {
-                option value=(value) selected[current == *value] { (label) }
-            }
-        }
-    }
-}
 
 /// BUNYIP-936: hidden inputs that preserve the filter query string across
 /// the Admin-actions-only toggle link and the pager. Rendered inside the
@@ -272,9 +260,9 @@ pub async fn audit_logs(
                         @if let Some(uid) = q.user_id.as_deref().filter(|s| !s.is_empty()) {
                             input type="hidden" name="user_id" value=(uid);
                         }
-                        (filter_select("action", q.action.as_deref().unwrap_or(""), ACTION_OPTIONS))
-                        (filter_select("severity", q.severity.as_deref().unwrap_or(""), SEVERITY_OPTIONS))
-                        (filter_select("since", q.since.as_deref().unwrap_or(""), SINCE_OPTIONS))
+                        (filter_chip_select("action", q.action.as_deref().unwrap_or(""), ACTION_OPTIONS))
+                        (filter_chip_select("severity", q.severity.as_deref().unwrap_or(""), SEVERITY_OPTIONS))
+                        (filter_chip_select("since", q.since.as_deref().unwrap_or(""), SINCE_OPTIONS))
                         input type="text" name="q" value=(search_value) placeholder="Search email or resource id…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if filters.action.is_some() || filters.severity.is_some() || filters.since.is_some() || filters.q.is_some() {
