@@ -34,6 +34,23 @@ if [ "$CURRENT_UID" != "0" ]; then
     exec "$@"
 fi
 
+# BUNYIP-981: under read_only, /etc is mounted as an empty tmpfs so the
+# usermod/groupmod rewrite below (and any /etc/entrypoint.d hook) has
+# somewhere to write; repopulate it from the image's pristine copy first. A
+# no-op when /etc is not a tmpfs (the Dockerfile's /etc.dist is identical to
+# /etc already). hosts/hostname/resolv.conf are skipped: Docker always bind-
+# mounts its own copies over those three regardless of this tmpfs, so they
+# already exist and are not ours to overwrite.
+if [ -d /etc.dist ]; then
+    for entry in /etc.dist/* /etc.dist/.[!.]*; do
+        [ -e "$entry" ] || continue
+        case "${entry##*/}" in
+            hosts|hostname|resolv.conf) continue ;;
+        esac
+        cp -a "$entry" /etc/
+    done
+fi
+
 # PUID/PGID must be numeric and non-zero: the workload never runs as root.
 check_id() {
     case "$2" in
