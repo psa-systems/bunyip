@@ -1772,6 +1772,12 @@ pub struct EnvVarSpec {
     /// deliberately-unused integration to one warning instead of one per member
     /// of its variable group.
     pub gate: Option<&'static str>,
+    /// The release that first read this variable (BUNYIP-890). Rendered in the
+    /// Added-in column of `docs/configuration.md`. Every new entry carries one;
+    /// the pre-BUNYIP-890 backfill is a conservative `v0.18.0` baseline (the
+    /// release where the registry's current shape was in place), with vars
+    /// known to have been added later carrying their actual release.
+    pub since: &'static str,
 }
 
 impl EnvVarSpec {
@@ -1782,6 +1788,7 @@ impl EnvVarSpec {
             feature,
             remedy,
             gate: None,
+            since: "v0.18.0",
         }
     }
 
@@ -1796,6 +1803,7 @@ impl EnvVarSpec {
             feature,
             remedy,
             gate: None,
+            since: "v0.18.0",
         }
     }
 
@@ -1806,6 +1814,7 @@ impl EnvVarSpec {
             feature,
             remedy,
             gate: None,
+            since: "v0.18.0",
         }
     }
 
@@ -1816,11 +1825,20 @@ impl EnvVarSpec {
             feature,
             remedy: "",
             gate: None,
+            since: "v0.18.0",
         }
     }
 
     const fn gated_by(mut self, gate: &'static str) -> Self {
         self.gate = Some(gate);
+        self
+    }
+
+    /// Override the release this variable was added in. Chainable with
+    /// `gated_by`; stays `const`-callable so a BUNYIP-890 doc regeneration
+    /// stays cheap.
+    const fn since(mut self, since: &'static str) -> Self {
+        self.since = since;
         self
     }
 
@@ -2190,11 +2208,13 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted(
         "DUNITE_ARGON2_MAX_CONCURRENT",
         "maximum concurrent in-flight Argon2 hash/verify operations; default 32",
-    ),
+    )
+    .since("v0.19.0"),
     EnvVarSpec::defaulted(
         "DUNITE_ARGON2_PERMIT_TIMEOUT_SECS",
         "seconds a caller waits for an Argon2 concurrency permit before failing closed; default 5",
-    ),
+    )
+    .since("v0.19.0"),
     EnvVarSpec::defaulted("HOST_IP", "bind address"),
     EnvVarSpec::defaulted("APP_PORT", "listen port"),
     EnvVarSpec::defaulted("RUST_LOG", "log filter"),
@@ -2528,6 +2548,37 @@ mod tests {
     // test below that touches process env must hold it.
     use crate::test_support::env_lock;
     use std::env;
+
+    /// BUNYIP-890: every `ENV_INVENTORY` entry carries a `since` value shaped
+    /// like `vX.Y.Z`, so `scripts/config-docs.nu` can key off it without a
+    /// missing/empty slot. The pre-BUNYIP-890 backfill is a `v0.18.0`
+    /// baseline; new entries carry their actual release.
+    #[test]
+    fn every_env_var_has_a_well_formed_since() {
+        fn is_semver_tag(s: &str) -> bool {
+            let Some(rest) = s.strip_prefix('v') else {
+                return false;
+            };
+            let parts: Vec<&str> = rest.split('.').collect();
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        }
+        for spec in ENV_INVENTORY.iter() {
+            assert!(
+                !spec.since.is_empty(),
+                "{}: `since` is empty (BUNYIP-890 requires every entry to carry one)",
+                spec.name
+            );
+            assert!(
+                is_semver_tag(spec.since),
+                "{}: `since` {:?} is not a vX.Y.Z release tag",
+                spec.name,
+                spec.since
+            );
+        }
+    }
 
     /// BUNYIP-592/644: point the file configuration layer at a throwaway temp
     /// directory before any call that reaches `SysConfig::load`, which MIGRATES

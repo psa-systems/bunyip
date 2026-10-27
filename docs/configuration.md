@@ -4,6 +4,29 @@ Every environment variable bunyip reads, how its absence is reported at startup,
 reference deployment, and the settings that are not environment variables at all. If a knob is not in this document, it
 does not exist.
 
+<!-- BEGIN GENERATED: recently-added (just config-docs) -->
+
+## Recently added
+
+_The last 5 releases that touched the config surface, newest first. The full inventory is below._
+
+### v0.19.0
+
+**Added:**
+- `DUNITE_ARGON2_MAX_CONCURRENT` (Defaulted)
+- `DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` (Defaulted)
+
+**Removed:**
+- `ARGON2_MAX_CONCURRENT` (BUNYIP-713): Rename to DUNITE_ARGON2_MAX_CONCURRENT. The dunite-core shim honours the new name only; a lingering ARGON2_* value is silently ignored.
+- `ARGON2_PERMIT_TIMEOUT_SECS` (BUNYIP-713): Rename to DUNITE_ARGON2_PERMIT_TIMEOUT_SECS. See the sibling entry.
+
+### v0.18.0
+
+**Added:** 126 variables (the pre-BUNYIP-890 baseline inventory; exact release per entry is backfilled as new work touches it).
+
+<!-- END GENERATED: recently-added -->
+
+
 The source of truth for the api's variables is `ENV_INVENTORY` in `crates/bunyip-domain/src/config.rs`; a variable read
 without an entry there fails `bunyip-api/tests/env_inventory.rs`. The classification tables below, the system-level
 table and the governed-secrets table are the operator-facing rendering of `ENV_INVENTORY`, `SYSTEM_LEVEL_ENV_KEYS` and

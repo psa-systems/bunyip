@@ -1,0 +1,24 @@
+# Release-level configuration changes bunyip's `ENV_INVENTORY` cannot carry
+# on its own (BUNYIP-890): removed variables and behaviour-change notes.
+# `scripts/config-docs.nu` renders both into the Recently added section of
+# `docs/configuration.md`.
+#
+# Shape:
+#   [[removed]]: variable name, the release it was removed in, operator action,
+#   owning issue id.
+#   [[change]]: variable name, release, level (Breaking | Note), the operator
+#   action, owning issue id.
+#
+# `since` lives on `EnvVarSpec` in `crates/bunyip-domain/src/config.rs`.
+
+[[removed]]
+name = "ARGON2_MAX_CONCURRENT"
+release = "v0.19.0"
+action = "Rename to DUNITE_ARGON2_MAX_CONCURRENT. The dunite-core shim honours the new name only; a lingering ARGON2_* value is silently ignored."
+issue = "BUNYIP-713"
+
+[[removed]]
+name = "ARGON2_PERMIT_TIMEOUT_SECS"
+release = "v0.19.0"
+action = "Rename to DUNITE_ARGON2_PERMIT_TIMEOUT_SECS. See the sibling entry."
+issue = "BUNYIP-713"

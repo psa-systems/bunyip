@@ -292,6 +292,14 @@ jobs:
           ./scripts/check-claude-md.nu --self-test
           ./scripts/check-claude-md.nu
 
+      - name: Check configuration doc Recently-added section is current
+        # The generator reads ENV_INVENTORY in crates/bunyip-domain/src/config.rs
+        # plus config/changes.toml and the committed doc must byte-match. Run
+        # `just config-docs` to regenerate on a drift (BUNYIP-890).
+        run: |
+          ./scripts/config-docs.nu self-test
+          ./scripts/config-docs.nu check
+
       - name: Check buildkit cache mounts are per-image and locked
         # Every `--mount=type=cache` carries an `id=` and `sharing=locked`, so
         # the concurrent builds of a release commit (main push plus tag push,

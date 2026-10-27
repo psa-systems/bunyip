@@ -71,7 +71,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-config-docs check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -217,6 +217,25 @@ check-doc-surface:
 check-claude-md:
     ./scripts/check-claude-md.nu --self-test
     ./scripts/check-claude-md.nu
+
+# Gate the Recently added section of docs/configuration.md: the generator
+# reads ENV_INVENTORY in crates/bunyip-domain/src/config.rs plus
+# config/changes.toml and the committed doc must byte-match (BUNYIP-890).
+[group: 'checks']
+check-config-docs:
+    ./scripts/config-docs.nu self-test
+    ./scripts/config-docs.nu check
+
+# Regenerate docs/configuration.md's Recently added section from ENV_INVENTORY
+# and config/changes.toml (BUNYIP-890).
+[group: 'docs']
+config-docs:
+    ./scripts/config-docs.nu generate
+
+# List every variable added in <version>, one per line (BUNYIP-890).
+[group: 'docs']
+config-since version:
+    ./scripts/config-docs.nu since {{ version }}
 
 # Gate the buildkit cargo cache mounts: every `type=cache` mount carries a
 # per-image `id=` and `sharing=locked`, so concurrent builds cannot unpack
