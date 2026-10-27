@@ -1662,6 +1662,7 @@ mod logout_clear_tests {
             oidc_issuer: "http://localhost:4401".into(),
             app_domain: app_domain.into(),
             community_url: String::new(),
+            newsletter_url: String::new(),
             trusted_proxies: Vec::new(),
             csp: crate::config::CspConfig::default(),
         }

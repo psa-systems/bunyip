@@ -703,7 +703,7 @@ deployment configuration, and are listed here only so the boundary is explicit.
 
 bunyip-web is a separate binary with its own configuration (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`,
 `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`,
-`TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
+`BUNYIP_NEWSLETTER_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working default. It holds no
 secrets and reads none of the api variables above, so the api's inventory does not cover it.
 
 It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta description and Open Graph image are

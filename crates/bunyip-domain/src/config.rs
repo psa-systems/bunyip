@@ -2377,6 +2377,10 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "Let's Chat instance URL; empty hides the Community button (BUNYIP-329)",
     ),
     EnvVarSpec::defaulted(
+        "BUNYIP_NEWSLETTER_URL",
+        "Mirzam list subscribe endpoint; empty hides the landing newsletter signup (MIRZAM-217)",
+    ),
+    EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",
         "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),
