@@ -21,7 +21,7 @@ use crate::repositories::{
 };
 use crate::responses::{get_request_id, success, success_no_data};
 use crate::services::{
-    classify_probe, stripe_err_for, AppKeySet, AuthService, ProbeStatus, StripePermission,
+    classify_probe, stripe_err_for, AuthService, EncryptionKeySet, ProbeStatus, StripePermission,
     StripeService,
 };
 
@@ -867,7 +867,7 @@ pub async fn create_stripe_webhook(
     admin: AdminUser,
     stripe: web::Data<Arc<StripeService>>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     pool: web::Data<PgPool>,
     body: web::Json<CreateStripeWebhookRequest>,
 ) -> Result<HttpResponse, AppError> {

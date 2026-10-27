@@ -4,7 +4,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::services::AppKeySet;
+use crate::services::EncryptionKeySet;
 
 // DEV-515: the async-stripe response DTOs moved to the shared `dunite-stripe`
 // crate (consumed by a8n-tools too) and are re-exported here, so every
@@ -38,7 +38,7 @@ pub struct StripeConfig {
 
 /// Encrypt plaintext with the current key. Returns (ciphertext, nonce, key_version).
 pub fn encrypt_secret(
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     plaintext: &str,
 ) -> Result<(Vec<u8>, Vec<u8>, i16), AppError> {
     key_set.encrypt(plaintext.as_bytes())
@@ -46,7 +46,7 @@ pub fn encrypt_secret(
 
 /// Decrypt ciphertext using the key set (with fallback). Returns plaintext string.
 pub fn decrypt_secret(
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     ciphertext: &[u8],
     nonce: &[u8],
     key_version: i16,
@@ -155,7 +155,7 @@ impl StripeConfigResponse {
     /// The `SECRETS_STORAGE=database` form of [`Self::from_provider`]: decrypt
     /// the row's own ciphertext columns. Only correct when the database IS the
     /// declared provider, so handlers go through `from_provider`.
-    pub fn from_db(config: &StripeConfig, key_set: &AppKeySet) -> Result<Self, AppError> {
+    pub fn from_db(config: &StripeConfig, key_set: &EncryptionKeySet) -> Result<Self, AppError> {
         let secret_key_plain = match (&config.secret_key, &config.secret_key_nonce) {
             (Some(ct), Some(nonce)) => {
                 Some(decrypt_secret(key_set, ct, nonce, config.key_version)?)
@@ -228,8 +228,8 @@ impl StripeConfigResponse {
 mod tests {
     use super::*;
 
-    fn test_key_set() -> AppKeySet {
-        AppKeySet {
+    fn test_key_set() -> EncryptionKeySet {
+        EncryptionKeySet {
             current: [0xAA; 32],
             current_version: 1,
             previous: Vec::new(),
@@ -258,7 +258,7 @@ mod tests {
     fn decrypt_with_wrong_key_fails() {
         let ks = test_key_set();
         let (ciphertext, nonce, _) = encrypt_secret(&ks, "secret").unwrap();
-        let wrong_ks = AppKeySet {
+        let wrong_ks = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 1,
             previous: Vec::new(),
@@ -419,7 +419,7 @@ mod tests {
         let (ct, nonce, _) = encrypt_secret(&ks_v1, "sk_live_old").unwrap();
 
         // Rotate: new key is current, old key is previous
-        let ks_v2 = AppKeySet {
+        let ks_v2 = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 2,
             previous: vec![[0xAA; 32]],
@@ -435,7 +435,7 @@ mod tests {
         let (ct_old, nonce_old, _) = encrypt_secret(&ks_v1, "whsec_original").unwrap();
 
         // Rotate to v2
-        let ks_v2 = AppKeySet {
+        let ks_v2 = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 2,
             previous: vec![[0xAA; 32]],
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(ver_new, 2);
 
         // New ciphertext decryptable with v2 key only
-        let ks_v2_only = AppKeySet {
+        let ks_v2_only = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 2,
             previous: Vec::new(),
@@ -478,7 +478,7 @@ mod tests {
         };
 
         // Decrypt with v2 key set (v1 as previous)
-        let ks_v2 = AppKeySet {
+        let ks_v2 = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 2,
             previous: vec![[0xAA; 32]],
@@ -510,7 +510,7 @@ mod tests {
         };
 
         // v2 key only, no previous - cannot decrypt v1 data
-        let ks_v2_no_prev = AppKeySet {
+        let ks_v2_no_prev = EncryptionKeySet {
             current: [0xBB; 32],
             current_version: 2,
             previous: Vec::new(),

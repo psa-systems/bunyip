@@ -30,8 +30,8 @@ use crate::repositories::{
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
-    argon2_offload, stripe_err, AppDownloadCache, AppKeySet, AuthService, EmailService, JwtService,
-    ReleaseCache, StripeService, TotpService, WebhookService,
+    argon2_offload, stripe_err, AppDownloadCache, AuthService, EmailService, EncryptionKeySet,
+    JwtService, ReleaseCache, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
 use bunyip_domain::services::{BunyipEvent, EventBus};
@@ -2275,7 +2275,7 @@ pub async fn get_stripe_config(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::GovernedSecret;
 
@@ -2316,7 +2316,7 @@ pub async fn update_stripe_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     stripe_service: web::Data<Arc<StripeService>>,
     pricing_cache: web::Data<Arc<crate::handlers::PricingCache>>,
     body: web::Json<UpdateStripeConfigRequest>,
@@ -2890,7 +2890,7 @@ pub async fn get_email_config(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::EmailConfig;
     use crate::repositories::EmailConfigRepository;
@@ -2942,7 +2942,7 @@ pub async fn update_email_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     email_service: web::Data<Arc<EmailService>>,
     body: web::Json<UpdateEmailConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -3174,7 +3174,7 @@ pub async fn test_email_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::EmailConfig;
     use crate::repositories::EmailConfigRepository;
@@ -3279,7 +3279,7 @@ pub async fn send_test_email_message(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     email_service: web::Data<Arc<EmailService>>,
 ) -> Result<HttpResponse, AppError> {
     use crate::config::EmailConfig;
@@ -4073,7 +4073,7 @@ pub struct KeyHealthCheck {
 /// is what a row still on a retired key looks like during the consolidation
 /// window (the version alone can no longer tell them apart).
 fn evaluate_key_health(
-    keys: &AppKeySet,
+    keys: &EncryptionKeySet,
     ciphertext: Option<&[u8]>,
     nonce: Option<&[u8]>,
     key_version: Option<i16>,
@@ -4172,7 +4172,10 @@ fn combine_key_health(checks: Vec<(String, KeyHealthCheck)>) -> KeyHealthCheck {
     }
 }
 
-async fn check_stripe_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+async fn check_stripe_key(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<KeyHealthCheck, AppError> {
     let db = StripeConfigRepository::get(pool).await?;
     Ok(combine_key_health(vec![
         (
@@ -4196,7 +4199,10 @@ async fn check_stripe_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCh
     ]))
 }
 
-async fn check_totp_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+async fn check_totp_key(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<KeyHealthCheck, AppError> {
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
         uuid::Uuid,
@@ -4233,7 +4239,10 @@ async fn check_totp_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthChec
     Ok(combine_key_health(checks))
 }
 
-async fn check_email_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+async fn check_email_key(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<KeyHealthCheck, AppError> {
     let row = EmailConfigRepository::get(pool).await?;
     Ok(combine_key_health(vec![
         (
@@ -4262,7 +4271,7 @@ async fn check_email_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthChe
 async fn run_key_check(
     key_id: &str,
     pool: &PgPool,
-    keys: &AppKeySet,
+    keys: &EncryptionKeySet,
 ) -> Result<KeyHealthCheck, AppError> {
     match key_id {
         "stripe" => check_stripe_key(pool, keys).await,
@@ -4343,7 +4352,7 @@ pub async fn key_rotation_status(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -4461,7 +4470,7 @@ pub async fn reencrypt_key(
     req: HttpRequest,
     admin: AdminUser,
     pool: web::Data<PgPool>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     path: web::Path<String>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -5125,22 +5134,22 @@ mod tests {
 #[cfg(test)]
 mod key_health_tests {
     use super::*;
-    use crate::services::AppKeySet;
+    use crate::services::EncryptionKeySet;
 
     fn test_key() -> [u8; 32] {
         [0xAA; 32]
     }
 
-    fn test_key_set() -> AppKeySet {
-        AppKeySet {
+    fn test_key_set() -> EncryptionKeySet {
+        EncryptionKeySet {
             current: test_key(),
             current_version: 1,
             previous: Vec::new(),
         }
     }
 
-    fn key_set_with(current: [u8; 32], version: i16, previous: Vec<[u8; 32]>) -> AppKeySet {
-        AppKeySet {
+    fn key_set_with(current: [u8; 32], version: i16, previous: Vec<[u8; 32]>) -> EncryptionKeySet {
+        EncryptionKeySet {
             current,
             current_version: version,
             previous,

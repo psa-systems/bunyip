@@ -28,7 +28,7 @@ use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::stripe::{decrypt_secret, encrypt_secret};
 use bunyip_domain::repositories::{EmailConfigRepository, StripeConfigRepository};
-use bunyip_domain::services::{AppKeySet, InfisicalClient};
+use bunyip_domain::services::{EncryptionKeySet, InfisicalClient};
 use sqlx::PgPool;
 use tracing::{error, warn};
 
@@ -148,7 +148,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
 pub async fn survey(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     probe: InfisicalProbe,
 ) -> Result<Survey, AppError> {
     let email_row = EmailConfigRepository::get(pool).await?;
@@ -253,7 +253,7 @@ pub async fn survey(
 pub async fn read_secret(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     secret: GovernedSecret,
 ) -> Result<Option<String>, AppError> {
     match config.secrets_provider {
@@ -313,7 +313,7 @@ pub async fn read_secret(
 pub async fn stripe_runtime_config(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     row: &bunyip_domain::models::stripe::StripeConfig,
 ) -> Result<bunyip_domain::services::StripeConfig, AppError> {
     let mut runtime = bunyip_domain::services::stripe_settings_from_db_model(row);
@@ -332,7 +332,7 @@ pub async fn stripe_runtime_config(
 /// read is reported at `error` and treated as absent: the enforcement below then
 /// says so out loud instead of quietly falling through to another provider.
 fn decrypt_column(
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     secret: GovernedSecret,
     ciphertext: Option<&[u8]>,
     nonce: Option<&[u8]>,
@@ -439,7 +439,7 @@ fn provider_list(providers: &[SecretsProvider]) -> String {
 pub async fn write_secret(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     provider: SecretsProvider,
     secret: GovernedSecret,
     value: &str,
@@ -893,7 +893,7 @@ fn verification_failures(
 pub async fn run_migration(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     survey: &Survey,
     target: SecretsProvider,
     dry_run: bool,

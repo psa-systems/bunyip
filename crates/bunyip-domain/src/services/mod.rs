@@ -26,12 +26,11 @@ pub mod totp;
 pub mod webhook;
 
 // BUNYIP-491 closes BUNYIP-483: `EncryptionKeySet` now owns multi-previous
-// key support upstream (DUNITE-23), so bunyip's `AppKeySet` wrapper is gone.
-// Kept as a type alias so call sites that reference `services::AppKeySet`
-// stay unchanged; new code should prefer the kernel name directly.
-pub use dunite_core::services::EncryptionKeySet as AppKeySet;
-
-// Generic kernel services (re-exported from dunite-core).
+// key support upstream (DUNITE-23), so the bunyip-local wrapper is gone.
+// Generic kernel services (re-exported from dunite-core). BUNYIP-876
+// dropped the backward-compat alias; call sites name the kernel type
+// `EncryptionKeySet` directly, matching the shape the saas-sync plan's A2
+// wave finished folding.
 pub use dunite_core::services::{EncryptionKeySet, JwtConfig, PasswordService};
 // Re-export the kernel service submodules so `crate::services::encryption::*`
 // and `crate::services::password::*` paths resolve unchanged.

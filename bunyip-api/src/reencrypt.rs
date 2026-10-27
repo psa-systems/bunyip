@@ -2,7 +2,7 @@
 //!
 //! Run by the `bunyip-api reencrypt-secrets` subcommand (operator-controlled, so
 //! a backup can be taken first) and by the admin key-rotation endpoints. The
-//! pass covers EVERY column encrypted with [`AppKeySet`]:
+//! pass covers EVERY column encrypted with [`EncryptionKeySet`]:
 //!
 //! | table          | columns                                                     |
 //! |----------------|-------------------------------------------------------------|
@@ -11,7 +11,7 @@
 //! | `stripe_config`| `secret_key`, `webhook_secret` (+ nonces)                   |
 //! | `email_config` | `smtp_password`, `imap_password` (+ nonces)                 |
 //!
-//! Idempotent: [`AppKeySet::rewrite`] returns `None` for a value already on the
+//! Idempotent: [`EncryptionKeySet::rewrite`] returns `None` for a value already on the
 //! current key and version, so a second run rewrites nothing. A value that no
 //! key in the set can decrypt is reported and left untouched, never cleared.
 
@@ -20,7 +20,7 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::{EmailConfigRepository, StripeConfigRepository, TotpRepository};
-use crate::services::AppKeySet;
+use crate::services::EncryptionKeySet;
 
 /// What one pass did, per secret store.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -54,7 +54,10 @@ impl std::fmt::Display for ReencryptSummary {
 }
 
 /// Re-encrypt the TOTP secrets (active and BUNYIP-355 pending).
-pub async fn reencrypt_totp(pool: &PgPool, keys: &AppKeySet) -> Result<ReencryptSummary, AppError> {
+pub async fn reencrypt_totp(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<ReencryptSummary, AppError> {
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
         Uuid,
@@ -114,7 +117,7 @@ pub async fn reencrypt_totp(pool: &PgPool, keys: &AppKeySet) -> Result<Reencrypt
 /// Re-encrypt the Stripe secret key and webhook signing secret.
 pub async fn reencrypt_stripe(
     pool: &PgPool,
-    keys: &AppKeySet,
+    keys: &EncryptionKeySet,
 ) -> Result<ReencryptSummary, AppError> {
     let db = StripeConfigRepository::get(pool).await?;
     let mut summary = ReencryptSummary::default();
@@ -169,7 +172,7 @@ pub async fn reencrypt_stripe(
 /// Re-encrypt the SMTP and IMAP passwords on the `email_config` row.
 pub async fn reencrypt_email(
     pool: &PgPool,
-    keys: &AppKeySet,
+    keys: &EncryptionKeySet,
 ) -> Result<ReencryptSummary, AppError> {
     let row = EmailConfigRepository::get(pool).await?;
     let mut summary = ReencryptSummary::default();
@@ -206,7 +209,10 @@ pub async fn reencrypt_email(
 
 /// Run the whole pass: TOTP secrets, Stripe secrets, and the SMTP and IMAP
 /// passwords.
-pub async fn reencrypt_all(pool: &PgPool, keys: &AppKeySet) -> Result<ReencryptSummary, AppError> {
+pub async fn reencrypt_all(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<ReencryptSummary, AppError> {
     let mut summary = reencrypt_totp(pool, keys).await?;
     summary.merge(reencrypt_stripe(pool, keys).await?);
     summary.merge(reencrypt_email(pool, keys).await?);

@@ -16,8 +16,8 @@ use bunyip_api::handlers;
 use bunyip_api::models::{CreateUser, User, UserRole, UserTotp};
 use bunyip_api::repositories::{TotpRepository, UserRepository};
 use bunyip_api::services::{
-    argon2_offload, AppKeySet, AuthService, EmailService, JwtConfig, JwtService, LoginResult,
-    TotpService,
+    argon2_offload, AuthService, EmailService, EncryptionKeySet, JwtConfig, JwtService,
+    LoginResult, TotpService,
 };
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
@@ -30,8 +30,8 @@ const JWT_SECRET: &str = "bunyip-886-test-secret-at-least-32-bytes-long";
 /// 20 bytes of base32, clearing totp_rs's 128-bit minimum.
 const PRESET_SECRET: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-fn key_set() -> AppKeySet {
-    AppKeySet {
+fn key_set() -> EncryptionKeySet {
+    EncryptionKeySet {
         current: [0x42u8; 32],
         current_version: 1,
         previous: Vec::new(),

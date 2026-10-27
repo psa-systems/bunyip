@@ -12,7 +12,7 @@ use std::time::Duration;
 use bunyip_domain::config::{Config, EmailConfig, GovernedSecret};
 use bunyip_domain::models::NewInboundMessage;
 use bunyip_domain::repositories::{EmailConfigRepository, SupportRepository};
-use bunyip_domain::services::AppKeySet;
+use bunyip_domain::services::EncryptionKeySet;
 use futures_util::StreamExt;
 use mail_parser::{HeaderValue, MessageParser};
 use sqlx::PgPool;
@@ -83,7 +83,7 @@ pub fn parse_inbound(raw: &[u8]) -> Option<NewInboundMessage> {
 pub async fn poll_once(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
 ) -> anyhow::Result<usize> {
     let row = EmailConfigRepository::get(pool).await?;
     // BUNYIP-643: the same declared provider stack the boot path resolves
@@ -180,7 +180,7 @@ where
 
 /// Spawn the support-mailbox poller. Always spawned; each tick re-reads the
 /// config so enabling IMAP from the admin page takes effect without a restart.
-pub fn spawn(pool: PgPool, config: Config, key_set: AppKeySet) {
+pub fn spawn(pool: PgPool, config: Config, key_set: EncryptionKeySet) {
     let secs = config.email.imap_poll_secs.max(10);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(secs));

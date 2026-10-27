@@ -629,10 +629,10 @@ impl EmailConfig {
     /// enforcement treats it as "the declared provider holds nothing" rather
     /// than silently substituting another provider's value.
     ///
-    /// [`AppKeySet`]: crate::services::AppKeySet
+    /// [`EncryptionKeySet`]: crate::services::EncryptionKeySet
     pub fn db_smtp_password(
         row: &crate::models::email::EmailConfigRow,
-        key_set: &crate::services::AppKeySet,
+        key_set: &crate::services::EncryptionKeySet,
     ) -> Option<String> {
         let (ciphertext, nonce) = match (&row.smtp_password, &row.smtp_password_nonce) {
             (Some(ct), Some(nonce)) => (ct, nonce),
@@ -658,7 +658,7 @@ impl EmailConfig {
     /// treated as no password, not a fatal, so a stale row never blocks boot.
     pub fn db_imap_password(
         row: &crate::models::email::EmailConfigRow,
-        key_set: &crate::services::AppKeySet,
+        key_set: &crate::services::EncryptionKeySet,
     ) -> Option<String> {
         let (ciphertext, nonce) = match (&row.imap_password, &row.imap_password_nonce) {
             (Some(ct), Some(nonce)) => (ct, nonce),
@@ -1627,8 +1627,8 @@ impl Config {
     /// BUNYIP-483: the one at-rest key set, built from `APP_ENCRYPTION_KEY`,
     /// `APP_ENCRYPTION_KEY_PREV` and `APP_KEY_VERSION`. Every consumer (TOTP,
     /// Stripe, email) gets this same set.
-    pub fn app_key_set(&self) -> crate::services::AppKeySet {
-        crate::services::AppKeySet {
+    pub fn app_key_set(&self) -> crate::services::EncryptionKeySet {
+        crate::services::EncryptionKeySet {
             current: self.app_encryption_key,
             current_version: self.app_key_version,
             previous: self.app_encryption_key_prev.clone(),
@@ -3347,8 +3347,8 @@ mod tests {
 
     // ---- Email config DB-overrides-env merge (BUNYIP-351) ----
 
-    fn test_key_set() -> crate::services::AppKeySet {
-        crate::services::AppKeySet {
+    fn test_key_set() -> crate::services::EncryptionKeySet {
+        crate::services::EncryptionKeySet {
             current: [7u8; 32],
             current_version: 1,
             previous: Vec::new(),
