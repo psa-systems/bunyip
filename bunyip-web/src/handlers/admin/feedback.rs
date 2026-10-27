@@ -13,7 +13,8 @@ use crate::api::types::{AdminFeedbackDetail, FeedbackAttachmentMeta, FeedbackSta
 use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
 use crate::views::ui::{
-    back_link, badge, button_class, empty_state, error_box, error_box_for, icon, pager,
+    back_link, badge, button_class, empty_state, error_box, error_box_for, filter_chip_select,
+    icon, pager,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -183,16 +184,6 @@ const TRI_STATE_OPTIONS_RESPONSE: &[(&str, &str)] = &[
     ("no", "Without response"),
 ];
 
-fn feedback_filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
-    html! {
-        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
-            @for (value, label) in options {
-                option value=(value) selected[current == *value] { (label) }
-            }
-        }
-    }
-}
-
 /// Build the pager base URL carrying every active filter on this tab.
 /// The pager appends `&page=N`.
 fn feedback_pager_base(tab: FeedbackTab, q: &FeedbackListQuery) -> String {
@@ -274,9 +265,9 @@ async fn render_feedback_list(
                     // BUNYIP-938: filter chips. One form wraps the row so a
                     // submit on any chip carries every filter to the server.
                     form method="get" action=(tab.path()) class="mt-4 flex flex-wrap items-center gap-2" {
-                        (feedback_filter_select("tag", q.tag.as_deref().unwrap_or(""), FEEDBACK_TAG_OPTIONS))
-                        (feedback_filter_select("attachment", q.attachment.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_ATTACHMENT))
-                        (feedback_filter_select("response", q.response.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_RESPONSE))
+                        (filter_chip_select("tag", q.tag.as_deref().unwrap_or(""), FEEDBACK_TAG_OPTIONS))
+                        (filter_chip_select("attachment", q.attachment.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_ATTACHMENT))
+                        (filter_chip_select("response", q.response.as_deref().unwrap_or(""), TRI_STATE_OPTIONS_RESPONSE))
                         input type="text" name="q" value=(search_value) placeholder="Search subject, message, email…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if any_filter_active {

@@ -11,6 +11,21 @@
 
 pub use web_kit::ui::*;
 
+/// BUNYIP-986: shared admin filter-chip `<select>`, bound to one query key so
+/// a submit on any chip reloads the page with that chip's value in the query
+/// string. Previously copied byte-for-byte into `audit.rs`, `feedback.rs`,
+/// `invites.rs` (each as its own local function) and inlined a fourth time in
+/// `ip_bans.rs`'s `sort` chip.
+pub fn filter_chip_select(name: &str, current: &str, options: &[(&str, &str)]) -> maud::Markup {
+    maud::html! {
+        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
+            @for (value, label) in options {
+                option value=(value) selected[current == *value] { (label) }
+            }
+        }
+    }
+}
+
 /// BUNYIP-844: an [`error_box_detailed`] populated from a load failure's
 /// `ApiError`, so every "could not load X" surface tells the admin the actual
 /// cause and request id instead of the bare headline `error_box` gives.
