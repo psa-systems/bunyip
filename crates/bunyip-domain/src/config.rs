@@ -223,16 +223,22 @@ pub enum GovernedSecret {
     SupportImapPassword,
     /// `mirzam_config.api_token` / `MIRZAM_API_TOKEN` (BUNYIP-997).
     MirzamApiToken,
+    /// `mokosh_config.google_client_secret` / `MOKOSH_GOOGLE_CLIENT_SECRET`
+    /// (BUNYIP-983). The secret half of the Google OAuth client bunyip serves
+    /// to a hosted Mokosh; the id half is public and lives on the same row as
+    /// an ordinary setting.
+    MokoshGoogleClientSecret,
 }
 
 impl GovernedSecret {
     /// Every governed secret, in report order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::SmtpPassword,
         Self::StripeSecretKey,
         Self::StripeWebhookSecret,
         Self::SupportImapPassword,
         Self::MirzamApiToken,
+        Self::MokoshGoogleClientSecret,
     ];
 
     /// The variable name in the `environment` provider, which is also the key
@@ -244,6 +250,7 @@ impl GovernedSecret {
             Self::StripeWebhookSecret => "STRIPE_WEBHOOK_SECRET",
             Self::SupportImapPassword => "SUPPORT_IMAP_PASSWORD",
             Self::MirzamApiToken => "MIRZAM_API_TOKEN",
+            Self::MokoshGoogleClientSecret => "MOKOSH_GOOGLE_CLIENT_SECRET",
         }
     }
 
@@ -269,6 +276,10 @@ impl GovernedSecret {
                 "the Mirzam integration: account holders are not kept on the product-updates \
                  and notices lists, and the connection check is refused"
             }
+            Self::MokoshGoogleClientSecret => {
+                "Google contact sync on every hosted Mokosh: the host-secrets route answers \
+                 \"not set\", so a Mokosh tenant cannot connect their Google account"
+            }
         }
     }
 
@@ -281,6 +292,7 @@ impl GovernedSecret {
             Self::StripeWebhookSecret => "webhook_secret",
             Self::SupportImapPassword => "imap_password",
             Self::MirzamApiToken => "api_token",
+            Self::MokoshGoogleClientSecret => "google_client_secret",
         }
     }
 
@@ -293,6 +305,7 @@ impl GovernedSecret {
             Self::StripeWebhookSecret => "stripe_webhook_secret",
             Self::SupportImapPassword => "support_imap_password",
             Self::MirzamApiToken => "mirzam_api_token",
+            Self::MokoshGoogleClientSecret => "mokosh_google_client_secret",
         }
     }
 
@@ -2286,6 +2299,11 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "MIRZAM_API_TOKEN",
         "Mirzam API write token; governed by SECRETS_STORAGE, read only as \
          MIRZAM_API_TOKEN_FILE",
+    ),
+    EnvVarSpec::defaulted(
+        "MOKOSH_GOOGLE_CLIENT_SECRET",
+        "Google OAuth client secret the host-secrets route serves to a hosted Mokosh; \
+         governed by SECRETS_STORAGE, read only as MOKOSH_GOOGLE_CLIENT_SECRET_FILE",
     ),
     EnvVarSpec::defaulted("AUTO_BAN_ENABLED", "auto-ban switch"),
     EnvVarSpec::defaulted("AUTO_BAN_THRESHOLD", "auto-ban failure threshold"),

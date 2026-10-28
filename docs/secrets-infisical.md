@@ -71,7 +71,7 @@ self-host), then `docker compose up --detach` (or restart the affected service) 
 
 Five secrets are **governed** by `SECRETS_STORAGE`, because each has more than one possible provider: `SMTP_PASSWORD`,
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`
-and `MIRZAM_API_TOKEN` (BUNYIP-997). The declared provider is the only one bunyip reads. There is no precedence chain and no
+`MIRZAM_API_TOKEN` (BUNYIP-997) and `MOKOSH_GOOGLE_CLIENT_SECRET` (BUNYIP-983). The declared provider is the only one bunyip reads. There is no precedence chain and no
 fallback.
 
 **A note on the name.** The suite calls a selectable implementation a **provider**, and bunyip's code says
@@ -100,7 +100,7 @@ is scoped to the bunyip project, so no
 ```
 bunyip (project)
 ├── staging
-│   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPPORT_IMAP_PASSWORD, MIRZAM_API_TOKEN)
+│   ├── /runtime      <- the governed secrets (SMTP_PASSWORD, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, SUPPORT_IMAP_PASSWORD, MIRZAM_API_TOKEN, MOKOSH_GOOGLE_CLIENT_SECRET)
 │   └── /bunyip/e2e   <- the E2E account password (docs/e2e.md)
 └── prod
     └── /runtime

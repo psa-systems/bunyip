@@ -11,6 +11,7 @@
 //! | `stripe_config`| `secret_key`, `webhook_secret` (+ nonces)                   |
 //! | `email_config` | `smtp_password`, `imap_password` (+ nonces)                 |
 //! | `mirzam_config`| `api_token` (+ `api_token_nonce`, BUNYIP-997)               |
+//! | `mokosh_config`| `google_client_secret` (+ its nonce, BUNYIP-983)            |
 //!
 //! Idempotent: [`AppKeySet::rewrite`] returns `None` for a value already on the
 //! current key and version, so a second run rewrites nothing. A value that no
@@ -21,7 +22,8 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 use crate::repositories::{
-    EmailConfigRepository, MirzamConfigRepository, StripeConfigRepository, TotpRepository,
+    EmailConfigRepository, MirzamConfigRepository, MokoshConfigRepository, StripeConfigRepository,
+    TotpRepository,
 };
 use crate::services::AppKeySet;
 
@@ -231,13 +233,42 @@ pub async fn reencrypt_mirzam(
     Ok(summary)
 }
 
+/// Re-encrypt the Mokosh Google client secret on the `mokosh_config` row
+/// (BUNYIP-983).
+pub async fn reencrypt_mokosh(
+    pool: &PgPool,
+    keys: &AppKeySet,
+) -> Result<ReencryptSummary, AppError> {
+    let row = MokoshConfigRepository::get(pool).await?;
+    let mut summary = ReencryptSummary::default();
+
+    if let (Some(ciphertext), Some(nonce)) =
+        (&row.google_client_secret, &row.google_client_secret_nonce)
+    {
+        match keys.rewrite(ciphertext, nonce, row.key_version) {
+            Ok(Some((ct, n, version))) => {
+                MokoshConfigRepository::update_client_secret_encryption(pool, &ct, &n, version)
+                    .await?;
+                summary.rewritten += 1;
+            }
+            Ok(None) => summary.already_current += 1,
+            Err(_) => summary
+                .undecryptable
+                .push("mokosh_config google_client_secret".to_string()),
+        }
+    }
+
+    Ok(summary)
+}
+
 /// Run the whole pass: TOTP secrets, Stripe secrets, the SMTP and IMAP
-/// passwords, and the Mirzam API token.
+/// passwords, the Mirzam API token and the Mokosh Google client secret.
 pub async fn reencrypt_all(pool: &PgPool, keys: &AppKeySet) -> Result<ReencryptSummary, AppError> {
     let mut summary = reencrypt_totp(pool, keys).await?;
     summary.merge(reencrypt_stripe(pool, keys).await?);
     summary.merge(reencrypt_email(pool, keys).await?);
     summary.merge(reencrypt_mirzam(pool, keys).await?);
+    summary.merge(reencrypt_mokosh(pool, keys).await?);
     Ok(summary)
 }
 

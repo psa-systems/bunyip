@@ -9,11 +9,11 @@ use super::types::{
     AdminStatsResponse, AdminUser, ApiVersion, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    MailerSuppression, MirzamCheckResult, MirzamConfigResponse, PaginatedResponse, PricingStatus,
-    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
-    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
-    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
-    UserEntitlement,
+    MailerSuppression, MirzamCheckResult, MirzamConfigResponse, MokoshConfigResponse,
+    PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse, RestoreReport,
+    SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice,
+    StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -1376,6 +1376,25 @@ pub async fn update_mirzam_config(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/mirzam", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-983: the Mokosh host settings.
+pub async fn mokosh_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MokoshConfigResponse, ApiError> {
+    parse(api.get("/admin/mokosh", cookie).await?)
+}
+
+/// BUNYIP-983: replace the Mokosh client id; an empty `google_client_secret`
+/// keeps the stored secret, and a changed id needs `confirm_client_id_change`.
+pub async fn update_mokosh_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/mokosh", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
 }
 
