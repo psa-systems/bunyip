@@ -141,7 +141,10 @@ impl InviteRepository {
     ) -> Result<(Vec<AdminInvite>, i64), AppError> {
         use sqlx::QueryBuilder;
 
-        let offset = (page - 1) * per_page;
+        // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+        // BUNYIP-946 F14, so a page value large enough to overflow an i32
+        // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         // Derived-state SQL mirrors the web renderer's classification:
         //   pending  = not used, not revoked, not expired
@@ -181,7 +184,7 @@ impl InviteRepository {
         q.push(" ORDER BY created_at DESC LIMIT ")
             .push_bind(per_page as i64)
             .push(" OFFSET ")
-            .push_bind(offset as i64);
+            .push_bind(offset);
 
         let mut c = QueryBuilder::new("SELECT COUNT(*) FROM admin_invites");
         push_where(&mut c, status_predicate, email);
