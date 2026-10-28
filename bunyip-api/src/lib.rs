@@ -20,6 +20,7 @@ pub mod db_metrics;
 pub mod error_log;
 pub mod extractors;
 pub mod handlers;
+pub mod host_secrets;
 pub mod machine_client;
 pub mod migrate_reconcile;
 pub mod mirzam_sync;

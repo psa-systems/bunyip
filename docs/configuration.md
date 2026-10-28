@@ -121,6 +121,7 @@ The governed set is exactly the secrets with more than one possible provider:
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
 | `MIRZAM_API_TOKEN`      | `mirzam_config.api_token`      | `MIRZAM_API_TOKEN_FILE`      | `<path>/MIRZAM_API_TOKEN`      |
+| `MOKOSH_GOOGLE_CLIENT_SECRET` | `mokosh_config.google_client_secret` | `MOKOSH_GOOGLE_CLIENT_SECRET_FILE` | `<path>/MOKOSH_GOOGLE_CLIENT_SECRET` |
 
 The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
@@ -407,7 +408,8 @@ Every variable below has a working default; set it only to tune the deployment.
   `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_MAILBOX`, `SUPPORT_IMAP_ENABLED`,
   `SUPPORT_IMAP_POLL_SECS`.
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only as `{NAME}_FILE`): `SMTP_PASSWORD`,
-  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`.
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`,
+  `MOKOSH_GOOGLE_CLIENT_SECRET`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
@@ -486,7 +488,7 @@ this repository.
 
 | Variable                                                                               | Consequence of the gap                                                                       |
 |----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`, `MOKOSH_GOOGLE_CLIENT_SECRET` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
 | `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |

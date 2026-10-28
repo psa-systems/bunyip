@@ -405,6 +405,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             // governed API token, and the read-only connection check.
             .route("/mirzam", web::get().to(handlers::get_mirzam_config))
             .route("/mirzam", web::put().to(handlers::update_mirzam_config))
+            // BUNYIP-983: the Mokosh host settings (the Google OAuth client
+            // the host-secrets route serves).
+            .route("/mokosh", web::get().to(handlers::get_mokosh_config))
+            .route("/mokosh", web::put().to(handlers::update_mokosh_config))
             .route(
                 "/mirzam/check",
                 web::post().to(handlers::check_mirzam_connection),
