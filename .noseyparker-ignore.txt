@@ -12,7 +12,9 @@
 /bunyip-api/tests/lifetime_totp_gate.rs
 /bunyip-api/tests/login_approval.rs
 /bunyip-api/tests/mailer_relay.rs
+/bunyip-api/tests/mirzam_backfill.rs
 /bunyip-api/tests/mirzam_config.rs
+/bunyip-api/tests/mirzam_sync.rs
 /bunyip-api/tests/pms709_repro.rs
 /bunyip-api/tests/rls_isolation.rs
 /bunyip-api/tests/super_admin_gate.rs

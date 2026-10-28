@@ -154,14 +154,14 @@ mod tests {
     fn the_served_pair_names_both_halves_the_way_the_reader_expects() {
         let value = serde_json::to_value(GoogleOauthClient {
             client_id: "123456789012-abc.apps.googleusercontent.com".to_string(),
-            client_secret: "GOCSPX-fixture".to_string(),
+            client_secret: "fixture-client-secret".to_string(),
         })
         .expect("serialise");
         assert_eq!(
             value["client_id"],
             "123456789012-abc.apps.googleusercontent.com"
         );
-        assert_eq!(value["client_secret"], "GOCSPX-fixture");
+        assert_eq!(value["client_secret"], "fixture-client-secret");
         assert_eq!(
             value.as_object().map(|o| o.len()),
             Some(2),

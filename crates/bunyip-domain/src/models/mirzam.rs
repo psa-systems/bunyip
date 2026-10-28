@@ -26,9 +26,22 @@ pub struct MirzamConfigRow {
     pub key_version: i16,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
+    /// The last failed sync call (BUNYIP-998): operation, list, user id and
+    /// Mirzam's answer, never the token or the address. Cleared by the next
+    /// call that succeeds.
+    pub last_error: Option<String>,
+    pub last_error_at: Option<DateTime<Utc>>,
 }
 
 impl MirzamConfigRow {
+    /// Switched on with the address and both slugs set. The token is the other
+    /// half of "fully configured" and is read from its provider by the caller.
+    pub fn settings_complete(&self) -> bool {
+        !self.base_url.trim().is_empty()
+            && !self.updates_list.trim().is_empty()
+            && !self.notices_list.trim().is_empty()
+    }
+
     /// Decrypt the API token held by the `database` provider, mirroring
     /// `EmailConfig::db_imap_password`. A ciphertext no key decrypts is
     /// reported at `error` and treated as no token, so a stale row never blocks
@@ -86,6 +99,10 @@ pub struct MirzamConfigResponse {
     pub secrets_storage: String,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
+    /// The last failed sync call and when it failed (BUNYIP-998); both `None`
+    /// once a later call succeeded.
+    pub last_error: Option<String>,
+    pub last_error_at: Option<DateTime<Utc>>,
 }
 
 impl MirzamConfigResponse {
@@ -104,6 +121,8 @@ impl MirzamConfigResponse {
             secrets_storage: provider.as_str().to_string(),
             updated_at: row.updated_at,
             updated_by: row.updated_by,
+            last_error: row.last_error.clone(),
+            last_error_at: row.last_error_at,
         }
     }
 }

@@ -224,8 +224,8 @@ mod tests {
     #[test]
     fn a_client_secret_is_checked_for_length_and_nothing_else() {
         assert_eq!(
-            validate_google_client_secret(" GOCSPX-fixture ").expect("any non-empty value"),
-            "GOCSPX-fixture"
+            validate_google_client_secret(" fixture-client-secret ").expect("any non-empty value"),
+            "fixture-client-secret"
         );
         assert_eq!(
             validate_google_client_secret("   ").unwrap_err().field,

@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 const JWT_SECRET: &str = "bunyip-983-test-secret-at-least-32-bytes-long";
 const CLIENT_ID: &str = "123456789012-abc123def456.apps.googleusercontent.com";
-const CLIENT_SECRET: &str = "GOCSPX-bunyip983-test-value";
+const CLIENT_SECRET: &str = "fixture-client-secret-value";
 const KEY: &str = "mokosh/google_oauth_client";
 
 fn test_config() -> Config {

@@ -1558,6 +1558,12 @@ pub struct MirzamConfigResponse {
     pub secrets_storage: String,
     #[serde(default)]
     pub updated_at: Option<String>,
+    /// BUNYIP-998: the last failed sync call and when it failed; both absent
+    /// once a later call succeeded.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    #[serde(default)]
+    pub last_error_at: Option<String>,
 }
 
 /// BUNYIP-983: the Mokosh host settings (the Google OAuth client the

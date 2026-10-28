@@ -247,6 +247,10 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "key_version",
             "api_token",
             "api_token_nonce",
+            // BUNYIP-998: the last failed sync call is runtime state, not a
+            // setting.
+            "last_error",
+            "last_error_at",
         ],
     },
     ArchivedTable {

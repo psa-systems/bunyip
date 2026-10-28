@@ -196,16 +196,16 @@ mod tests {
 
     #[test]
     fn the_content_hash_is_sha256_hex_and_not_the_value() {
-        let hash = content_hash("GOCSPX-fixture");
+        let hash = content_hash("fixture-client-secret");
         assert_eq!(hash.len(), 64, "sha256 as hex");
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(hash, "GOCSPX-fixture");
+        assert_ne!(hash, "fixture-client-secret");
         assert_eq!(
             hash,
-            content_hash("GOCSPX-fixture"),
+            content_hash("fixture-client-secret"),
             "the same value hashes the same, so a re-save reads as one"
         );
-        assert_ne!(hash, content_hash("GOCSPX-fixture2"));
+        assert_ne!(hash, content_hash("fixture-client-secret-2"));
     }
 
     /// The warning names the consequence for a tenant, not the mechanism. An

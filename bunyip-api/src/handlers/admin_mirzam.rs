@@ -5,8 +5,9 @@
 //! token is the governed secret `MIRZAM_API_TOKEN`, read from and written to
 //! the ONE provider `SECRETS_STORAGE` declares and never sent back.
 //!
-//! This is the settings half only. Keeping account holders on the lists and
-//! the backfill read these settings in later tasks.
+//! Keeping account holders on the lists reads these settings in
+//! `bunyip_domain::services::mirzam_sync` (BUNYIP-998), which records its last
+//! failure on the same row; the GET below returns it.
 
 use actix_web::{web, HttpRequest, HttpResponse};
 use sqlx::PgPool;

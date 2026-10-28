@@ -126,7 +126,7 @@ Always, with no flag:
 | `auto_ban_config` | The singleton `auto_ban_config` row. |
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
-| `mirzam_config` | The singleton `mirzam_config` row: the switch, the Mirzam address and the two list slugs, minus the encrypted API token columns (same). |
+| `mirzam_config` | The singleton `mirzam_config` row: the switch, the Mirzam address and the two list slugs, minus the encrypted API token columns (same) and the last sync failure (`last_error`, `last_error_at`), which is runtime state. |
 | `mokosh_config` | The Mokosh Google OAuth client id (public: it travels in every sign-in redirect). Its secret half travels under `governed_secrets` as `MOKOSH_GOOGLE_CLIENT_SECRET`, so the pair survives a rebuilt volume together (BUNYIP-983). |
 | `rate_limit_configs` | Every per-action cap override. |
 | `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |

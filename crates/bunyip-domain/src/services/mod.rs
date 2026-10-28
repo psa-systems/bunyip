@@ -20,6 +20,8 @@ pub mod jwt;
 pub mod mailer_relay;
 pub mod mailer_webhook;
 pub mod mirzam;
+pub mod mirzam_backfill;
+pub mod mirzam_sync;
 pub mod password_breach;
 pub mod provider_status;
 pub mod stripe;
