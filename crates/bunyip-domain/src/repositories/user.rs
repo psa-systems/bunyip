@@ -49,6 +49,22 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// Every live account with a verified address, oldest first: the accounts
+    /// the Mirzam backfill (BUNYIP-999) puts on the two lists.
+    pub async fn list_verified(pool: &PgPool) -> Result<Vec<User>, AppError> {
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users
+            WHERE email_verified AND deleted_at IS NULL
+            ORDER BY created_at, id
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(users)
+    }
+
     /// Find user by email
     pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query_as::<_, User>(

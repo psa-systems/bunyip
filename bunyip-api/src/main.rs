@@ -1735,6 +1735,36 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        "mirzam-backfill" => {
+            // BUNYIP-999: put the accounts that predate the Mirzam integration
+            // on its two lists. Safe to re-run: an address already on a list,
+            // or one that left product updates, is left as it is. The counts
+            // print first, then any failure fails the run.
+            let report = bunyip_api::mirzam_sync::backfill(
+                pool,
+                config,
+                &key_set,
+                &bunyip_domain::services::mirzam_sync::MIRZAM_RETRY_DELAYS,
+                bunyip_domain::services::mirzam_backfill::MIRZAM_BACKFILL_PACE,
+            )
+            .await?;
+            info!(
+                added = report.added,
+                already_on = report.already_on,
+                left_alone = report.left_alone,
+                failed = report.failed,
+                "mirzam-backfill finished"
+            );
+            print!("{report}");
+            if report.failed > 0 {
+                anyhow::bail!(
+                    "mirzam-backfill: {} account(s) failed; fix the cause and re-run, which leaves \
+                     the accounts already done as they are",
+                    report.failed
+                );
+            }
+            Ok(())
+        }
         other => run_reencrypt_subcommand(other, pool, config).await,
     }
 }
@@ -1807,7 +1837,7 @@ async fn run_reencrypt_subcommand(
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
-             reconcile-duplicate-prices, settings-export, settings-import)"
+             reconcile-duplicate-prices, settings-export, settings-import, mirzam-backfill)"
         ),
     }
 }
