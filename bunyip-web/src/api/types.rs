@@ -1560,6 +1560,25 @@ pub struct MirzamConfigResponse {
     pub updated_at: Option<String>,
 }
 
+/// BUNYIP-983: the Mokosh host settings (the Google OAuth client the
+/// host-secrets route serves).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct MokoshConfigResponse {
+    #[serde(default)]
+    pub google_client_id: String,
+    #[serde(default)]
+    pub has_google_client_secret: bool,
+    /// Defaults to `true` so a response from an api that predates the field
+    /// keeps the form usable; the server answers 409 when the provider is
+    /// read-only either way.
+    #[serde(default = "default_true")]
+    pub google_client_secret_editable: bool,
+    #[serde(default)]
+    pub secrets_storage: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
 /// BUNYIP-997: one list's outcome in the Mirzam connection check.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct MirzamListCheck {

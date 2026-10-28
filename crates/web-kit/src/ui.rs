@@ -407,6 +407,22 @@ pub fn success_box(msg: &str) -> Markup {
     }
 }
 
+/// Warning banner: something will happen that the reader may not want, and
+/// they are about to decide. The amber counterpart to [`error_box`], which says
+/// something already went wrong.
+///
+/// The amber pair is the one BUNYIP-548 measured for the `warning` badge
+/// (`text-amber-800` light, `text-amber-300` dark, over a 15% amber wash), so
+/// this adds a surface rather than a colour.
+pub fn warning_box(msg: &str) -> Markup {
+    html! {
+        div class="rounded-lg border border-transparent bg-amber-500/15 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2" {
+            (icon("alert-triangle", "h-4 w-4"))
+            (clamp_msg(msg))
+        }
+    }
+}
+
 /// BUNYIP-468: the one shared list empty-state - centered column, large muted
 /// icon, muted message, optional CTA below. Every `is_empty()` list branch routes here.
 pub fn empty_state(icon_name: &str, message: &str, cta: Option<Markup>) -> Markup {

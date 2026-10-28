@@ -3476,3 +3476,153 @@ mod mirzam_tests {
         assert!(html.contains("destructive"), "{html}");
     }
 }
+
+/// BUNYIP-983: the Mokosh host settings page.
+#[cfg(test)]
+mod mokosh_tests {
+    use super::*;
+    use crate::api::ApiError;
+
+    const CLIENT_ID: &str = "123456789012-abc123def456.apps.googleusercontent.com";
+
+    fn cfg(editable: bool, has_secret: bool) -> MokoshConfigResponse {
+        serde_json::from_value(json!({
+            "google_client_id": CLIENT_ID,
+            "has_google_client_secret": has_secret,
+            "google_client_secret_editable": editable,
+            "secrets_storage": if editable { "database" } else { "environment" },
+        }))
+        .unwrap()
+    }
+
+    fn render(c: &MokoshConfigResponse, confirm: Option<&str>) -> String {
+        let values = MokoshValues::from_config(c);
+        mokosh_content(Ok(c), &values, None, confirm).into_string()
+    }
+
+    /// The id is shown because it is public; the secret is write-only, a fixed
+    /// mask when set and "Not set" when not.
+    #[test]
+    fn the_id_is_shown_and_the_secret_is_a_fixed_mask() {
+        let html = render(&cfg(true, true), None);
+        assert!(html.contains(CLIENT_ID), "the id is public: {html}");
+        assert!(html.contains(r#"placeholder="••••••••""#), "{html}");
+        assert!(
+            html.contains(r#"data-pw-toggle="google_client_secret""#),
+            "{html}"
+        );
+        let html = render(&cfg(true, false), None);
+        assert!(html.contains(r#"placeholder="Not set""#), "{html}");
+    }
+
+    /// In `SECRETS_STORAGE=environment` the secret field is read-only, has no
+    /// reveal toggle, and names the file to edit.
+    #[test]
+    fn the_secret_is_read_only_in_environment_mode() {
+        let html = render(&cfg(false, true), None);
+        assert!(
+            html.contains("readonly") && html.contains("disabled"),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"data-pw-toggle="google_client_secret""#),
+            "{html}"
+        );
+        assert!(html.contains("MOKOSH_GOOGLE_CLIENT_SECRET_FILE"), "{html}");
+        assert!(
+            html.contains("./secrets/mokosh_google_client_secret"),
+            "{html}"
+        );
+    }
+
+    /// BUNYIP-855 D10: the first save of a changed id comes back as a warning,
+    /// and the page then offers the same change with the confirmation set. The
+    /// hidden field appears only on that second pass, so an admin cannot
+    /// confirm a change they have not been warned about.
+    #[test]
+    fn a_changed_id_is_confirmed_on_the_page_and_not_before() {
+        let plain = render(&cfg(true, true), None);
+        assert!(
+            !plain.contains(r#"name="confirm_client_id_change""#),
+            "nothing to confirm yet: {plain}"
+        );
+        assert!(
+            plain.contains(">Save<") || plain.contains("Save"),
+            "{plain}"
+        );
+
+        let warned = render(
+            &cfg(true, true),
+            Some("Changing the client id stops Google contact sync for every Mokosh tenant."),
+        );
+        assert!(
+            warned.contains(r#"input type="hidden" name="confirm_client_id_change" value="true""#),
+            "{warned}"
+        );
+        assert!(warned.contains("Save anyway"), "{warned}");
+        assert!(
+            warned.contains("amber"),
+            "the warning is amber, not red: it has not failed yet: {warned}"
+        );
+    }
+
+    /// The warning is told apart from an ordinary 409 (the read-only provider
+    /// sends one too) by the instruction the API puts in it, and the sentence
+    /// the page shows drops that machine instruction.
+    #[test]
+    fn only_the_changed_id_conflict_offers_a_confirmation() {
+        let warning = ApiError {
+            status: 409,
+            code: "CONFLICT".into(),
+            message: "Changing the client id stops Google contact sync for every Mokosh tenant \
+                      until each one reconnects their Google account: their existing permission \
+                      was granted to the old client. Send the same change again with \
+                      confirm_client_id_change to go ahead."
+                .into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        assert!(is_client_id_warning(&warning));
+        let shown = warning_text(&warning);
+        assert!(shown.starts_with("Changing the client id stops"), "{shown}");
+        assert!(
+            !shown.contains("confirm_client_id_change"),
+            "the button is the instruction now: {shown}"
+        );
+
+        let read_only = ApiError {
+            status: 409,
+            code: "CONFLICT".into(),
+            message: "SECRETS_STORAGE=environment, so MOKOSH_GOOGLE_CLIENT_SECRET is owned by \
+                      the environment and cannot be changed here."
+                .into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        assert!(
+            !is_client_id_warning(&read_only),
+            "a read-only provider is an error with nothing to confirm"
+        );
+    }
+
+    /// The id is always sent (the API replaces it whole, and a blank one is a
+    /// deliberate clear); the secret only when typed.
+    #[test]
+    fn the_update_body_sends_the_id_and_the_secret_only_when_typed() {
+        let form = |secret: &str, confirm: &str| MokoshForm {
+            google_client_id: format!("  {CLIENT_ID}  "),
+            google_client_secret: secret.into(),
+            confirm_client_id_change: confirm.into(),
+        };
+        let body = mokosh_update_body(&form("", ""));
+        assert_eq!(body["google_client_id"], CLIENT_ID, "trimmed: {body}");
+        assert_eq!(body["confirm_client_id_change"], false);
+        assert!(body.get("google_client_secret").is_none(), "{body}");
+
+        let body = mokosh_update_body(&form("  GOCSPX-typed  ", "true"));
+        assert_eq!(body["google_client_secret"], "GOCSPX-typed");
+        assert_eq!(body["confirm_client_id_change"], true);
+    }
+}

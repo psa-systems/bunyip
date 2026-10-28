@@ -701,6 +701,14 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
             external: false,
             badge: None,
         },
+        // BUNYIP-983: the Mokosh host settings bunyip serves to the suite.
+        NavItem {
+            title: "Mokosh",
+            href: "/admin/mokosh",
+            icon: "key-round",
+            external: false,
+            badge: None,
+        },
         NavItem {
             title: "Mailer Suppressions",
             href: "/admin/mailer-suppressions",
