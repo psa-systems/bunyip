@@ -5,8 +5,9 @@
 //! product-updates and notices lists through Mirzam's REST API
 //! (`docs/account-sync.md` in the Mirzam repository is the design):
 //!
-//! - **email verified**: the address is added to both lists, with
-//!   `keep_unsubscribed` so a sync never undoes someone leaving;
+//! - **email verified**: the address is added to both lists;
+//! - **account reactivated** (an admin clears a deactivation or a delete): the
+//!   same adds as on verification, when the address is verified;
 //! - **email changed**: the subscriber's address is changed in place
 //!   (`PATCH`), falling back to add-new-and-unsubscribe-old when Mirzam already
 //!   has the new address, or to add-new when it never had the old one;
@@ -14,6 +15,18 @@
 //!   nothing is erased.
 //!
 //! An account that never verified its address never reaches Mirzam.
+//!
+//! The two lists differ on re-adding someone who is unsubscribed. The
+//! product-updates add sends `keep_unsubscribed: true`, so a sync never undoes
+//! a reader's own opt-out (an admin removal cannot be told apart from one, and
+//! for opt-out mail bunyip errs on the side of not mailing). The notices add
+//! leaves the flag out, so Mirzam takes it as new consent and re-confirms the
+//! address: nobody leaves the notices list by their own choice (Mirzam's
+//! preference centre never offers it and its unsubscribe links refuse it), so
+//! an unsubscribed notices membership can only be bunyip's own removal, as on
+//! a deactivation. Deactivating removes the account from both lists;
+//! reactivating rejoins notices, and rejoins product updates only if the
+//! person had not left it themselves.
 //!
 //! Every call runs OFF the request path: [`MirzamSync::notify`] spawns a task
 //! and returns at once, so a Mirzam outage can never fail or slow a sign-up,
@@ -131,6 +144,9 @@ struct AddBody<'a> {
     list: &'a str,
     consent: &'static str,
     consent_note: &'static str,
+    /// Sent only when true: without it, Mirzam re-subscribes an address that
+    /// had unsubscribed from the list.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     keep_unsubscribed: bool,
 }
 
@@ -220,12 +236,14 @@ impl MirzamClient {
     }
 
     /// Add `email` to the list `list_slug`, confirmed at once on the account
-    /// holder consent record, leaving an address that left the list as it is.
+    /// holder consent record. With `keep_unsubscribed`, an address that left
+    /// the list is left as it is; without it, Mirzam re-subscribes it.
     pub async fn add(
         &self,
         email: &str,
         name: Option<&str>,
         list_slug: &str,
+        keep_unsubscribed: bool,
     ) -> Result<AddOutcome, MirzamCallError> {
         let body = AddBody {
             email,
@@ -233,7 +251,7 @@ impl MirzamClient {
             list: list_slug,
             consent: "recorded",
             consent_note: MIRZAM_CONSENT_NOTE,
-            keep_unsubscribed: true,
+            keep_unsubscribed,
         };
         let request = self
             .http
@@ -344,7 +362,10 @@ impl MirzamLists {
     }
 }
 
-/// The "email verified" calls: add `email` to both lists. Returns one
+/// The "email verified" calls, also made on a reactivation and by the email
+/// change fallbacks: add `email` to the product-updates list keeping an
+/// unsubscribe (the reader may have left it themselves) and to the notices
+/// list re-subscribing (only bunyip ever removes anyone from it). Returns one
 /// admin-facing sentence per call that failed for good.
 pub async fn add_account(
     client: &MirzamClient,
@@ -355,8 +376,10 @@ pub async fn add_account(
     name: Option<&str>,
 ) -> Vec<String> {
     let mut errors = Vec::new();
-    for list in lists.both() {
-        if let Err(e) = with_retries(delays, || client.add(email, name, list)).await {
+    for (list, keep_unsubscribed) in [(&lists.updates, true), (&lists.notices, false)] {
+        if let Err(e) =
+            with_retries(delays, || client.add(email, name, list, keep_unsubscribed)).await
+        {
             errors.push(format!("Adding user {user_id} to list {list} failed: {e}"));
         }
     }
@@ -414,7 +437,8 @@ pub async fn move_account(
 /// An account event that may change what Mirzam should hold.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccountChange {
-    /// The account's address became verified. The address and name are read
+    /// The account's verified address belongs on both lists: it became
+    /// verified, or the account was reactivated. The address and name are read
     /// when the task runs, and nothing happens unless the account is still
     /// live and verified then.
     Verified { user_id: Uuid },
@@ -750,8 +774,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn add_sends_the_account_holder_consent_and_keeps_unsubscribed() {
+    async fn add_sends_the_account_holder_consent_and_keep_unsubscribed_only_when_asked() {
         let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/subscribers"))
+            .and(body_json(serde_json::json!({
+                "email": "ada@example.test",
+                "name": "Ada Lovelace",
+                "list": "product-updates",
+                "consent": "recorded",
+                "consent_note": "Account holder",
+                "keep_unsubscribed": true,
+            })))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
         Mock::given(method("POST"))
             .and(path("/api/v1/subscribers"))
             .and(body_json(serde_json::json!({
@@ -760,15 +797,51 @@ mod tests {
                 "list": "notices",
                 "consent": "recorded",
                 "consent_note": "Account holder",
-                "keep_unsubscribed": true,
             })))
             .respond_with(ResponseTemplate::new(201))
             .mount(&server)
             .await;
-        let outcome = client(&server)
-            .add("ada@example.test", Some("Ada Lovelace"), "notices")
+        let c = client(&server);
+        let outcome = c
+            .add(
+                "ada@example.test",
+                Some("Ada Lovelace"),
+                "product-updates",
+                true,
+            )
             .await;
         assert_eq!(outcome, Ok(AddOutcome::Added));
+        let outcome = c
+            .add("ada@example.test", Some("Ada Lovelace"), "notices", false)
+            .await;
+        assert_eq!(outcome, Ok(AddOutcome::Added));
+    }
+
+    /// Product updates keep a reader's own unsubscribe; the notices list,
+    /// which only bunyip ever removes anyone from, is re-subscribed.
+    #[tokio::test]
+    async fn add_account_keeps_unsubscribed_on_updates_only() {
+        let server = MockServer::start().await;
+        respond(&server, "POST", "/api/v1/subscribers", 201).await;
+        let errors = add_account(
+            &client(&server),
+            &lists(),
+            &FAST,
+            Uuid::nil(),
+            "ada@example.test",
+            None,
+        )
+        .await;
+        assert!(errors.is_empty(), "{errors:?}");
+        let sent: Vec<serde_json::Value> = requests(&server)
+            .await
+            .iter()
+            .map(|r| r.body_json().unwrap())
+            .collect();
+        assert_eq!(sent[0]["list"], "product-updates");
+        assert_eq!(sent[0]["keep_unsubscribed"], true, "{}", sent[0]);
+        assert_eq!(sent[1]["list"], "notices");
+        assert!(sent[1].get("keep_unsubscribed").is_none(), "{}", sent[1]);
     }
 
     #[tokio::test]
@@ -776,7 +849,7 @@ mod tests {
         let server = MockServer::start().await;
         respond(&server, "POST", "/api/v1/subscribers", 409).await;
         let outcome = client(&server)
-            .add("ada@example.test", None, "notices")
+            .add("ada@example.test", None, "notices", true)
             .await;
         assert_eq!(outcome, Ok(AddOutcome::AlreadyHandled));
         let sent: serde_json::Value = requests(&server).await[0].body_json().unwrap();
@@ -889,6 +962,10 @@ mod tests {
         let added: serde_json::Value = requests(&server).await[1].body_json().unwrap();
         assert_eq!(added["email"], "new@example.test");
         assert_eq!(added["name"], "Ada");
+        assert_eq!(added["keep_unsubscribed"], true, "{added}");
+        let notices: serde_json::Value = requests(&server).await[2].body_json().unwrap();
+        assert_eq!(notices["list"], "notices");
+        assert!(notices.get("keep_unsubscribed").is_none(), "{notices}");
     }
 
     #[tokio::test]
@@ -959,7 +1036,7 @@ mod tests {
         respond(&server, "POST", "/api/v1/subscribers", 401).await;
         let outcome = with_retries(&FAST, || {
             let c = client(&server);
-            async move { c.add("ada@example.test", None, "notices").await }
+            async move { c.add("ada@example.test", None, "notices", true).await }
         })
         .await;
         assert_eq!(outcome.unwrap_err().status, Some(401));

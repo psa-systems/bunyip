@@ -16,7 +16,7 @@ use bunyip_api::config::{Config, GovernedSecret, SecretsProvider, TierConfig};
 use bunyip_api::models::{CreateUser, User, UserRole};
 use bunyip_api::repositories::{MirzamConfigRepository, UserRepository};
 use bunyip_api::services::mirzam_sync::MirzamSync;
-use bunyip_api::services::{AuthService, EmailService, JwtConfig, JwtService};
+use bunyip_api::services::{AuthService, EmailService, EventBus, JwtConfig, JwtService};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -122,7 +122,8 @@ fn encoded(email: &str) -> String {
     urlencoding::encode(email).into_owned()
 }
 
-/// Assert the stub received exactly the two "email verified" adds for `email`.
+/// Assert the stub received exactly the two "email verified" adds for `email`:
+/// product updates keeping an unsubscribe, notices re-subscribing.
 fn assert_added_to_both(requests: &[Request], email: &str) {
     assert_eq!(requests.len(), 2, "{requests:#?}");
     let mut lists = Vec::new();
@@ -138,7 +139,10 @@ fn assert_added_to_both(requests: &[Request], email: &str) {
         assert_eq!(sent["name"], "Ada Lovelace", "{sent}");
         assert_eq!(sent["consent"], "recorded", "{sent}");
         assert_eq!(sent["consent_note"], "Account holder", "{sent}");
-        assert_eq!(sent["keep_unsubscribed"], true, "{sent}");
+        match sent["list"].as_str().unwrap() {
+            "product-updates" => assert_eq!(sent["keep_unsubscribed"], true, "{sent}"),
+            _ => assert!(sent.get("keep_unsubscribed").is_none(), "{sent}"),
+        }
         lists.push(sent["list"].as_str().unwrap().to_string());
     }
     assert_eq!(lists, ["product-updates", "notices"]);
@@ -226,6 +230,7 @@ async fn account_events_keep_mirzam_in_step() {
             .app_data(web::Data::new(key_set.clone()))
             .app_data(web::Data::new(config.clone()))
             .app_data(web::Data::new(sync.clone()))
+            .app_data(web::Data::new(Arc::new(EventBus::new())))
             .app_data(web::Data::new(
                 None::<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>,
             ))
@@ -394,6 +399,28 @@ async fn account_events_keep_mirzam_in_step() {
     let row = MirzamConfigRepository::get(&pool).await.unwrap();
     assert_eq!(row.last_error, None);
     assert_eq!(row.last_error_at, None);
+
+    // 8. Deactivating a verified account removes it from both lists, and
+    //    reactivating it rejoins both: notices re-subscribed, product updates
+    //    keeping any opt-out of the person's own.
+    mirzam_accepts_everything(&mirzam).await;
+    let status = |active: bool| {
+        test::TestRequest::put()
+            .uri(&format!("/v1/admin/users/{}/status", failing.id))
+            .insert_header(("authorization", admin_auth.clone()))
+            .set_json(serde_json::json!({"active": active}))
+            .to_request()
+    };
+    let resp = test::call_service(&app, status(false)).await;
+    assert_eq!(resp.status(), 200);
+    settle(&sync).await;
+    assert_removed_from_both(&received(&mirzam).await, &corrected);
+
+    mirzam_accepts_everything(&mirzam).await;
+    let resp = test::call_service(&app, status(true)).await;
+    assert_eq!(resp.status(), 200);
+    settle(&sync).await;
+    assert_added_to_both(&received(&mirzam).await, &corrected);
 
     // Leave the singleton off for the other suites.
     enable(false).await;

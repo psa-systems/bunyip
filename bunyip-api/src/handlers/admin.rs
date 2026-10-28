@@ -214,6 +214,13 @@ pub async fn update_user_status(
             return Err(AppError::not_found("Deleted user"));
         }
 
+        // BUNYIP-998: deactivating removed the account from both Mirzam lists.
+        // A reactivated account with a verified address rejoins them as on
+        // verification: notices always (only bunyip ever removes anyone from
+        // it), product updates only if the person had not left it themselves.
+        // The sync reads the account and skips it when it is unverified.
+        crate::mirzam_sync::notify(&mirzam, AccountChange::Verified { user_id });
+
         // BUNYIP-144: revoke any lingering refresh-token families. A soft-
         // deleted user shouldn't have live tokens (auth middleware drops them
         // on `deleted_at IS NOT NULL`) but belt-and-braces so a stale token
@@ -238,8 +245,8 @@ pub async fn update_user_status(
         UserRepository::soft_delete(&pool, user_id).await?;
 
         // BUNYIP-998: a deactivated account is a deleted one (the same soft
-        // delete), so it leaves Mirzam's lists. Reactivating does not rejoin
-        // them: the sync's adds keep an unsubscribed address as it is.
+        // delete), so it leaves both Mirzam lists. Reactivating rejoins them
+        // (see the branch above).
         crate::mirzam_sync::notify(
             &mirzam,
             AccountChange::Deleted {
