@@ -243,7 +243,7 @@ fn the_database_only_stripe_readers_have_no_request_or_boot_callers() {
 /// `secrets-migrate --to environment`.
 #[test]
 fn every_governed_secret_is_fully_described() {
-    assert_eq!(GovernedSecret::ALL.len(), 5);
+    assert_eq!(GovernedSecret::ALL.len(), 6);
     for secret in GovernedSecret::ALL {
         assert!(!secret.name().is_empty());
         assert!(
@@ -261,7 +261,8 @@ fn every_governed_secret_is_fully_described() {
             "STRIPE_SECRET_KEY",
             "STRIPE_WEBHOOK_SECRET",
             "SUPPORT_IMAP_PASSWORD",
-            "MIRZAM_API_TOKEN"
+            "MIRZAM_API_TOKEN",
+            "MOKOSH_GOOGLE_CLIENT_SECRET"
         ]
     );
 }
