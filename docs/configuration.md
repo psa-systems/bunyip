@@ -120,6 +120,7 @@ The governed set is exactly the secrets with more than one possible provider:
 | `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`     | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY`     |
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
+| `MIRZAM_API_TOKEN`      | `mirzam_config.api_token`      | `MIRZAM_API_TOKEN_FILE`      | `<path>/MIRZAM_API_TOKEN`      |
 
 The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
@@ -406,7 +407,7 @@ Every variable below has a working default; set it only to tune the deployment.
   `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_MAILBOX`, `SUPPORT_IMAP_ENABLED`,
   `SUPPORT_IMAP_POLL_SECS`.
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only as `{NAME}_FILE`): `SMTP_PASSWORD`,
-  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`.
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
@@ -485,7 +486,7 @@ this repository.
 
 | Variable                                                                               | Consequence of the gap                                                                       |
 |----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
 | `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |
@@ -624,6 +625,26 @@ SMTP tuning (BUNYIP-507), so it stays environment-only alongside the base URL an
 
 The **Source** the page shows is the highest-priority provider holding any of this section's keys, so it can now read
 `file` as well as `database` or `environment`. Run `bunyip-api config-status` for the per-key answer.
+
+### Mirzam (`mirzam_config`, admin page: Mirzam)
+
+Singleton row (BUNYIP-997): `enabled`, `base_url` (the Mirzam site, e.g. `https://news.psa.systems`, stored without a
+trailing `/`), `updates_list` and `notices_list` (the slugs of the product-updates `newsletter` list and the required
+account `notices` list). A save replaces all four; a blank address or slug is allowed only while the integration is
+switched off, and switching it on also needs the API token. Slugs follow Mirzam's own rule: lowercase letters and digits,
+words joined by single dashes, at most 64 characters. These columns have no file or environment provider.
+
+The API token is the governed secret `MIRZAM_API_TOKEN` (a Mirzam read-and-write token, made on Mirzam's API page), so it
+follows `SECRETS_STORAGE` like the SMTP password: written to the declared provider, never sent back to the browser, and
+read-only on the page in `environment` mode, where a typed token answers 409. Saves are audited
+(`admin_mirzam_config_updated`, recording whether the token changed and to which provider, never the token).
+
+**Check connection** (`POST /v1/admin/mirzam/check`) reads `GET {base_url}/api/v1/lists/{slug}` for both saved slugs
+with the saved token as a bearer token (10 second timeout, redirects reported rather than followed) and reports each
+list's name and kind, or what is wrong: an unreachable address, a refused token (`401` / `403`), an unknown slug
+(`404`), or a list of the wrong kind (the product-updates list must be `newsletter`, the notices list `notices`). The
+System Status page lists the integration as Unconfigured while it is switched off and as Failing when it is on with the
+address, a slug or the token missing.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 

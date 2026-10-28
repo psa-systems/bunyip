@@ -693,6 +693,14 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
             external: false,
             badge: None,
         },
+        // BUNYIP-997: the Mirzam newsletter integration.
+        NavItem {
+            title: "Mirzam",
+            href: "/admin/mirzam",
+            icon: "link-2",
+            external: false,
+            badge: None,
+        },
         NavItem {
             title: "Mailer Suppressions",
             href: "/admin/mailer-suppressions",

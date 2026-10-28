@@ -1534,6 +1534,60 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
+/// BUNYIP-997: the Mirzam integration settings. The API token is write-only:
+/// `has_api_token` is the only fact about it the page receives, and it renders
+/// a fixed-length mask from that.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MirzamConfigResponse {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub updates_list: String,
+    #[serde(default)]
+    pub notices_list: String,
+    #[serde(default)]
+    pub has_api_token: bool,
+    /// Defaults to `true` so a response from an api that predates the field
+    /// keeps the form usable; the server answers 409 when the provider is
+    /// read-only either way.
+    #[serde(default = "default_true")]
+    pub api_token_editable: bool,
+    #[serde(default)]
+    pub secrets_storage: String,
+    #[serde(default)]
+    pub updated_at: Option<String>,
+}
+
+/// BUNYIP-997: one list's outcome in the Mirzam connection check.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MirzamListCheck {
+    /// `updates_list` or `notices_list`.
+    #[serde(default)]
+    pub list: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// BUNYIP-997: the Mirzam connection check. Both fields default, so a body
+/// that decodes without them reads as a failed check, never a silent pass.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MirzamCheckResult {
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub lists: Vec<MirzamListCheck>,
+}
+
 /// BUNYIP-580/622: the application-level config values, for the admin System
 /// settings page. The system-level origins are environment-only (BUNYIP-622) and
 /// are no longer part of this payload.

@@ -126,10 +126,11 @@ Always, with no flag:
 | `auto_ban_config` | The singleton `auto_ban_config` row. |
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
+| `mirzam_config` | The singleton `mirzam_config` row: the switch, the Mirzam address and the two list slugs, minus the encrypted API token columns (same). |
 | `rate_limit_configs` | Every per-action cap override. |
 | `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |
 | `system_settings` | The four settings the file configuration layer at `BUNYIP_CONFIG_DIR` holds: login approval, the signup bot guard, and the two country lists. |
-| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPPORT_IMAP_PASSWORD`, resolved through whichever provider `SECRETS_STORAGE` declares. |
+| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` and `MIRZAM_API_TOKEN`, resolved through whichever provider `SECRETS_STORAGE` declares. |
 
 Behind `--include-catalog`:
 

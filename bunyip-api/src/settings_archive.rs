@@ -2,8 +2,8 @@
 //! database setting (BUNYIP-714).
 //!
 //! bunyip keeps its configuration in the database on purpose: branding, the
-//! palette and the brand assets, the tier and pricing flags, the email and
-//! Stripe rows, the rate-limit overrides, the application catalogue and the
+//! palette and the brand assets, the tier and pricing flags, the email,
+//! Stripe and Mirzam rows, the rate-limit overrides, the application catalogue and the
 //! OAuth client registrations are all edited from the admin pages rather than
 //! compiled in or set in compose. That is what makes a rebrand or a cap change
 //! reversible with no deploy, and it is also what makes a wiped volume lose
@@ -42,6 +42,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::branding::{validate_branding, UpdateBrandingRequest};
+use bunyip_domain::models::mirzam::validate_mirzam_settings;
 use bunyip_domain::repositories::FeatureToggleRepository;
 use bunyip_domain::services::argon2_offload;
 use bunyip_domain::services::encryption::{decrypt_with_key, EncryptionKeySet};
@@ -237,6 +238,18 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
         ],
     },
     ArchivedTable {
+        table: "mirzam_config",
+        archived: &["enabled", "base_url", "updates_list", "notices_list"],
+        excluded: &[
+            "id",
+            "updated_at",
+            "updated_by",
+            "key_version",
+            "api_token",
+            "api_token_nonce",
+        ],
+    },
+    ArchivedTable {
         table: "rate_limit_configs",
         archived: &["action", "max_requests", "window_seconds"],
         excluded: &["updated_at", "updated_by"],
@@ -394,6 +407,10 @@ pub struct Sections {
     pub auto_ban_config: AutoBanConfigSection,
     pub email_config: EmailConfigSection,
     pub stripe_config: StripeConfigSection,
+    /// BUNYIP-997. Defaulted so an archive written before the table existed
+    /// still reads.
+    #[serde(default)]
+    pub mirzam_config: MirzamConfigSection,
     pub rate_limit_configs: Vec<RateLimitConfigRow>,
     /// BUNYIP-840: every stored feature toggle, by key.
     pub feature_toggles: Vec<FeatureToggleRow>,
@@ -493,6 +510,17 @@ pub struct StripeConfigSection {
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
     pub trial_period_days: Option<i32>,
+}
+
+/// BUNYIP-997: the Mirzam integration's non-secret settings. The API token
+/// travels under `governed_secrets` as `MIRZAM_API_TOKEN`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+pub struct MirzamConfigSection {
+    pub enabled: bool,
+    pub base_url: String,
+    pub updates_list: String,
+    pub notices_list: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -740,6 +768,7 @@ pub async fn export(
         auto_ban_config: read_auto_ban_config(pool).await?,
         email_config: read_email_config(pool).await?,
         stripe_config: read_stripe_config(pool).await?,
+        mirzam_config: read_mirzam_config(pool).await?,
         rate_limit_configs: read_rate_limit_configs(pool).await?,
         feature_toggles: read_feature_toggles(pool).await?,
         system_settings: SystemSettings::current().into(),
@@ -817,6 +846,14 @@ async fn read_stripe_config(pool: &PgPool) -> Result<StripeConfigSection, AppErr
     Ok(sqlx::query_as::<_, StripeConfigSection>(
         "SELECT app_tag, success_url, cancel_url, trial_period_days \
          FROM stripe_config WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn read_mirzam_config(pool: &PgPool) -> Result<MirzamConfigSection, AppError> {
+    Ok(sqlx::query_as::<_, MirzamConfigSection>(
+        "SELECT enabled, base_url, updates_list, notices_list FROM mirzam_config WHERE id = 1",
     )
     .fetch_one(pool)
     .await?)
@@ -1448,6 +1485,15 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
         snapshot.sections.email_config.enabled.unwrap_or(false),
     )?;
 
+    let mirzam = &snapshot.sections.mirzam_config;
+    validate_mirzam_settings(
+        mirzam.enabled,
+        &mirzam.base_url,
+        &mirzam.updates_list,
+        &mirzam.notices_list,
+    )
+    .map_err(|e| AppError::validation(format!("mirzam_config.{}", e.field), e.message))?;
+
     if let Some(catalog) = &snapshot.sections.catalog {
         let groups: BTreeSet<&str> = catalog
             .application_groups
@@ -1518,6 +1564,11 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
             "stripe_config",
             &target.stripe_config,
             &archive.stripe_config,
+        ),
+        plan_singleton(
+            "mirzam_config",
+            &target.mirzam_config,
+            &archive.mirzam_config,
         ),
     ];
     singletons.push(plan_singleton(
@@ -1931,6 +1982,20 @@ async fn write_database_sections(
     .bind(&s.success_url)
     .bind(&s.cancel_url)
     .bind(s.trial_period_days)
+    .bind(updated_by)
+    .execute(&mut *tx)
+    .await?;
+
+    // --- mirzam_config -------------------------------------------------------
+    let m = &sections.mirzam_config;
+    sqlx::query(
+        "UPDATE mirzam_config SET enabled = $1, base_url = $2, updates_list = $3, \
+         notices_list = $4, updated_at = NOW(), updated_by = $5 WHERE id = 1",
+    )
+    .bind(m.enabled)
+    .bind(&m.base_url)
+    .bind(&m.updates_list)
+    .bind(&m.notices_list)
     .bind(updated_by)
     .execute(&mut *tx)
     .await?;
@@ -2544,6 +2609,12 @@ mod tests {
                 auto_ban_config: AutoBanConfigSection::default(),
                 email_config: EmailConfigSection::default(),
                 stripe_config: StripeConfigSection::default(),
+                mirzam_config: MirzamConfigSection {
+                    enabled: true,
+                    base_url: "https://news.example.com".to_string(),
+                    updates_list: "product-updates".to_string(),
+                    notices_list: "notices".to_string(),
+                },
                 rate_limit_configs: vec![RateLimitConfigRow {
                     action: "login".to_string(),
                     max_requests: 5,
