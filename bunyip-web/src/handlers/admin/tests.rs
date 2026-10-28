@@ -20,6 +20,7 @@ use super::feature_toggles::*;
 use super::feedback::*;
 use super::ip_bans::*;
 use super::memberships::*;
+use super::mirzam::*;
 use super::rate_limits::*;
 use super::stripe::*;
 use super::tier_settings::*;
@@ -3278,5 +3279,200 @@ mod toggle_switch_field_label_tests {
             APPLICATIONS_SRC.contains(r#"label for="is_hosted""#),
             "the hosted-app toggle's companion text must be a label for=\"is_hosted\", not a bare span"
         );
+    }
+}
+
+/// BUNYIP-997: the Mirzam integration page.
+#[cfg(test)]
+mod mirzam_tests {
+    use super::*;
+    use crate::api::ApiError;
+
+    fn cfg(editable: bool, has_token: bool) -> MirzamConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "base_url": "https://news.example.com",
+            "updates_list": "product-updates",
+            "notices_list": "notices",
+            "has_api_token": has_token,
+            "api_token_editable": editable,
+            "secrets_storage": if editable { "database" } else { "environment" },
+        }))
+        .unwrap()
+    }
+
+    fn form(token: &str) -> MirzamForm {
+        MirzamForm {
+            enabled: "true".into(),
+            base_url: " https://typed.example.com ".into(),
+            updates_list: " product-updates ".into(),
+            notices_list: "notices".into(),
+            api_token: token.into(),
+        }
+    }
+
+    fn render(c: &MirzamConfigResponse) -> String {
+        let values = MirzamValues::from_config(c);
+        mirzam_content(Ok(c), &values, None).into_string()
+    }
+
+    /// The token is write-only: a set token renders as a fixed-length mask and
+    /// an unset one as "Not set"; no value reaches the page either way.
+    #[test]
+    fn the_api_token_is_a_fixed_mask_never_the_secret() {
+        let html = render(&cfg(true, true));
+        assert!(html.contains(r#"placeholder="••••••••""#), "{html}");
+        assert!(html.contains(r#"data-pw-toggle="api_token""#), "{html}");
+        let html = render(&cfg(true, false));
+        assert!(html.contains(r#"placeholder="Not set""#), "{html}");
+    }
+
+    /// In `SECRETS_STORAGE=environment` the token field is read-only, has no
+    /// reveal toggle, and names the file to edit.
+    #[test]
+    fn the_api_token_is_read_only_in_environment_mode() {
+        let html = render(&cfg(false, true));
+        assert!(
+            html.contains("readonly") && html.contains("disabled"),
+            "{html}"
+        );
+        assert!(!html.contains(r#"data-pw-toggle="api_token""#), "{html}");
+        assert!(html.contains("MIRZAM_API_TOKEN_FILE"), "{html}");
+        assert!(html.contains("./secrets/mirzam_api_token"), "{html}");
+    }
+
+    #[test]
+    fn the_page_has_every_setting_and_a_separate_check_form() {
+        let html = render(&cfg(true, true));
+        for field in [
+            r#"name="enabled""#,
+            r#"name="base_url""#,
+            r#"name="updates_list""#,
+            r#"name="notices_list""#,
+            r#"name="api_token""#,
+        ] {
+            assert!(html.contains(field), "{field} missing: {html}");
+        }
+        assert!(html.contains(r#"value="https://news.example.com""#));
+        assert!(html.contains(r#"action="/admin/mirzam/check""#));
+        assert!(html.contains("Check connection"));
+        assert!(
+            html.matches("<form").count() >= 2,
+            "the check is its own form, separate from Save"
+        );
+        assert!(
+            html.contains("<h1") && html.contains(">Mirzam</h1>"),
+            "{html}"
+        );
+    }
+
+    /// The four settings are always sent (the API replaces them whole); the
+    /// token only when typed, since blank means "keep the stored one".
+    #[test]
+    fn the_update_body_sends_every_setting_and_the_token_only_when_typed() {
+        let body = mirzam_update_body(&form(""));
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["base_url"], "https://typed.example.com");
+        assert_eq!(body["updates_list"], "product-updates");
+        assert_eq!(body["notices_list"], "notices");
+        assert!(body.get("api_token").is_none(), "{body}");
+
+        let body = mirzam_update_body(&form(" mzm_abc "));
+        assert_eq!(body["api_token"], "mzm_abc");
+
+        let mut off = form("");
+        off.enabled = String::new();
+        off.base_url = String::new();
+        let body = mirzam_update_body(&off);
+        assert_eq!(body["enabled"], false);
+        assert_eq!(
+            body["base_url"], "",
+            "a blank address is a deliberate clear"
+        );
+    }
+
+    #[test]
+    fn a_rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
+        let values = MirzamValues::from_form(&form("mzm_secret_typed"));
+        let html = mirzam_content(Ok(&cfg(true, true)), &values, Some("Must be an address."))
+            .into_string();
+        assert!(
+            html.contains(r#"value="https://typed.example.com""#),
+            "{html}"
+        );
+        assert!(
+            !html.contains("mzm_secret_typed"),
+            "the typed token is never echoed"
+        );
+        let form_at = html.find("<form").expect("settings form");
+        let error_at = html.find("Must be an address.").expect("inline error");
+        assert!(form_at < error_at, "the error renders inside the form");
+    }
+
+    #[test]
+    fn an_unreachable_api_renders_the_error_state() {
+        let e = ApiError {
+            status: 0,
+            code: "NETWORK".into(),
+            message: "connection refused".into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        let html = mirzam_content(Err(&e), &MirzamValues::default(), None).into_string();
+        assert!(html.contains("Could not reach the API to load the Mirzam settings."));
+        assert!(!html.contains(r#"name="base_url""#));
+    }
+
+    /// One banner per list: green with the name and kind when right, red with
+    /// the reason when not.
+    #[test]
+    fn check_banners_name_each_list_and_its_outcome() {
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": true,
+                 "name": "Product Updates", "kind": "newsletter",
+                 "message": "Found Product Updates (newsletter)."},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": "Mirzam refused the API token (401)."}
+            ]
+        }))
+        .unwrap();
+        let html = check_banners(Ok(result)).into_string();
+        assert!(
+            html.contains(
+                "Product updates list (product-updates): Found Product Updates (newsletter)."
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains("Notices list (notices): Mirzam refused the API token (401)."),
+            "{html}"
+        );
+        assert_eq!(
+            html.matches("border-destructive").count(),
+            1,
+            "only the failing list is red: {html}"
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_result_or_an_api_error_is_never_silent() {
+        let empty: MirzamCheckResult = serde_json::from_value(json!({})).unwrap();
+        assert!(!empty.ok);
+        let html = check_banners(Ok(empty)).into_string();
+        assert!(html.contains("destructive"), "{html}");
+
+        let e = ApiError {
+            status: 400,
+            code: "VALIDATION_ERROR".into(),
+            message: "No API token is set. Save one before checking the connection.".into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        let html = check_banners(Err(e)).into_string();
+        assert!(html.contains("destructive"), "{html}");
     }
 }

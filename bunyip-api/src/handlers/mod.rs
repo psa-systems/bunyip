@@ -164,6 +164,7 @@ pub mod admin_feature_toggles;
 pub mod admin_ip_bans;
 pub mod admin_ip_enrichment;
 pub mod admin_mailer_suppressions;
+pub mod admin_mirzam;
 pub mod admin_oauth_tenants;
 pub mod admin_provider_status;
 pub mod admin_rate_limits;
@@ -260,6 +261,7 @@ pub use admin_feature_toggles::{list_feature_toggles, update_feature_toggle};
 pub use admin_ip_bans::{create_ip_ban, list_ip_bans, unban_ip};
 pub use admin_ip_enrichment::ip_enrichment;
 pub use admin_mailer_suppressions::{delete_mailer_suppression, list_mailer_suppressions};
+pub use admin_mirzam::{check_mirzam_connection, get_mirzam_config, update_mirzam_config};
 pub use admin_oauth_tenants::{assign_user_tenant, list_client_assignments, unassign_user_tenant};
 pub use admin_provider_status::get_provider_status;
 pub use admin_rate_limits::{

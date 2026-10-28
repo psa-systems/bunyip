@@ -249,6 +249,9 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/admin/email/test", post(admin::email_test))
         .route("/admin/email/test-send", post(admin::email_test_send))
+        // BUNYIP-997: the Mirzam integration settings and connection check.
+        .route("/admin/mirzam", get(admin::mirzam).post(admin::mirzam_save))
+        .route("/admin/mirzam/check", post(admin::mirzam_check))
         .route(
             "/admin/auto-ban-settings",
             get(admin::auto_ban_settings).post(admin::auto_ban_settings_save),

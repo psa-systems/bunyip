@@ -401,6 +401,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/email/test-send",
                 web::post().to(handlers::send_test_email_message),
             )
+            // BUNYIP-997: the Mirzam newsletter integration settings, its
+            // governed API token, and the read-only connection check.
+            .route("/mirzam", web::get().to(handlers::get_mirzam_config))
+            .route("/mirzam", web::put().to(handlers::update_mirzam_config))
+            .route(
+                "/mirzam/check",
+                web::post().to(handlers::check_mirzam_connection),
+            )
             // Auto-ban config (BUNYIP-351)
             .route(
                 "/auto-ban-config",

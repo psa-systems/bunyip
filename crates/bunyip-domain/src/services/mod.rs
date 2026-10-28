@@ -19,6 +19,7 @@ pub mod ip_enrich;
 pub mod jwt;
 pub mod mailer_relay;
 pub mod mailer_webhook;
+pub mod mirzam;
 pub mod password_breach;
 pub mod provider_status;
 pub mod stripe;

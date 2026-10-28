@@ -9,10 +9,11 @@ use super::types::{
     AdminStatsResponse, AdminUser, ApiVersion, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
-    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
-    TestEmailResult, TierConfigResponse, UserEntitlement,
+    MailerSuppression, MirzamCheckResult, MirzamConfigResponse, PaginatedResponse, PricingStatus,
+    ProviderStatusAggregateResponse, RestoreReport, SeedTemplateInfo, SmtpTestResult,
+    StripeConfigResponse, StripePermissionReport, StripePrice, StripeProduct,
+    StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult, TierConfigResponse,
+    UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -1357,6 +1358,34 @@ pub async fn update_email_config(
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/email", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-997: the Mirzam integration settings.
+pub async fn mirzam_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MirzamConfigResponse, ApiError> {
+    parse(api.get("/admin/mirzam", cookie).await?)
+}
+
+/// BUNYIP-997: replace the Mirzam settings; an empty `api_token` keeps the
+/// stored token.
+pub async fn update_mirzam_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/mirzam", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-997: check both saved lists against Mirzam. A reached-but-failing
+/// Mirzam is a 200 with `ok: false`; missing settings are a 400 `ApiError`.
+pub async fn check_mirzam_connection(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MirzamCheckResult, ApiError> {
+    parse(api.post("/admin/mirzam/check", cookie, None).await?)
 }
 
 /// BUNYIP-580: read the system-config YAML values for the admin settings page.

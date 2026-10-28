@@ -10,6 +10,7 @@
 //! | `user_totp`    | `pending_*` (BUNYIP-355 staged re-key)                      |
 //! | `stripe_config`| `secret_key`, `webhook_secret` (+ nonces)                   |
 //! | `email_config` | `smtp_password`, `imap_password` (+ nonces)                 |
+//! | `mirzam_config`| `api_token` (+ `api_token_nonce`, BUNYIP-997)               |
 //!
 //! Idempotent: [`AppKeySet::rewrite`] returns `None` for a value already on the
 //! current key and version, so a second run rewrites nothing. A value that no
@@ -19,7 +20,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::errors::AppError;
-use crate::repositories::{EmailConfigRepository, StripeConfigRepository, TotpRepository};
+use crate::repositories::{
+    EmailConfigRepository, MirzamConfigRepository, StripeConfigRepository, TotpRepository,
+};
 use crate::services::AppKeySet;
 
 /// What one pass did, per secret store.
@@ -204,12 +207,37 @@ pub async fn reencrypt_email(
     Ok(summary)
 }
 
-/// Run the whole pass: TOTP secrets, Stripe secrets, and the SMTP and IMAP
-/// passwords.
+/// Re-encrypt the Mirzam API token on the `mirzam_config` row (BUNYIP-997).
+pub async fn reencrypt_mirzam(
+    pool: &PgPool,
+    keys: &AppKeySet,
+) -> Result<ReencryptSummary, AppError> {
+    let row = MirzamConfigRepository::get(pool).await?;
+    let mut summary = ReencryptSummary::default();
+
+    if let (Some(ciphertext), Some(nonce)) = (&row.api_token, &row.api_token_nonce) {
+        match keys.rewrite(ciphertext, nonce, row.key_version) {
+            Ok(Some((ct, n, version))) => {
+                MirzamConfigRepository::update_api_token_encryption(pool, &ct, &n, version).await?;
+                summary.rewritten += 1;
+            }
+            Ok(None) => summary.already_current += 1,
+            Err(_) => summary
+                .undecryptable
+                .push("mirzam_config api_token".to_string()),
+        }
+    }
+
+    Ok(summary)
+}
+
+/// Run the whole pass: TOTP secrets, Stripe secrets, the SMTP and IMAP
+/// passwords, and the Mirzam API token.
 pub async fn reencrypt_all(pool: &PgPool, keys: &AppKeySet) -> Result<ReencryptSummary, AppError> {
     let mut summary = reencrypt_totp(pool, keys).await?;
     summary.merge(reencrypt_stripe(pool, keys).await?);
     summary.merge(reencrypt_email(pool, keys).await?);
+    summary.merge(reencrypt_mirzam(pool, keys).await?);
     Ok(summary)
 }
 
