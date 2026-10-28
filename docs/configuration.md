@@ -691,8 +691,8 @@ attempts), followed by one line per failed call naming the list and the user id,
 failure does not stop the run; the command exits non-zero when any account failed, or without calling Mirzam when the
 integration is switched off, incomplete, or has no `MIRZAM_API_TOKEN`. It is safe to run again: a second run reports
 everyone as already on or left alone and adds nothing, so after fixing the cause of a failure, re-run it as is. The
-backfill does not write `mirzam_config.last_error`. `left alone` comes from Mirzam's `409` code `unsubscribed` (Mirzam
-v0.38.0 and later); against an older Mirzam it falls back to the wording of the message.
+backfill does not write `mirzam_config.last_error`. `left alone` comes from Mirzam's `409` code `unsubscribed`, so the
+backfill needs Mirzam v0.38.0 or later.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
