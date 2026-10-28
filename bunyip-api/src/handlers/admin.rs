@@ -25,8 +25,8 @@ use crate::models::{
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, EmailConfigRepository,
-    InviteRepository, MirzamConfigRepository, NotificationRepository, StripeConfigRepository,
-    TierConfigRepository, TokenRepository, TotpRepository, UserRepository,
+    InviteRepository, MirzamConfigRepository, MokoshConfigRepository, NotificationRepository,
+    StripeConfigRepository, TierConfigRepository, TokenRepository, TotpRepository, UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
@@ -4280,6 +4280,21 @@ async fn check_mirzam_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCh
     )]))
 }
 
+/// BUNYIP-983: the Mokosh Google client secret's `database`-provider
+/// ciphertext.
+async fn check_mokosh_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+    let row = MokoshConfigRepository::get(pool).await?;
+    Ok(combine_key_health(vec![(
+        "google_client_secret".to_string(),
+        evaluate_key_health(
+            keys,
+            row.google_client_secret.as_deref(),
+            row.google_client_secret_nonce.as_deref(),
+            Some(row.key_version),
+        ),
+    )]))
+}
+
 /// Dispatch a key health check by key_id. Every id now checks the SAME
 /// application key (BUNYIP-483); they differ in which stored secret they read.
 async fn run_key_check(
@@ -4292,12 +4307,13 @@ async fn run_key_check(
         "totp" => check_totp_key(pool, keys).await,
         "email" => check_email_key(pool, keys).await,
         "mirzam" => check_mirzam_key(pool, keys).await,
+        "mokosh" => check_mokosh_key(pool, keys).await,
         _ => Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     }
 }
 
 /// All registered key IDs. Update this when a new store is encrypted at rest.
-const KEY_IDS: &[&str] = &["stripe", "totp", "email", "mirzam"];
+const KEY_IDS: &[&str] = &["stripe", "totp", "email", "mirzam", "mokosh"];
 
 /// GET /v1/admin/key-health
 /// Aggregated health check for all encryption keys.
@@ -4466,6 +4482,20 @@ pub async fn key_rotation_status(
                 request_id,
             ))
         }
+        "mokosh" => {
+            let row = MokoshConfigRepository::get(&pool).await?;
+            let (has_secrets, on_current) = match (
+                row.google_client_secret.as_deref(),
+                row.google_client_secret_nonce.as_deref(),
+            ) {
+                (Some(ct), Some(n)) => (true, app_key_set.is_current(ct, n, row.key_version)),
+                _ => (false, true),
+            };
+            Ok(success(
+                singleton_rotation_status("mokosh", current_version, has_secrets, on_current),
+                request_id,
+            ))
+        }
         _ => Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     }
 }
@@ -4508,6 +4538,7 @@ pub async fn reencrypt_key(
         "stripe" => crate::reencrypt::reencrypt_stripe(&pool, &app_key_set).await?,
         "email" => crate::reencrypt::reencrypt_email(&pool, &app_key_set).await?,
         "mirzam" => crate::reencrypt::reencrypt_mirzam(&pool, &app_key_set).await?,
+        "mokosh" => crate::reencrypt::reencrypt_mokosh(&pool, &app_key_set).await?,
         _ => return Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     };
 
