@@ -3327,6 +3327,26 @@ mod mirzam_tests {
         assert!(html.contains(r#"placeholder="Not set""#), "{html}");
     }
 
+    /// BUNYIP-998: the last failed sync call shows with when it failed, and
+    /// the block says so plainly when none is recorded.
+    #[test]
+    fn the_last_sync_failure_shows_until_a_call_succeeds() {
+        let mut c = cfg(true, true);
+        let html = render(&c);
+        assert!(html.contains("No failed calls."), "{html}");
+
+        c.last_error =
+            Some("Adding user 1 to list notices failed: Mirzam answered 503.".to_string());
+        c.last_error_at = Some(chrono::Utc::now().to_rfc3339());
+        let html = render(&c);
+        assert!(
+            html.contains("The last call to Mirzam failed just now."),
+            "{html}"
+        );
+        assert!(html.contains("Mirzam answered 503."), "{html}");
+        assert!(!html.contains("No failed calls."), "{html}");
+    }
+
     /// In `SECRETS_STORAGE=environment` the token field is read-only, has no
     /// reveal toggle, and names the file to edit.
     #[test]

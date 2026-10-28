@@ -672,18 +672,26 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // BUNYIP-998: keeps account holders on Mirzam's lists, off the request
+    // path. Inert while the integration is off or incomplete.
+    let mirzam_sync =
+        bunyip_api::mirzam_sync::mirzam_sync(pool.clone(), config.clone(), app_key_set.clone());
+
     // Initialize Auth service
-    let auth_service = Arc::new(AuthService::new(
-        pool.clone(),
-        (*jwt_service).clone(),
-        tier_config.clone(),
-        config.bootstrap_admin_email.clone(),
-        email_service.clone(),
-        geoip,
-        config.login_approval_enabled,
-        config.country_allow.clone(),
-        config.country_deny.clone(),
-    ));
+    let auth_service = Arc::new(
+        AuthService::new(
+            pool.clone(),
+            (*jwt_service).clone(),
+            tier_config.clone(),
+            config.bootstrap_admin_email.clone(),
+            email_service.clone(),
+            geoip,
+            config.login_approval_enabled,
+            config.country_allow.clone(),
+            config.country_deny.clone(),
+        )
+        .with_mirzam_sync(mirzam_sync.clone()),
+    );
 
     info!("Auth service initialized");
 
@@ -1235,6 +1243,7 @@ async fn main() -> anyhow::Result<()> {
         const E2E_REAPER_MAX_AGE_SECS: i64 = 6 * 3600;
         const E2E_DISPOSABLE_EMAIL_PATTERN: &str = "%+e2e-%";
         let reaper_pool = pool.clone();
+        let reaper_mirzam = mirzam_sync.clone();
         tokio::spawn(async move {
             info!("E2E disposable-account reaper started (non-production)");
             let mut interval = tokio::time::interval(Duration::from_secs(E2E_REAPER_INTERVAL_SECS));
@@ -1248,8 +1257,25 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 {
                     Ok(reaped) => {
-                        if reaped > 0 {
-                            info!(reaped, "Reaped stale e2e disposable accounts");
+                        if !reaped.is_empty() {
+                            info!(
+                                reaped = reaped.len(),
+                                "Reaped stale e2e disposable accounts"
+                            );
+                        }
+                        // BUNYIP-998: a reaped account leaves Mirzam's lists
+                        // like any deleted one. A row already soft-deleted
+                        // left them when it was deleted.
+                        for (user_id, email, was_verified, soft_deleted) in reaped {
+                            if !soft_deleted {
+                                reaper_mirzam.notify(
+                                    bunyip_domain::services::mirzam_sync::AccountChange::Deleted {
+                                        user_id,
+                                        email,
+                                        was_verified,
+                                    },
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -1393,6 +1419,7 @@ async fn main() -> anyhow::Result<()> {
                     as Arc<bunyip_domain::middleware::auth::BunyipAtJwtVerifier>
             }))
             .app_data(web::Data::new(auth_service.clone()))
+            .app_data(web::Data::new(mirzam_sync.clone()))
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(mailer_relay.clone()))
             .app_data(web::Data::new(suppression.clone()))

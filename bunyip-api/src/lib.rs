@@ -22,6 +22,7 @@ pub mod extractors;
 pub mod handlers;
 pub mod machine_client;
 pub mod migrate_reconcile;
+pub mod mirzam_sync;
 pub mod mokosh_backup;
 pub mod provider_status;
 pub mod rate_limit_floor;
