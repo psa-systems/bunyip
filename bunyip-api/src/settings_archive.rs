@@ -250,6 +250,18 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
         ],
     },
     ArchivedTable {
+        table: "mokosh_config",
+        archived: &["google_client_id"],
+        excluded: &[
+            "id",
+            "updated_at",
+            "updated_by",
+            "key_version",
+            "google_client_secret",
+            "google_client_secret_nonce",
+        ],
+    },
+    ArchivedTable {
         table: "rate_limit_configs",
         archived: &["action", "max_requests", "window_seconds"],
         excluded: &["updated_at", "updated_by"],
@@ -326,6 +338,7 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "backchannel_logout_uri",
             "lifecycle_event_uri",
             "allowed_scopes",
+            "allowed_secret_keys",
             "allowed_grant_types",
             "token_endpoint_auth_method",
             "require_pkce",
@@ -411,6 +424,10 @@ pub struct Sections {
     /// still reads.
     #[serde(default)]
     pub mirzam_config: MirzamConfigSection,
+    /// BUNYIP-983. Defaulted so an archive written before the table existed
+    /// still reads.
+    #[serde(default)]
+    pub mokosh_config: MokoshConfigSection,
     pub rate_limit_configs: Vec<RateLimitConfigRow>,
     /// BUNYIP-840: every stored feature toggle, by key.
     pub feature_toggles: Vec<FeatureToggleRow>,
@@ -521,6 +538,15 @@ pub struct MirzamConfigSection {
     pub base_url: String,
     pub updates_list: String,
     pub notices_list: String,
+}
+
+/// BUNYIP-983: the Mokosh host settings' non-secret half. The client secret
+/// travels under `governed_secrets` as `MOKOSH_GOOGLE_CLIENT_SECRET`, and the
+/// client id is public, so the pair survives a rebuilt volume together.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+pub struct MokoshConfigSection {
+    pub google_client_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -657,6 +683,13 @@ pub struct OauthClientRow {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
+    /// BUNYIP-983: the host-secret keys this registration may read. Carried
+    /// because it is an admin-managed entitlement: a restored deployment whose
+    /// calling apps could read nothing would need every allow-list set again
+    /// by hand. Defaulted so an archive written before the column existed
+    /// restores as default-deny.
+    #[serde(default)]
+    pub allowed_secret_keys: Vec<String>,
     pub allowed_grant_types: Vec<String>,
     pub token_endpoint_auth_method: String,
     pub require_pkce: bool,
@@ -769,6 +802,7 @@ pub async fn export(
         email_config: read_email_config(pool).await?,
         stripe_config: read_stripe_config(pool).await?,
         mirzam_config: read_mirzam_config(pool).await?,
+        mokosh_config: read_mokosh_config(pool).await?,
         rate_limit_configs: read_rate_limit_configs(pool).await?,
         feature_toggles: read_feature_toggles(pool).await?,
         system_settings: SystemSettings::current().into(),
@@ -846,6 +880,14 @@ async fn read_stripe_config(pool: &PgPool) -> Result<StripeConfigSection, AppErr
     Ok(sqlx::query_as::<_, StripeConfigSection>(
         "SELECT app_tag, success_url, cancel_url, trial_period_days \
          FROM stripe_config WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn read_mokosh_config(pool: &PgPool) -> Result<MokoshConfigSection, AppError> {
+    Ok(sqlx::query_as::<_, MokoshConfigSection>(
+        "SELECT google_client_id FROM mokosh_config WHERE id = 1",
     )
     .fetch_one(pool)
     .await?)
@@ -937,7 +979,8 @@ async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppErr
     Ok(sqlx::query_as::<_, OauthClientRow>(
         "SELECT client_id, client_secret_hash, client_type, name, redirect_uris, \
          post_logout_redirect_uris, backchannel_logout_uri, lifecycle_event_uri, \
-         allowed_scopes, allowed_grant_types, token_endpoint_auth_method, require_pkce, \
+         allowed_scopes, allowed_secret_keys, allowed_grant_types, \
+         token_endpoint_auth_method, require_pkce, \
          access_token_ttl_seconds, refresh_token_ttl_seconds, refresh_idle_ttl_seconds, \
          audience, dpop_bound, disabled_at, tenant_claim_name, first_party, logo_uri \
          FROM oauth_clients ORDER BY client_id",
@@ -1493,6 +1536,10 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
         &mirzam.notices_list,
     )
     .map_err(|e| AppError::validation(format!("mirzam_config.{}", e.field), e.message))?;
+    bunyip_domain::models::mokosh::validate_google_client_id(
+        &snapshot.sections.mokosh_config.google_client_id,
+    )
+    .map_err(|e| AppError::validation(format!("mokosh_config.{}", e.field), e.message))?;
 
     if let Some(catalog) = &snapshot.sections.catalog {
         let groups: BTreeSet<&str> = catalog
@@ -1569,6 +1616,11 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
             "mirzam_config",
             &target.mirzam_config,
             &archive.mirzam_config,
+        ),
+        plan_singleton(
+            "mokosh_config",
+            &target.mokosh_config,
+            &archive.mokosh_config,
         ),
     ];
     singletons.push(plan_singleton(
@@ -1986,6 +2038,16 @@ async fn write_database_sections(
     .execute(&mut *tx)
     .await?;
 
+    // --- mokosh_config -------------------------------------------------------
+    sqlx::query(
+        "UPDATE mokosh_config SET google_client_id = $1, updated_at = NOW(), \
+         updated_by = $2 WHERE id = 1",
+    )
+    .bind(&sections.mokosh_config.google_client_id)
+    .bind(updated_by)
+    .execute(&mut *tx)
+    .await?;
+
     // --- mirzam_config -------------------------------------------------------
     let m = &sections.mirzam_config;
     sqlx::query(
@@ -2253,12 +2315,12 @@ async fn write_oauth_clients(
         sqlx::query(
             "INSERT INTO oauth_clients (client_id, client_secret_hash, client_type, name, \
              redirect_uris, post_logout_redirect_uris, backchannel_logout_uri, \
-             lifecycle_event_uri, allowed_scopes, allowed_grant_types, \
+             lifecycle_event_uri, allowed_scopes, allowed_secret_keys, allowed_grant_types, \
              token_endpoint_auth_method, require_pkce, access_token_ttl_seconds, \
              refresh_token_ttl_seconds, refresh_idle_ttl_seconds, audience, dpop_bound, \
              disabled_at, tenant_claim_name, first_party, logo_uri, created_at, created_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-             $18, $19, $20, $21, NOW(), $22) \
+             $18, $19, $20, $21, $22, NOW(), $23) \
              ON CONFLICT (client_id) DO UPDATE SET \
              client_secret_hash = EXCLUDED.client_secret_hash, \
              client_type = EXCLUDED.client_type, name = EXCLUDED.name, \
@@ -2267,6 +2329,7 @@ async fn write_oauth_clients(
              backchannel_logout_uri = EXCLUDED.backchannel_logout_uri, \
              lifecycle_event_uri = EXCLUDED.lifecycle_event_uri, \
              allowed_scopes = EXCLUDED.allowed_scopes, \
+             allowed_secret_keys = EXCLUDED.allowed_secret_keys, \
              allowed_grant_types = EXCLUDED.allowed_grant_types, \
              token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method, \
              require_pkce = EXCLUDED.require_pkce, \
@@ -2287,6 +2350,7 @@ async fn write_oauth_clients(
         .bind(&client.backchannel_logout_uri)
         .bind(&client.lifecycle_event_uri)
         .bind(&client.allowed_scopes)
+        .bind(&client.allowed_secret_keys)
         .bind(&client.allowed_grant_types)
         .bind(&client.token_endpoint_auth_method)
         .bind(client.require_pkce)
@@ -2614,6 +2678,10 @@ mod tests {
                     base_url: "https://news.example.com".to_string(),
                     updates_list: "product-updates".to_string(),
                     notices_list: "notices".to_string(),
+                },
+                mokosh_config: MokoshConfigSection {
+                    google_client_id: "123456789012-abc123def456.apps.googleusercontent.com"
+                        .to_string(),
                 },
                 rate_limit_configs: vec![RateLimitConfigRow {
                     action: "login".to_string(),

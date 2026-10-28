@@ -127,10 +127,11 @@ Always, with no flag:
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
 | `mirzam_config` | The singleton `mirzam_config` row: the switch, the Mirzam address and the two list slugs, minus the encrypted API token columns (same). |
+| `mokosh_config` | The Mokosh Google OAuth client id (public: it travels in every sign-in redirect). Its secret half travels under `governed_secrets` as `MOKOSH_GOOGLE_CLIENT_SECRET`, so the pair survives a rebuilt volume together (BUNYIP-983). |
 | `rate_limit_configs` | Every per-action cap override. |
 | `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |
 | `system_settings` | The four settings the file configuration layer at `BUNYIP_CONFIG_DIR` holds: login approval, the signup bot guard, and the two country lists. |
-| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` and `MIRZAM_API_TOKEN`, resolved through whichever provider `SECRETS_STORAGE` declares. |
+| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN` and `MOKOSH_GOOGLE_CLIENT_SECRET`, resolved through whichever provider `SECRETS_STORAGE` declares. |
 
 Behind `--include-catalog`:
 
@@ -145,7 +146,7 @@ Behind `--include-oauth-clients`:
 
 | Section | Notes |
 |---------|-------|
-| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. |
+| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` is archived too (BUNYIP-983): a restored deployment whose calling apps could read no host secret would need every allow-list set again by hand. |
 
 ## What is NOT archived
 
