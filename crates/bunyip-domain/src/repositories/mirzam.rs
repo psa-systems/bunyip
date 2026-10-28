@@ -102,4 +102,26 @@ impl MirzamConfigRepository {
         .await?;
         Ok(())
     }
+
+    /// Record a sync call that ran out of attempts (BUNYIP-998). Runtime
+    /// state, so `updated_at` / `updated_by` (the operator-edit stamp) stay.
+    pub async fn record_sync_error(pool: &PgPool, error: &str) -> Result<(), AppError> {
+        sqlx::query("UPDATE mirzam_config SET last_error = $1, last_error_at = NOW() WHERE id = 1")
+            .bind(error)
+            .execute(pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Clear the recorded failure after a sync call succeeded. A no-op write
+    /// when nothing is recorded, which is the common case.
+    pub async fn clear_sync_error(pool: &PgPool) -> Result<(), AppError> {
+        sqlx::query(
+            "UPDATE mirzam_config SET last_error = NULL, last_error_at = NULL \
+             WHERE id = 1 AND last_error IS NOT NULL",
+        )
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
 }

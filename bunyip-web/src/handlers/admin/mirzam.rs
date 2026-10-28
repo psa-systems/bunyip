@@ -17,10 +17,12 @@ use crate::api::types::{MirzamCheckResult, MirzamConfigResponse};
 use crate::api::ApiError;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
+use crate::util::relative_time;
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
-    button_class, error_box, error_box_for, icon, success_box, toggle_switch_field,
+    button_class, error_box, error_box_detailed, error_box_for, icon, success_box,
+    toggle_switch_field,
 };
 use crate::web::{redirect_cookies, AppState};
 
@@ -138,11 +140,34 @@ pub(super) fn mirzam_content(
                         button type="submit" class=(button_class("outline", "default", "")) { (icon("check-circle", "mr-2 h-4 w-4")) "Check connection" }
                         p class="text-xs text-muted-foreground" { "Reads both saved lists from Mirzam with the saved token. Save changes first to check them." }
                     }
+                    (sync_block(c))
                     (crate::views::password::script())
                 },
             }
         }
     }
+}
+
+/// The last failed sync call (BUNYIP-998), or that none is recorded. The api
+/// clears it when a later call succeeds.
+pub(super) fn sync_block(c: &MirzamConfigResponse) -> Markup {
+    admin_block(
+        "Sync",
+        Some("While the integration is on, bunyip adds verified account holders to both lists, moves them when their address changes and removes them when the account is deleted, in the background."),
+        html! {
+            @match &c.last_error {
+                Some(err) => {
+                    @let when = c.last_error_at.as_deref().map(relative_time);
+                    @let headline = match &when {
+                        Some(when) => format!("The last call to Mirzam failed {when}."),
+                        None => "The last call to Mirzam failed.".to_string(),
+                    };
+                    (error_box_detailed(&headline, Some(err), None))
+                }
+                None => p class="text-sm text-muted-foreground" { "No failed calls." },
+            }
+        },
+    )
 }
 
 pub async fn mirzam(State(st): State<AppState>, headers: HeaderMap) -> Response {

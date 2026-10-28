@@ -272,7 +272,7 @@ async fn check_list(
 
 /// A transport error's cause without the request URL reqwest prefixes it with,
 /// since the message already names the address.
-fn without_url(e: &reqwest::Error) -> String {
+pub(crate) fn without_url(e: &reqwest::Error) -> String {
     let mut cause: &dyn std::error::Error = e;
     while let Some(source) = cause.source() {
         cause = source;

@@ -34,6 +34,7 @@ use crate::services::{
     ReleaseCache, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
+use bunyip_domain::services::mirzam_sync::{AccountChange, MirzamSync};
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
 
@@ -197,6 +198,7 @@ pub async fn update_user_status(
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
     bus: web::Data<Arc<EventBus>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserStatusRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -234,6 +236,18 @@ pub async fn update_user_status(
             .ok_or(AppError::not_found("User"))?;
 
         UserRepository::soft_delete(&pool, user_id).await?;
+
+        // BUNYIP-998: a deactivated account is a deleted one (the same soft
+        // delete), so it leaves Mirzam's lists. Reactivating does not rejoin
+        // them: the sync's adds keep an unsubscribed address as it is.
+        crate::mirzam_sync::notify(
+            &mirzam,
+            AccountChange::Deleted {
+                user_id,
+                email: target_user.email.clone(),
+                was_verified: target_user.email_verified,
+            },
+        );
 
         // BUNYIP-144: a deactivation must take effect immediately. Without
         // this, an already-signed-in user keeps an admin-claim access token
@@ -274,6 +288,7 @@ pub async fn delete_user(
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -298,6 +313,16 @@ pub async fn delete_user(
     }
 
     UserRepository::soft_delete(&pool, user_id).await?;
+
+    // BUNYIP-998: leave Mirzam's two lists, with the address read above.
+    crate::mirzam_sync::notify(
+        &mirzam,
+        AccountChange::Deleted {
+            user_id,
+            email: target_user.email.clone(),
+            was_verified: target_user.email_verified,
+        },
+    );
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -423,6 +448,7 @@ pub async fn update_user_email(
     req: HttpRequest,
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserEmailRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -449,6 +475,19 @@ pub async fn update_user_email(
     }
 
     UserRepository::update_email(pool.get_ref(), user_id, &new_email, body.verified).await?;
+
+    // BUNYIP-998: move, add or remove the address on Mirzam's lists according
+    // to the verified state either side of the edit.
+    crate::mirzam_sync::notify(
+        &mirzam,
+        AccountChange::EmailChanged {
+            user_id,
+            old_email: old_email.clone(),
+            was_verified: target_user.email_verified,
+            new_email: new_email.clone(),
+            now_verified: body.verified,
+        },
+    );
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -480,6 +519,7 @@ pub async fn verify_user_email(
     req: HttpRequest,
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -489,7 +529,10 @@ pub async fn verify_user_email(
         .await?
         .ok_or(AppError::not_found("User"))?;
 
-    UserRepository::set_email_verified(&pool, user_id).await?;
+    if UserRepository::set_email_verified(&pool, user_id).await? {
+        // BUNYIP-998: newly verified, so the account joins Mirzam's lists.
+        crate::mirzam_sync::notify(&mirzam, AccountChange::Verified { user_id });
+    }
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -2249,10 +2292,9 @@ pub async fn get_integration_status(
         mokosh_webhook_configured,
         mokosh_backup_url_set,
         mirzam_enabled: mirzam.enabled,
-        mirzam_settings_complete: !mirzam.base_url.trim().is_empty()
-            && !mirzam.updates_list.trim().is_empty()
-            && !mirzam.notices_list.trim().is_empty(),
+        mirzam_settings_complete: mirzam.settings_complete(),
         mirzam_token_present: present(GovernedSecret::MirzamApiToken),
+        mirzam_last_error: mirzam.last_error.clone(),
     };
 
     let response = serde_json::json!({ "integrations": integration_statuses(&signals) });

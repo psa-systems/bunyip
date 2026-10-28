@@ -28,6 +28,7 @@ use crate::services::{
 };
 use crate::validation::validate_email;
 use bunyip_domain::device::device_label;
+use bunyip_domain::services::mirzam_sync::{AccountChange, MirzamSync};
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use uuid::Uuid;
 
@@ -897,6 +898,7 @@ pub async fn delete_account(
     webhook_service: web::Data<Arc<WebhookService>>,
     event_bus: web::Data<Arc<EventBus>>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     query: web::Query<DeleteAccountQuery>,
     body: web::Json<DeleteAccountRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -947,8 +949,17 @@ pub async fn delete_account(
     // customer, OIDC sessions, or connected apps, so this skips the downstream
     // cascade and just revokes tokens and clears cookies (writing the usual
     // post-delete audit row would FK-violate against the row we just removed).
+    // BUNYIP-998: either way the account leaves Mirzam's two lists, with the
+    // address read before the row changes.
+    let mirzam_change = AccountChange::Deleted {
+        user_id: user.0.sub,
+        email: db_user.email.clone(),
+        was_verified: db_user.email_verified,
+    };
+
     if query.wants_purge() && config.e2e_purge_enabled() {
         UserRepository::hard_delete(&pool, user.0.sub).await?;
+        crate::mirzam_sync::notify(&mirzam, mirzam_change);
         TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
         crate::handlers::auth::revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
@@ -989,6 +1000,7 @@ pub async fn delete_account(
 
     // Soft-delete the user
     UserRepository::soft_delete(&pool, user.0.sub).await?;
+    crate::mirzam_sync::notify(&mirzam, mirzam_change);
 
     // Revoke all refresh tokens
     TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
