@@ -117,10 +117,13 @@ pub enum AddOutcome {
     LeftAlone,
 }
 
-/// The phrase that tells Mirzam's two `409` answers to an add apart: it ends
-/// the "unsubscribed from that list" message and never the "already on that
-/// list" one. Both share the error code `conflict`, so the message is the
-/// only marker Mirzam gives.
+/// The error code Mirzam (v0.38.0 and later) gives a `409` to an add that
+/// left an unsubscribed address alone; "already on" keeps code `conflict`.
+const LEFT_ALONE_CODE: &str = "unsubscribed";
+
+/// The phrase that ends the "unsubscribed from that list" message: the only
+/// marker before Mirzam v0.38.0, where both `409`s carried code `conflict`.
+/// TODO(BUNYIP-1001): drop once production runs Mirzam v0.38.0 or later.
 const LEFT_ALONE_MARKER: &str = "left as it is";
 
 /// `PATCH /api/v1/subscribers/{old}`.
@@ -268,7 +271,10 @@ impl MirzamClient {
             .json(&body);
         match self.send(request, &[email]).await? {
             (status, _) if (200..300).contains(&status) => Ok(AddOutcome::Added),
-            (409, body) if summarize_answer(&body).contains(LEFT_ALONE_MARKER) => {
+            (409, body)
+                if error_code(&body).as_deref() == Some(LEFT_ALONE_CODE)
+                    || summarize_answer(&body).contains(LEFT_ALONE_MARKER) =>
+            {
                 Ok(AddOutcome::LeftAlone)
             }
             (409, _) => Ok(AddOutcome::AlreadyOn),
@@ -319,6 +325,16 @@ impl MirzamClient {
 /// One line of Mirzam's answer: its `error.message` (or `error.code`) when the
 /// body is Mirzam's JSON error shape, otherwise the text itself, whitespace
 /// collapsed and cut to [`ANSWER_SUMMARY_MAX_CHARS`].
+/// The `error.code` of a Mirzam error answer, if it has one.
+fn error_code(body: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()?
+        .get("error")?
+        .get("code")?
+        .as_str()
+        .map(str::to_string)
+}
+
 fn summarize_answer(body: &str) -> String {
     let from_json = serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -910,15 +926,19 @@ mod tests {
         assert_eq!(lists_sent, ["\"product-updates\"", "\"notices\""]);
     }
 
-    /// Mirzam's two `409` answers to an add, told apart by the message.
+    /// Mirzam's two `409` answers to an add, told apart by the code, and by
+    /// the message from a Mirzam before v0.38.0 that has no separate code.
     #[tokio::test]
     async fn an_add_tells_already_on_from_left_alone() {
-        for (message, expected) in [
+        for (code, message, expected) in [
             (
+                "conflict",
                 "This address is already on that list (confirmed).",
                 AddOutcome::AlreadyOn,
             ),
+            ("unsubscribed", "Reworded.", AddOutcome::LeftAlone),
             (
+                "conflict",
                 "This address unsubscribed from that list (unsubscribed); left as it is.",
                 AddOutcome::LeftAlone,
             ),
@@ -926,14 +946,14 @@ mod tests {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
                 .respond_with(ResponseTemplate::new(409).set_body_json(
-                    serde_json::json!({"error": {"code": "conflict", "message": message}}),
+                    serde_json::json!({"error": {"code": code, "message": message}}),
                 ))
                 .mount(&server)
                 .await;
             let outcome = client(&server)
                 .add("ada@example.test", None, "product-updates", true)
                 .await;
-            assert_eq!(outcome, Ok(expected), "{message}");
+            assert_eq!(outcome, Ok(expected), "{code}: {message}");
         }
     }
 
