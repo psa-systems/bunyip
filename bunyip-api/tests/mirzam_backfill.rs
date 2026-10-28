@@ -79,15 +79,15 @@ async fn seed_user(pool: &PgPool, verified: bool) -> User {
         .unwrap()
 }
 
-fn conflict(message: &str) -> ResponseTemplate {
+fn conflict(code: &str, message: &str) -> ResponseTemplate {
     ResponseTemplate::new(409)
-        .set_body_json(serde_json::json!({"error": {"code": "conflict", "message": message}}))
+        .set_body_json(serde_json::json!({"error": {"code": code, "message": message}}))
 }
 
 /// `POST /api/v1/subscribers` the way Mirzam answers it: `201` the first time
-/// an address joins a list, `409` "already on" after that; `409` "left as it
-/// is" for an address that unsubscribed from product updates when the add
-/// keeps unsubscribes; `500` for an address whose calls always fail.
+/// an address joins a list, `409` code `conflict` after that; `409` code
+/// `unsubscribed` for an address that unsubscribed from product updates when
+/// the add keeps unsubscribes; `500` for an address whose calls always fail.
 #[derive(Clone, Default)]
 struct StubMirzam {
     on: Arc<Mutex<HashSet<(String, String)>>>,
@@ -107,14 +107,15 @@ impl Respond for StubMirzam {
             && sent["keep_unsubscribed"] == true
             && self.unsubscribed.lock().unwrap().contains(&email)
         {
-            return conflict(
-                "This address unsubscribed from that list (unsubscribed); left as it is.",
-            );
+            return conflict("unsubscribed", "This address unsubscribed from that list.");
         }
         if self.on.lock().unwrap().insert((email, list)) {
             ResponseTemplate::new(201).set_body_json(serde_json::json!({}))
         } else {
-            conflict("This address is already on that list (confirmed).")
+            conflict(
+                "conflict",
+                "This address is already on that list (confirmed).",
+            )
         }
     }
 }
