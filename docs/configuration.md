@@ -672,6 +672,25 @@ the list, the user id and Mirzam's status and message, never the token or the ad
 under Sync, the System Status page reports the integration as Failing, and the next call that succeeds clears it. These
 two columns are runtime state, left out of the settings archive.
 
+**Backfilling existing accounts** (BUNYIP-999, `bunyip_domain::services::mirzam_backfill`). The events above only
+cover accounts that change after the integration is switched on. Once, on the day it is switched on and the connection
+check passes, put every account that already exists on the two lists:
+
+```nushell
+docker compose exec api /app/bunyip-api mirzam-backfill
+```
+
+It walks every live account with a verified address (never an unverified or a deactivated one) and makes the "email
+verified" calls for each, so product updates keep `keep_unsubscribed: true` and nobody who left it is put back. Calls
+are sequential, one account every 250 ms (about 8 requests a second, under Mirzam's 600 a minute per token), each with
+the retries above. It prints one count per account: `added` (newly put on at least one list), `already on` (on both
+already), `left alone (unsubscribed)` (had left product updates, which stays so) and `failed` (a call ran out of
+attempts), followed by one line per failed call naming the list and the user id, never the address or the token. A
+failure does not stop the run; the command exits non-zero when any account failed, or without calling Mirzam when the
+integration is switched off, incomplete, or has no `MIRZAM_API_TOKEN`. It is safe to run again: a second run reports
+everyone as already on or left alone and adds nothing, so after fixing the cause of a failure, re-run it as is. The
+backfill does not write `mirzam_config.last_error`.
+
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
 Singleton row: `enabled`, `threshold`, `window_secs`, `ban_duration_secs`. Every column is a declared configuration key,

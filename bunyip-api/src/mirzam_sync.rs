@@ -1,4 +1,5 @@
-//! Wiring for the Mirzam account sync (BUNYIP-998).
+//! Wiring for the Mirzam account sync (BUNYIP-998) and its backfill
+//! (BUNYIP-999).
 //!
 //! The sync itself is `bunyip_domain::services::mirzam_sync`. The one thing it
 //! cannot do from the domain crate is read the API token, because the
@@ -10,7 +11,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bunyip_domain::config::{Config, GovernedSecret};
-use bunyip_domain::services::mirzam_sync::{MirzamSync, MirzamTokenSource};
+use bunyip_domain::repositories::MirzamConfigRepository;
+use bunyip_domain::services::mirzam_backfill::{self, BackfillReport};
+use bunyip_domain::services::mirzam_sync::{
+    active_lists, MirzamClient, MirzamSync, MirzamTokenSource,
+};
 use bunyip_domain::services::AppKeySet;
 use sqlx::PgPool;
 
@@ -58,4 +63,39 @@ pub fn notify(
     if let Some(sync) = sync {
         sync.notify(change);
     }
+}
+
+/// `bunyip-api mirzam-backfill` (BUNYIP-999): put every live verified account
+/// on Mirzam's two lists with the saved settings and token. An integration
+/// that is off, incomplete or without a token is an error naming what is
+/// missing, so the command exits non-zero without calling Mirzam.
+pub async fn backfill(
+    pool: &PgPool,
+    config: &Config,
+    key_set: &AppKeySet,
+    delays: &[std::time::Duration],
+    pace: std::time::Duration,
+) -> anyhow::Result<BackfillReport> {
+    let row = MirzamConfigRepository::get(pool).await?;
+    if !row.enabled {
+        anyhow::bail!(
+            "the Mirzam integration is switched off; switch it on on the admin Mirzam page first"
+        );
+    }
+    let Some(lists) = active_lists(&row) else {
+        anyhow::bail!(
+            "the Mirzam integration is incomplete; set the address and both list slugs on the admin Mirzam page"
+        );
+    };
+    let token = crate::secrets::read_secret(pool, config, key_set, GovernedSecret::MirzamApiToken)
+        .await?
+        .filter(|token| !token.trim().is_empty())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "MIRZAM_API_TOKEN is not set in the {} provider",
+                config.secrets_provider.as_str()
+            )
+        })?;
+    let client = MirzamClient::new(&row.base_url, &token).map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(mirzam_backfill::backfill(pool, &client, &lists, delays, pace).await?)
 }

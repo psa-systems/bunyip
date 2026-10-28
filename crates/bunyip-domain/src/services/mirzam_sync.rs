@@ -110,9 +110,18 @@ impl std::fmt::Display for MirzamCallError {
 pub enum AddOutcome {
     /// 201: added and confirmed.
     Added,
-    /// 409: already on the list, or left it and `keep_unsubscribed` kept it so.
-    AlreadyHandled,
+    /// 409: already on the list.
+    AlreadyOn,
+    /// 409: the address unsubscribed from the list and `keep_unsubscribed`
+    /// left it as it is.
+    LeftAlone,
 }
+
+/// The phrase that tells Mirzam's two `409` answers to an add apart: it ends
+/// the "unsubscribed from that list" message and never the "already on that
+/// list" one. Both share the error code `conflict`, so the message is the
+/// only marker Mirzam gives.
+const LEFT_ALONE_MARKER: &str = "left as it is";
 
 /// `PATCH /api/v1/subscribers/{old}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,7 +268,10 @@ impl MirzamClient {
             .json(&body);
         match self.send(request, &[email]).await? {
             (status, _) if (200..300).contains(&status) => Ok(AddOutcome::Added),
-            (409, _) => Ok(AddOutcome::AlreadyHandled),
+            (409, body) if summarize_answer(&body).contains(LEFT_ALONE_MARKER) => {
+                Ok(AddOutcome::LeftAlone)
+            }
+            (409, _) => Ok(AddOutcome::AlreadyOn),
             (status, body) => Err(self.failure(status, &body, &[email])),
         }
     }
@@ -362,11 +374,28 @@ impl MirzamLists {
     }
 }
 
-/// The "email verified" calls, also made on a reactivation and by the email
-/// change fallbacks: add `email` to the product-updates list keeping an
-/// unsubscribe (the reader may have left it themselves) and to the notices
-/// list re-subscribing (only bunyip ever removes anyone from it). Returns one
-/// admin-facing sentence per call that failed for good.
+/// What the two "email verified" adds answered: each list's outcome, or the
+/// admin-facing sentence for a call that failed for good.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountAdd {
+    pub updates: Result<AddOutcome, String>,
+    pub notices: Result<AddOutcome, String>,
+}
+
+impl AccountAdd {
+    /// The sentences of the calls that failed for good, product updates first.
+    pub fn errors(self) -> Vec<String> {
+        [self.updates, self.notices]
+            .into_iter()
+            .filter_map(Result::err)
+            .collect()
+    }
+}
+
+/// The "email verified" calls, also made on a reactivation, by the email
+/// change fallbacks and by the backfill: add `email` to the product-updates
+/// list keeping an unsubscribe (the reader may have left it themselves) and to
+/// the notices list re-subscribing (only bunyip ever removes anyone from it).
 pub async fn add_account(
     client: &MirzamClient,
     lists: &MirzamLists,
@@ -374,16 +403,17 @@ pub async fn add_account(
     user_id: Uuid,
     email: &str,
     name: Option<&str>,
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    for (list, keep_unsubscribed) in [(&lists.updates, true), (&lists.notices, false)] {
-        if let Err(e) =
-            with_retries(delays, || client.add(email, name, list, keep_unsubscribed)).await
-        {
-            errors.push(format!("Adding user {user_id} to list {list} failed: {e}"));
-        }
-    }
-    errors
+) -> AccountAdd {
+    let failed = |list: &str, e: MirzamCallError| {
+        format!("Adding user {user_id} to list {list} failed: {e}")
+    };
+    let updates = with_retries(delays, || client.add(email, name, &lists.updates, true))
+        .await
+        .map_err(|e| failed(&lists.updates, e));
+    let notices = with_retries(delays, || client.add(email, name, &lists.notices, false))
+        .await
+        .map_err(|e| failed(&lists.notices, e));
+    AccountAdd { updates, notices }
 }
 
 /// The "account deleted" calls: unsubscribe `email` from both lists.
@@ -421,12 +451,16 @@ pub async fn move_account(
     match with_retries(delays, || client.move_address(old_email, new_email)).await {
         Ok(MoveOutcome::Moved) => Vec::new(),
         Ok(MoveOutcome::NewAddressTaken) => {
-            let mut errors = add_account(client, lists, delays, user_id, new_email, name).await;
+            let mut errors = add_account(client, lists, delays, user_id, new_email, name)
+                .await
+                .errors();
             errors.extend(remove_account(client, lists, delays, user_id, old_email).await);
             errors
         }
         Ok(MoveOutcome::OldAddressUnknown) => {
-            add_account(client, lists, delays, user_id, new_email, name).await
+            add_account(client, lists, delays, user_id, new_email, name)
+                .await
+                .errors()
         }
         Err(e) => vec![format!(
             "Moving user {user_id} to a new address failed: {e}"
@@ -493,7 +527,7 @@ pub trait MirzamTokenSource: Send + Sync {
 }
 
 /// The settings a sync runs with, when the integration is on and complete.
-fn active_lists(row: &MirzamConfigRow) -> Option<MirzamLists> {
+pub fn active_lists(row: &MirzamConfigRow) -> Option<MirzamLists> {
     (row.enabled && row.settings_complete()).then(|| MirzamLists {
         updates: row.updates_list.trim().to_string(),
         notices: row.notices_list.trim().to_string(),
@@ -651,7 +685,9 @@ impl MirzamSync {
         let delays = &self.retry_delays[..];
         let errors = match &plan {
             Plan::Add { email, name } => {
-                add_account(&client, &lists, delays, user_id, email, name.as_deref()).await
+                add_account(&client, &lists, delays, user_id, email, name.as_deref())
+                    .await
+                    .errors()
             }
             Plan::Remove { email } => remove_account(&client, &lists, delays, user_id, email).await,
             Plan::Move {
@@ -831,7 +867,8 @@ mod tests {
             "ada@example.test",
             None,
         )
-        .await;
+        .await
+        .errors();
         assert!(errors.is_empty(), "{errors:?}");
         let sent: Vec<serde_json::Value> = requests(&server)
             .await
@@ -851,7 +888,7 @@ mod tests {
         let outcome = client(&server)
             .add("ada@example.test", None, "notices", true)
             .await;
-        assert_eq!(outcome, Ok(AddOutcome::AlreadyHandled));
+        assert_eq!(outcome, Ok(AddOutcome::AlreadyOn));
         let sent: serde_json::Value = requests(&server).await[0].body_json().unwrap();
         assert!(sent.get("name").is_none(), "{sent}");
 
@@ -863,13 +900,41 @@ mod tests {
             "ada@example.test",
             None,
         )
-        .await;
+        .await
+        .errors();
         assert!(errors.is_empty(), "{errors:?}");
         let lists_sent: Vec<String> = requests(&server).await[1..]
             .iter()
             .map(|r| r.body_json::<serde_json::Value>().unwrap()["list"].to_string())
             .collect();
         assert_eq!(lists_sent, ["\"product-updates\"", "\"notices\""]);
+    }
+
+    /// Mirzam's two `409` answers to an add, told apart by the message.
+    #[tokio::test]
+    async fn an_add_tells_already_on_from_left_alone() {
+        for (message, expected) in [
+            (
+                "This address is already on that list (confirmed).",
+                AddOutcome::AlreadyOn,
+            ),
+            (
+                "This address unsubscribed from that list (unsubscribed); left as it is.",
+                AddOutcome::LeftAlone,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(409).set_body_json(
+                    serde_json::json!({"error": {"code": "conflict", "message": message}}),
+                ))
+                .mount(&server)
+                .await;
+            let outcome = client(&server)
+                .add("ada@example.test", None, "product-updates", true)
+                .await;
+            assert_eq!(outcome, Ok(expected), "{message}");
+        }
     }
 
     #[tokio::test]
@@ -1016,7 +1081,8 @@ mod tests {
             "ada@example.test",
             None,
         )
-        .await;
+        .await
+        .errors();
         // Three attempts per list.
         assert_eq!(requests(&server).await.len(), 6);
         assert_eq!(errors.len(), 2, "{errors:?}");
@@ -1060,7 +1126,8 @@ mod tests {
             "ADA@example.test",
             None,
         )
-        .await;
+        .await
+        .errors();
         assert_eq!(errors.len(), 2);
         for error in &errors {
             assert!(!error.contains(TOKEN), "{error}");
