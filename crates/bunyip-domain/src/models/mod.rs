@@ -14,6 +14,7 @@ pub mod entitlement;
 pub mod feedback;
 pub mod membership;
 pub mod mirzam;
+pub mod mokosh;
 pub mod oauth_client_user_tenant;
 pub mod rate_limit;
 pub mod stripe;
@@ -63,6 +64,10 @@ pub use membership::{AdminMembershipResponse, MembershipResponse};
 pub use mirzam::{
     validate_mirzam_settings, MirzamConfigResponse, MirzamConfigRow, MirzamSettings,
     UpdateMirzamConfigRequest,
+};
+pub use mokosh::{
+    validate_google_client_id, validate_google_client_secret, MokoshConfigResponse,
+    MokoshConfigRow, UpdateMokoshConfigRequest,
 };
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
 pub use rate_limit::{

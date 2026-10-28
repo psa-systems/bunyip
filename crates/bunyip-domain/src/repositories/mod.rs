@@ -19,6 +19,7 @@ pub mod feedback_spam_reasons;
 pub mod invite;
 pub mod mailer_suppression;
 pub mod mirzam;
+pub mod mokosh;
 pub mod notification;
 pub mod oauth_client_user_tenant;
 pub mod rate_limit;
@@ -54,6 +55,7 @@ pub use feedback_spam_reasons::{FeedbackSpamReason, FeedbackSpamReasonsRepositor
 pub use invite::InviteRepository;
 pub use mailer_suppression::{MailerSuppression, MailerSuppressionRepository};
 pub use mirzam::MirzamConfigRepository;
+pub use mokosh::MokoshConfigRepository;
 pub use notification::NotificationRepository;
 pub use oauth_client_user_tenant::OAuthClientUserTenantRepository;
 pub use rate_limit::RateLimitRepository;
