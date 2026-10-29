@@ -39,7 +39,10 @@ pub async fn list_paginated_filtered(
 ) -> Result<(Vec<dunite_feedback::models::Feedback>, i64), sqlx::Error> {
     use sqlx::QueryBuilder;
 
-    let offset = (page - 1) * per_page;
+    // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+    // BUNYIP-946 F14, so a page value large enough to overflow an i32
+    // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+    let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
     let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
         "active" => Some("is_spam = FALSE AND status <> 'closed'"),
         "closed" => Some("is_spam = FALSE AND status = 'closed'"),
