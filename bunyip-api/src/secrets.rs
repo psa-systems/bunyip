@@ -110,9 +110,7 @@ impl Survey {
     pub fn would_orphan(&self, declared: SecretsProvider) -> Vec<&'static str> {
         self.secrets
             .iter()
-            .filter(|row| {
-                !row.present_in(declared) && row.holders.iter().any(|p| *p != declared)
-            })
+            .filter(|row| !row.present_in(declared) && row.holders.iter().any(|p| *p != declared))
             .map(|row| row.secret.name())
             .collect()
     }
@@ -1245,10 +1243,7 @@ mod tests {
         // Mix: one secret in the declared provider, one unset entirely, one
         // present only in a non-declared provider. Only the third is a
         // blocker; the second (unset) must NOT contribute to the result.
-        let survey = survey_of(
-            Database,
-            vec![vec![Database], vec![], vec![Infisical]],
-        );
+        let survey = survey_of(Database, vec![vec![Database], vec![], vec![Infisical]]);
         let orphans = survey.would_orphan(Database);
         assert_eq!(
             orphans.len(),
