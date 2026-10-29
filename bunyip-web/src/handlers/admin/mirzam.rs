@@ -267,48 +267,56 @@ fn list_label(list: &str) -> &'static str {
 
 /// Where a Check connection click lands: the page with one success toast for
 /// the lists Mirzam answered right and one error toast for the lists that are
-/// wrong, each list named with its slug and what was found or what is wrong.
-/// An error toast stays until dismissed (BUNYIP-610), so a failure cannot fade
-/// unread. Pure, so every outcome is testable without an API.
+/// wrong, one line per list naming it, its slug and what was found or what is
+/// wrong. Lists that fail for the same reason share one line, so an
+/// unreachable address is named once rather than once per list. An error
+/// toast stays until dismissed (BUNYIP-610), so a failure cannot fade unread.
+/// Pure, so every outcome is testable without an API.
 pub(super) fn check_redirect(result: Result<MirzamCheckResult, ApiError>) -> String {
     let (ok, err) = match result {
         Ok(r) if r.lists.is_empty() => (
             Vec::new(),
             vec!["The connection check returned no result. Try again.".to_string()],
         ),
-        Ok(r) => r
-            .lists
-            .iter()
-            .fold((Vec::new(), Vec::new()), |(mut ok, mut err), list| {
-                // One toast carries every line of its kind, so each line ends
-                // in a full stop even when Mirzam's reason (a transport error)
-                // does not, or two lines read as one sentence.
-                let mut line = format!(
-                    "{} ({}): {}",
-                    list_label(&list.list),
-                    list.slug,
-                    list.message.trim()
-                );
-                if !line.ends_with(['.', '!', '?']) {
-                    line.push('.');
+        Ok(r) => {
+            let lines = |want: bool| {
+                // (lists, reason) in the order the lists came back.
+                let mut groups: Vec<(Vec<String>, &str)> = Vec::new();
+                for list in r.lists.iter().filter(|l| l.ok == want) {
+                    let name = format!("{} ({})", list_label(&list.list), list.slug);
+                    let reason = list.message.trim();
+                    match groups.iter_mut().find(|(_, r)| *r == reason) {
+                        Some((names, _)) => names.push(name),
+                        None => groups.push((vec![name], reason)),
+                    }
                 }
-                if list.ok {
-                    ok.push(line)
-                } else {
-                    err.push(line)
-                }
-                (ok, err)
-            }),
+                groups
+                    .into_iter()
+                    .map(|(names, reason)| {
+                        // Each line ends in a full stop even when Mirzam's
+                        // reason (a transport error) does not.
+                        let mut line = format!("{}: {reason}", names.join(" and "));
+                        if !line.ends_with(['.', '!', '?']) {
+                            line.push('.');
+                        }
+                        line
+                    })
+                    .collect::<Vec<_>>()
+            };
+            (lines(true), lines(false))
+        }
         // Missing settings (400), a rate limit or a transport error before the
         // check could report.
         Err(e) => (Vec::new(), vec![e.user_message()]),
     };
+    // One list per line: the toast renders the message as text with
+    // `white-space: pre-line` (assets/js/app.js), never as HTML.
     let mut params = Vec::new();
     if !ok.is_empty() {
-        params.push(format!("toast_ok={}", urlenc(&ok.join(" "))));
+        params.push(format!("toast_ok={}", urlenc(&ok.join("\n"))));
     }
     if !err.is_empty() {
-        params.push(format!("toast_err={}", urlenc(&err.join(" "))));
+        params.push(format!("toast_err={}", urlenc(&err.join("\n"))));
     }
     format!("{PAGE}?{}", params.join("&"))
 }

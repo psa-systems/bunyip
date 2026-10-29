@@ -700,8 +700,8 @@ address, a slug or the token missing, or when the last sync call failed.
 
 On the admin page (BUNYIP-1014) a save and a check both come back as toasts, through the same `?toast_ok=` /
 `?toast_err=` redirect the other admin pages use: Save shows "Mirzam settings saved", and Check connection shows one
-success toast naming each list that is right and one error toast naming each list that is wrong and why (an error toast
-stays until dismissed). A failed save is the exception: it re-renders the form with the error above it, so the typed
+success toast naming each list that is right and one error toast naming each list that is wrong and why, one line per
+list, with lists that fail for the same reason sharing a line (an error toast stays until dismissed). A failed save is the exception: it re-renders the form with the error above it, so the typed
 values are kept.
 
 **Keeping account holders on the lists** (BUNYIP-998, `bunyip_domain::services::mirzam_sync`). While the integration is

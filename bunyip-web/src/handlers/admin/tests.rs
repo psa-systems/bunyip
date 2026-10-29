@@ -3515,7 +3515,52 @@ mod mirzam_tests {
             toasts(&check_redirect(Ok(result))),
             vec![(
                 "toast_ok".to_string(),
-                "Product updates list (product-updates): Found Product updates (newsletter). Notices list (notices): Found Account notices (notices)."
+                "Product updates list (product-updates): Found Product updates (newsletter).\nNotices list (notices): Found Account notices (notices)."
+                    .to_string()
+            )]
+        );
+    }
+
+    /// Lists that fail for the same reason share one line, so an unreachable
+    /// address is named once; a different reason gets its own line.
+    #[test]
+    fn lists_failing_for_the_same_reason_share_one_line() {
+        let unreachable = "Could not reach https://mirzam.invalid: Name or service not known";
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": false,
+                 "message": unreachable},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": unreachable}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_err".to_string(),
+                format!(
+                    "Product updates list (product-updates) and Notices list (notices): {unreachable}."
+                )
+            )]
+        );
+
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": false,
+                 "message": "No list with this slug (404)."},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": "Mirzam refused the API token (401)."}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_err".to_string(),
+                "Product updates list (product-updates): No list with this slug (404).\nNotices list (notices): Mirzam refused the API token (401)."
                     .to_string()
             )]
         );

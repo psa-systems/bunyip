@@ -90,6 +90,10 @@
     pill.style.opacity = '0';
     pill.style.transform = 'translateY(-8px)';
     var text = document.createElement('span');
+    // BUNYIP-1014: pre-line turns a "\n" in the message into a line break, so a
+    // multi-part result (one line per Mirzam list) reads as a list. The message
+    // is still set as text, never as HTML.
+    text.className = 'whitespace-pre-line';
     text.textContent = msg;
     pill.appendChild(text);
     // A real <button> so it is reachable by keyboard; the aria-label is what
