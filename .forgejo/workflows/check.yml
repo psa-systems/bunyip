@@ -352,12 +352,18 @@ jobs:
               # so a silent fault (tar member mismatch, non-executable
               # mode, mangled download) fails the step here instead of
               # letting the next step compile cargo-audit from source
-              # and exhaust /tmp. The cargo-subcommand form
-              # `cargo binstall ...` depends on $HOME/.cargo/bin being on
-              # PATH, which this image does not guarantee for the runner
-              # user, so append it to GITHUB_PATH too and let the
-              # cargo-subcommand lookup work in every subsequent step.
-              ^$bin --version
+              # and exhaust /tmp. Use `--help` rather than `--version`:
+              # cargo-binstall's `--version <VERSION>` is a flag that
+              # takes a target package version to install (not a
+              # print-version flag), so invoking it without a value is a
+              # clap parse error. `--help` is a plain clap default and
+              # exits 0 if the binary is callable.
+              ^$bin --help | ignore
+              # The cargo-subcommand form `cargo binstall ...` depends
+              # on $HOME/.cargo/bin being on PATH, which this image
+              # does not guarantee for the runner user, so append it to
+              # GITHUB_PATH too and let the cargo-subcommand lookup
+              # work in every subsequent step.
               $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
           } else {
               print "cargo-binstall is already on PATH; skipping download"
