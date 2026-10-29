@@ -291,9 +291,11 @@ pub async fn mirzam_check(State(st): State<AppState>, headers: HeaderMap) -> Res
         Ok(v) => v,
         Err(r) => return r,
     };
-    let banners =
-        check_banners(admin_api::check_mirzam_connection(&st.api, c.forward.as_deref()).await);
-    let cfg = admin_api::mirzam_config(&st.api, c.forward.as_deref()).await;
+    let (check_result, cfg) = tokio::join!(
+        admin_api::check_mirzam_connection(&st.api, c.forward.as_deref()),
+        admin_api::mirzam_config(&st.api, c.forward.as_deref())
+    );
+    let banners = check_banners(check_result);
     let values = cfg
         .as_ref()
         .map(MirzamValues::from_config)
