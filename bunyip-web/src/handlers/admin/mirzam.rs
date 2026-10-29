@@ -2,7 +2,10 @@
 //!
 //! The Mirzam site address, the product-updates and notices list slugs, the
 //! on/off switch and the write-only API token, plus a Check connection button
-//! that reads both saved lists from Mirzam.
+//! that reads both saved lists from Mirzam. A save and a check both answer with
+//! a redirect carrying `?toast_ok=` / `?toast_err=` (BUNYIP-1014), the toast
+//! channel the other admin pages use; only a failed save re-renders, so the
+//! typed values survive (BUNYIP-731).
 
 use axum::extract::State;
 use axum::http::HeaderMap;
@@ -17,18 +20,19 @@ use crate::api::types::{MirzamCheckResult, MirzamConfigResponse};
 use crate::api::ApiError;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::util::relative_time;
+use crate::util::{relative_time, urlenc};
 use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{
-    button_class, error_box, error_box_detailed, error_box_for, icon, success_box,
-    toggle_switch_field,
+    button_class, error_box, error_box_detailed, error_box_for, icon, toggle_switch_field,
 };
 use crate::web::{redirect_cookies, AppState};
 
 /// The page path, the topbar title and the sidebar label all agree (BUNYIP-551).
 const PAGE: &str = "/admin/mirzam";
 const TITLE: &str = "Mirzam";
+/// Where a successful save lands: the page, with the confirmation toast.
+pub(super) const SAVED: &str = "/admin/mirzam?toast_ok=Mirzam%20settings%20saved";
 
 /// Form values kept as typed, so a failed save echoes back what the admin
 /// entered rather than the stored record (BUNYIP-731). The token is the
@@ -237,7 +241,7 @@ pub async fn mirzam_save(
     )
     .await
     {
-        Ok(()) => return redirect_cookies(PAGE, &c.set_cookies),
+        Ok(()) => return redirect_cookies(SAVED, &c.set_cookies),
         Err(e) => e.user_message(),
     };
     // Re-render the submitted values with the error; only the record's
@@ -261,48 +265,61 @@ fn list_label(list: &str) -> &'static str {
     }
 }
 
-/// The banners for a Check connection click: one per list, green when Mirzam
-/// answered with a list of the right kind and red otherwise, each naming the
-/// slug and what was found or what is wrong. Pure, so every outcome is
-/// testable without an API.
-pub(super) fn check_banners(result: Result<MirzamCheckResult, ApiError>) -> Markup {
-    match result {
-        Ok(r) if r.lists.is_empty() => {
-            error_box("The connection check returned no result. Try again.")
-        }
-        Ok(r) => html! {
-            div class="space-y-2" {
-                @for list in &r.lists {
-                    @let line = format!("{} ({}): {}", list_label(&list.list), list.slug, list.message);
-                    @if list.ok { (success_box(&line)) } @else { (error_box(&line)) }
+/// Where a Check connection click lands: the page with one success toast for
+/// the lists Mirzam answered right and one error toast for the lists that are
+/// wrong, each list named with its slug and what was found or what is wrong.
+/// An error toast stays until dismissed (BUNYIP-610), so a failure cannot fade
+/// unread. Pure, so every outcome is testable without an API.
+pub(super) fn check_redirect(result: Result<MirzamCheckResult, ApiError>) -> String {
+    let (ok, err) = match result {
+        Ok(r) if r.lists.is_empty() => (
+            Vec::new(),
+            vec!["The connection check returned no result. Try again.".to_string()],
+        ),
+        Ok(r) => r
+            .lists
+            .iter()
+            .fold((Vec::new(), Vec::new()), |(mut ok, mut err), list| {
+                // One toast carries every line of its kind, so each line ends
+                // in a full stop even when Mirzam's reason (a transport error)
+                // does not, or two lines read as one sentence.
+                let mut line = format!(
+                    "{} ({}): {}",
+                    list_label(&list.list),
+                    list.slug,
+                    list.message.trim()
+                );
+                if !line.ends_with(['.', '!', '?']) {
+                    line.push('.');
                 }
-            }
-        },
+                if list.ok {
+                    ok.push(line)
+                } else {
+                    err.push(line)
+                }
+                (ok, err)
+            }),
         // Missing settings (400), a rate limit or a transport error before the
         // check could report.
-        Err(e) => error_box(&e.user_message()),
+        Err(e) => (Vec::new(), vec![e.user_message()]),
+    };
+    let mut params = Vec::new();
+    if !ok.is_empty() {
+        params.push(format!("toast_ok={}", urlenc(&ok.join(" "))));
     }
+    if !err.is_empty() {
+        params.push(format!("toast_err={}", urlenc(&err.join(" "))));
+    }
+    format!("{PAGE}?{}", params.join("&"))
 }
 
 /// POST /admin/mirzam/check: check the saved settings against Mirzam and
-/// re-render the page with the outcome above it.
+/// redirect back to the page with the outcome as toasts.
 pub async fn mirzam_check(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, c) = match admin_guard(&st, &headers).await {
+    let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let (check_result, cfg) = tokio::join!(
-        admin_api::check_mirzam_connection(&st.api, c.forward.as_deref()),
-        admin_api::mirzam_config(&st.api, c.forward.as_deref())
-    );
-    let banners = check_banners(check_result);
-    let values = cfg
-        .as_ref()
-        .map(MirzamValues::from_config)
-        .unwrap_or_default();
-    let content = html! {
-        (banners)
-        (mirzam_content(cfg.as_ref(), &values, None))
-    };
-    admin_response(&c, &user, PAGE, TITLE, content)
+    let result = admin_api::check_mirzam_connection(&st.api, c.forward.as_deref()).await;
+    redirect_cookies(&check_redirect(result), &c.set_cookies)
 }

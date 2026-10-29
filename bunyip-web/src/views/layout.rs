@@ -705,7 +705,8 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
         NavItem {
             title: "Mokosh",
             href: "/admin/mokosh",
-            icon: "key-round",
+            // BUNYIP-1014: "key-round" was not in the set and rendered blank.
+            icon: "briefcase",
             external: false,
             badge: None,
         },
@@ -1066,6 +1067,36 @@ pub fn admin_shell(
 mod tests {
     use super::*;
     use crate::api::types::{MembershipStatus, MembershipTier};
+
+    /// BUNYIP-1014: a nav entry's glyph is a `NavItem::icon` string, not an
+    /// `icon("...")` call, so `every_icon_name_used_in_the_views_resolves`
+    /// never saw it, and the admin Mokosh entry shipped `"key-round"`, a name
+    /// `inner()` does not know, as an empty `<svg>`. Every entry of every
+    /// authenticated shell must name a glyph the set renders.
+    #[test]
+    fn every_nav_entry_names_a_known_icon() {
+        let mut offenders = Vec::new();
+        for (admin, is_admin, is_member) in [
+            (true, true, true),
+            (false, true, true),
+            (false, false, true),
+            (false, false, false),
+        ] {
+            for item in shell_nav_sections(admin, is_admin, is_member, None)
+                .iter()
+                .flatten()
+            {
+                if !web_kit::ui::icon_is_known(item.icon) {
+                    offenders.push(format!("{} ({}): {}", item.title, item.href, item.icon));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "unknown nav icon renders an empty <svg>; add it to `inner()`:\n{}",
+            offenders.join("\n")
+        );
+    }
 
     fn test_user(role: UserRole) -> User {
         User {

@@ -3444,10 +3444,31 @@ mod mirzam_tests {
         assert!(!html.contains(r#"name="base_url""#));
     }
 
-    /// One banner per list: green with the name and kind when right, red with
-    /// the reason when not.
+    /// The page path with the toast params a check redirect carries, decoded,
+    /// in the order they appear.
+    fn toasts(location: &str) -> Vec<(String, String)> {
+        let (path, query) = location.split_once('?').expect("a toast query");
+        assert_eq!(path, "/admin/mirzam", "{location}");
+        url::form_urlencoded::parse(query.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    /// BUNYIP-1014: a save lands back on the page with the confirmation toast
+    /// the other admin pages show, rather than a silent reload.
     #[test]
-    fn check_banners_name_each_list_and_its_outcome() {
+    fn a_save_redirects_with_a_confirmation_toast() {
+        assert_eq!(
+            toasts(crate::handlers::admin::mirzam::SAVED),
+            vec![("toast_ok".to_string(), "Mirzam settings saved".to_string())]
+        );
+    }
+
+    /// BUNYIP-1014: one success toast for the lists that are right and one
+    /// error toast for the ones that are not, each line naming the list, its
+    /// slug and what was found or what is wrong.
+    #[test]
+    fn a_check_toasts_each_list_and_its_outcome() {
         let result: MirzamCheckResult = serde_json::from_value(json!({
             "ok": false,
             "lists": [
@@ -3455,25 +3476,48 @@ mod mirzam_tests {
                  "name": "Product Updates", "kind": "newsletter",
                  "message": "Found Product Updates (newsletter)."},
                 {"list": "notices_list", "slug": "notices", "ok": false,
-                 "message": "Mirzam refused the API token (401)."}
+                 "message": "Mirzam refused the API token (401)"}
             ]
         }))
         .unwrap();
-        let html = check_banners(Ok(result)).into_string();
-        assert!(
-            html.contains(
-                "Product updates list (product-updates): Found Product Updates (newsletter)."
-            ),
-            "{html}"
-        );
-        assert!(
-            html.contains("Notices list (notices): Mirzam refused the API token (401)."),
-            "{html}"
-        );
+        // The reason had no full stop; the line gains one so a second line in
+        // the same toast does not run on from it.
         assert_eq!(
-            html.matches("border-destructive").count(),
-            1,
-            "only the failing list is red: {html}"
+            toasts(&check_redirect(Ok(result))),
+            vec![
+                (
+                    "toast_ok".to_string(),
+                    "Product updates list (product-updates): Found Product Updates (newsletter)."
+                        .to_string()
+                ),
+                (
+                    "toast_err".to_string(),
+                    "Notices list (notices): Mirzam refused the API token (401).".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// Both lists right: one success toast carrying both, and no error toast.
+    #[test]
+    fn a_passing_check_is_one_success_toast_naming_both_lists() {
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": true,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": true,
+                 "message": "Found Product updates (newsletter)."},
+                {"list": "notices_list", "slug": "notices", "ok": true,
+                 "message": "Found Account notices (notices)."}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_ok".to_string(),
+                "Product updates list (product-updates): Found Product updates (newsletter). Notices list (notices): Found Account notices (notices)."
+                    .to_string()
+            )]
         );
     }
 
@@ -3481,8 +3525,9 @@ mod mirzam_tests {
     fn a_check_with_no_result_or_an_api_error_is_never_silent() {
         let empty: MirzamCheckResult = serde_json::from_value(json!({})).unwrap();
         assert!(!empty.ok);
-        let html = check_banners(Ok(empty)).into_string();
-        assert!(html.contains("destructive"), "{html}");
+        let t = toasts(&check_redirect(Ok(empty)));
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].0, "toast_err", "{t:?}");
 
         let e = ApiError {
             status: 400,
@@ -3492,8 +3537,10 @@ mod mirzam_tests {
             request_id: None,
             bucket: None,
         };
-        let html = check_banners(Err(e)).into_string();
-        assert!(html.contains("destructive"), "{html}");
+        let t = toasts(&check_redirect(Err(e)));
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].0, "toast_err", "{t:?}");
+        assert!(t[0].1.contains("No API token is set"), "{t:?}");
     }
 }
 
@@ -3644,5 +3691,22 @@ mod mokosh_tests {
         let body = mokosh_update_body(&form("  fixture-typed-secret  ", "true"));
         assert_eq!(body["google_client_secret"], "fixture-typed-secret");
         assert_eq!(body["confirm_client_id_change"], true);
+    }
+
+    /// BUNYIP-1014: a save lands back on the page with the confirmation toast
+    /// the other admin pages show, rather than a silent reload.
+    #[test]
+    fn a_save_redirects_with_a_confirmation_toast() {
+        let (path, query) = crate::handlers::admin::mokosh::SAVED
+            .split_once('?')
+            .expect("a toast query");
+        assert_eq!(path, "/admin/mokosh");
+        let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![("toast_ok".to_string(), "Mokosh settings saved".to_string())]
+        );
     }
 }
