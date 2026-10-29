@@ -341,16 +341,24 @@ jobs:
               let ver = "1.14.3"
               let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
               let tmp = (mktemp --tmpdir --suffix .tgz)
+              let bin_dir = $"($env.HOME)/.cargo/bin"
+              let bin = $"($bin_dir)/cargo-binstall"
               http get $url | save --force $tmp
-              mkdir ~/.cargo/bin
-              ^tar -xzf $tmp -C ~/.cargo/bin cargo-binstall
+              mkdir $bin_dir
+              ^tar -xzf $tmp -C $bin_dir cargo-binstall
+              ^chmod +x $bin
               rm $tmp
-              # Prove the extracted binary is actually callable through cargo,
-              # so a silent fault (tar member mismatch, non-executable mode,
-              # mangled download) fails the step here instead of handing a
-              # fresh runner to the next step's compile-cargo-audit fallback
-              # that exhausts /tmp.
-              ^cargo binstall --version
+              # Prove the extracted binary works via direct invocation,
+              # so a silent fault (tar member mismatch, non-executable
+              # mode, mangled download) fails the step here instead of
+              # letting the next step compile cargo-audit from source
+              # and exhaust /tmp. The cargo-subcommand form
+              # `cargo binstall ...` depends on $HOME/.cargo/bin being on
+              # PATH, which this image does not guarantee for the runner
+              # user, so append it to GITHUB_PATH too and let the
+              # cargo-subcommand lookup work in every subsequent step.
+              ^$bin --version
+              $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
           } else {
               print "cargo-binstall is already on PATH; skipping download"
           }
