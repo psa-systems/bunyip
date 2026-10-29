@@ -98,6 +98,24 @@ impl Survey {
     pub fn complete_in(&self, provider: SecretsProvider) -> bool {
         self.secrets.iter().all(|row| row.present_in(provider))
     }
+
+    /// BUNYIP-1000: the governed secrets that would lose their last copy if
+    /// `secrets-purge` ran against `declared` right now. A row contributes
+    /// ONLY when some other inspected provider holds it but `declared` does
+    /// not; a row no inspected provider holds (the integration is simply off)
+    /// is fine, because purge has nothing to delete for it. The previous
+    /// `complete_in` guard treated every unset secret as a blocker, which
+    /// meant a deployment that did not use one integration (no Mirzam token
+    /// today, say) could never purge the duplicates of the others.
+    pub fn would_orphan(&self, declared: SecretsProvider) -> Vec<&'static str> {
+        self.secrets
+            .iter()
+            .filter(|row| {
+                !row.present_in(declared) && row.holders.iter().any(|p| *p != declared)
+            })
+            .map(|row| row.secret.name())
+            .collect()
+    }
 }
 
 /// What the boot enforcement decides for one governed secret.
@@ -1033,9 +1051,13 @@ pub async fn run_migration(
 
 /// Remove every governed-secret copy that sits outside the declared provider.
 ///
-/// Refuses unless the declared provider holds every governed secret, so a purge can
-/// never leave a deployment with no copy at all. Never invoked automatically:
-/// only this subcommand, with `--confirm`, deletes anything.
+/// Refuses only when a purge would leave a secret with no copy at all. A
+/// governed secret that no inspected provider holds (the integration is simply
+/// off: no Mirzam token today, say) is fine; purge has nothing to do for it.
+/// BUNYIP-1000: the previous `complete_in` guard refused in that case too,
+/// so a deployment that did not use one integration could never purge the
+/// duplicates of the others. Never invoked automatically: only this subcommand,
+/// with `--confirm`, deletes anything.
 pub async fn run_purge(
     pool: &PgPool,
     config: &Config,
@@ -1050,18 +1072,13 @@ pub async fn run_purge(
                 .to_string(),
         ));
     }
-    if !survey.complete_in(declared) {
-        let missing: Vec<&str> = survey
-            .secrets
-            .iter()
-            .filter(|row| !row.present_in(declared))
-            .map(|row| row.secret.name())
-            .collect();
+    let would_orphan = survey.would_orphan(declared);
+    if !would_orphan.is_empty() {
         return Err(AppError::BadRequest(format!(
-            "the declared {declared} provider is not complete ({} missing), so purging the \
-             other providers would leave no copy at all. Run `bunyip-api secrets-migrate --to \
-             {declared}` first.",
-            missing.join(", ")
+            "{} would lose its last copy if purge ran now: held outside {declared} but not in \
+             it, so purging the other providers would leave no copy at all. Run `bunyip-api \
+             secrets-migrate --to {declared}` first.",
+            would_orphan.join(", ")
         )));
     }
 
@@ -1216,6 +1233,54 @@ mod tests {
         assert!(enforce(&survey).is_empty());
         assert!(survey.complete_in(Database));
         assert!(!survey.complete_in(Infisical));
+    }
+
+    /// BUNYIP-1000: `secrets-purge` must not refuse because the deployment
+    /// does not use one integration (e.g. no Mirzam token today). A secret
+    /// held by nobody is a no-op for the purge; one held outside the
+    /// declared provider but not inside it is the only shape that must
+    /// block (purging would delete the only copy).
+    #[test]
+    fn would_orphan_names_only_the_misplaced_secrets_not_the_unset_ones() {
+        // Mix: one secret in the declared provider, one unset entirely, one
+        // present only in a non-declared provider. Only the third is a
+        // blocker; the second (unset) must NOT contribute to the result.
+        let survey = survey_of(
+            Database,
+            vec![vec![Database], vec![], vec![Infisical]],
+        );
+        let orphans = survey.would_orphan(Database);
+        assert_eq!(
+            orphans.len(),
+            1,
+            "only the secret held outside Database but not in it blocks purge; \
+             an unset secret (nothing to purge) must not contribute. got {orphans:?}"
+        );
+        assert_eq!(orphans[0], GovernedSecret::ALL[2].name());
+    }
+
+    /// BUNYIP-1000 counterpart: a survey whose declared provider holds
+    /// every secret that any provider holds (and nothing-held-anywhere for
+    /// the rest) must NOT block purge. This is the pre-fix regression:
+    /// `complete_in` returned false here (because of the unset secret),
+    /// and the old guard refused to run.
+    #[test]
+    fn would_orphan_is_empty_when_only_declared_holds_or_nobody_holds() {
+        let survey = survey_of(
+            Database,
+            vec![vec![Database], vec![], vec![Database, Environment]],
+        );
+        assert_eq!(
+            survey.would_orphan(Database),
+            Vec::<&str>::new(),
+            "an unset secret and a Database-plus-elsewhere secret are both fine"
+        );
+        // The pre-fix guard would have refused this case; the sanity check
+        // against `complete_in` makes that regression explicit.
+        assert!(
+            !survey.complete_in(Database),
+            "the unset secret still makes complete_in false; purge must not use it"
+        );
     }
 
     /// An unreachable Infisical is fatal in `infisical` mode: the operator
