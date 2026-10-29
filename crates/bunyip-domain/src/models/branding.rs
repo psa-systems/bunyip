@@ -34,6 +34,8 @@ pub struct BrandingRow {
     pub tagline: String,
     pub meta_description: String,
     pub og_image_url: String,
+    /// MIRZAM-217: the Mirzam subscribe endpoint the landing signup posts to.
+    pub newsletter_url: String,
     /// BUNYIP-560: raw CSS custom-property declarations for the brand ramp.
     pub theme_css: String,
     /// BUNYIP-560: the two `<meta name="theme-color">` values.
@@ -60,6 +62,9 @@ pub struct Branding {
     pub tagline: String,
     pub meta_description: String,
     pub og_image_url: String,
+    /// MIRZAM-217: the `action` of a Mirzam list's embed snippet. Empty hides
+    /// the landing page's newsletter signup.
+    pub newsletter_url: String,
     /// BUNYIP-560: the palette. Empty means the `:root` block / the
     /// `theme-color` meta is omitted.
     pub theme_css: String,
@@ -97,6 +102,8 @@ pub struct UpdateBrandingRequest {
     #[serde(default)]
     pub og_image_url: String,
     #[serde(default)]
+    pub newsletter_url: String,
+    #[serde(default)]
     pub theme_css: String,
     #[serde(default)]
     pub theme_color_light: String,
@@ -112,6 +119,7 @@ pub const MAX_TAGLINE_LEN: usize = 200;
 /// is double that so a longer sentence is a choice rather than a rejection.
 pub const MAX_META_DESCRIPTION_LEN: usize = 320;
 pub const MAX_OG_IMAGE_URL_LEN: usize = 2048;
+pub const MAX_NEWSLETTER_URL_LEN: usize = 2048;
 /// BUNYIP-560: a full custom-property ramp is a few hundred bytes; 4 KiB is a
 /// paste accident, not a palette.
 pub const MAX_THEME_CSS_LEN: usize = 4096;
@@ -151,6 +159,7 @@ pub fn validate_branding(
     let tagline = req.tagline.trim();
     let meta_description = req.meta_description.trim();
     let og_image_url = req.og_image_url.trim();
+    let newsletter_url = req.newsletter_url.trim();
     let theme_css = req.theme_css.trim();
     let theme_color_light = req.theme_color_light.trim();
     let theme_color_dark = req.theme_color_dark.trim();
@@ -193,6 +202,25 @@ pub fn validate_branding(
         });
     }
 
+    // MIRZAM-217: the browser posts the landing signup straight to this
+    // address, so it must be absolute; a relative one would post to bunyip.
+    if let Some(e) = too_long(
+        "newsletter_url",
+        "Newsletter signup URL",
+        newsletter_url,
+        MAX_NEWSLETTER_URL_LEN,
+    ) {
+        return Err(e);
+    }
+    let absolute = newsletter_url.starts_with("https://") || newsletter_url.starts_with("http://");
+    if !newsletter_url.is_empty() && !absolute {
+        return Err(BrandingFieldError {
+            field: "newsletter_url",
+            message: "Newsletter signup URL must be absolute and start with https:// or http://."
+                .to_string(),
+        });
+    }
+
     if let Some(e) = too_long("theme_css", "Theme CSS", theme_css, MAX_THEME_CSS_LEN) {
         return Err(e);
     }
@@ -225,6 +253,7 @@ pub fn validate_branding(
         tagline: tagline.to_string(),
         meta_description: meta_description.to_string(),
         og_image_url: og_image_url.to_string(),
+        newsletter_url: newsletter_url.to_string(),
         theme_css: theme_css.to_string(),
         theme_color_light: theme_color_light.to_string(),
         theme_color_dark: theme_color_dark.to_string(),
@@ -446,6 +475,7 @@ impl BrandingCache {
             tagline: row.tagline.trim().to_string(),
             meta_description: row.meta_description.trim().to_string(),
             og_image_url: row.og_image_url.trim().to_string(),
+            newsletter_url: row.newsletter_url.trim().to_string(),
             theme_css: row.theme_css.trim().to_string(),
             theme_color_light: row.theme_color_light.trim().to_string(),
             theme_color_dark: row.theme_color_dark.trim().to_string(),
@@ -487,6 +517,7 @@ mod tests {
             tagline: tagline.to_string(),
             meta_description: meta.to_string(),
             og_image_url: og.to_string(),
+            newsletter_url: String::new(),
             theme_css: String::new(),
             theme_color_light: String::new(),
             theme_color_dark: String::new(),
@@ -595,6 +626,26 @@ mod tests {
             ..UpdateBrandingRequest::default()
         })
         .is_ok());
+    }
+
+    /// MIRZAM-217: the browser posts the landing signup straight to this
+    /// address, so a relative one would post to bunyip itself.
+    #[test]
+    fn validation_rejects_a_relative_newsletter_url_and_trims_a_good_one() {
+        for candidate in ["/s/abc", "news.test/s/abc", "//news.test/s/abc"] {
+            let err = validate_branding(&UpdateBrandingRequest {
+                newsletter_url: candidate.into(),
+                ..UpdateBrandingRequest::default()
+            })
+            .expect_err("a relative newsletter URL is rejected");
+            assert_eq!(err.field, "newsletter_url");
+        }
+        let ok = validate_branding(&UpdateBrandingRequest {
+            newsletter_url: "  https://news.test/s/abc  ".into(),
+            ..UpdateBrandingRequest::default()
+        })
+        .expect("an absolute newsletter URL is accepted");
+        assert_eq!(ok.newsletter_url, "https://news.test/s/abc");
     }
 
     // --- BUNYIP-560: the palette and the asset slots ------------------------

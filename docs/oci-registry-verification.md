@@ -235,11 +235,17 @@ configuration; compose.yml, .env.example, and the dev-sso runbook point here.
   `docker compose up`. It migrates the secret values from your existing `.env`
   into the `./secrets/*` files (including `forgejo_api_token`).
 - Cache volumes: mount NAMED volumes at `/var/cache/bunyip-oci` and
-  `/var/cache/bunyip-downloads`. The image pre-creates those paths owned by
-  the runtime user (uid 1001) and named volumes inherit that ownership on
-  first use. A host bind-mount does NOT inherit it, mounts root-owned, and
-  every blob/asset write fails (Permission denied -> 502 on all pulls). If a
-  bind-mount is unavoidable: `chown 1001:1001 <host dir>` first.
+  `/var/cache/bunyip-downloads`. The image starts as root and its shared
+  `gosu-entrypoint.sh` chowns those paths (and `/app/config`) to `appuser`
+  (uid 1001) before dropping to it via `gosu`, so an empty named volume is
+  owned by `appuser` on first use. A host bind-mount does NOT inherit that
+  automatically: the entrypoint adopts the bind-mounted `/app/config`
+  directory's existing owner instead of forcing 1001, so either leave it
+  root-owned (the entrypoint chowns it) or pre-`chown` it to the uid/gid you
+  want the container to run as. Set `PUID`/`PGID` to pin a specific uid/gid
+  instead of relying on the first data dir's ownership. A compose `user:` pin
+  on this image skips the remap and chown entirely and requires every cache
+  dir to already be writable by the pinned uid.
 
 ### Reverse-proxy requirements + reference configs
 

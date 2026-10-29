@@ -8,7 +8,7 @@ A `pg_dump` does not replace this. A dump carries the users, the sessions, the a
 
 Both commands run as `docker compose exec api /app/bunyip-api <subcommand>` (or `docker compose run --rm api <subcommand>` when the api container is not up). Neither prints a setting value, a secret or a hash: the plan and the report name sections, columns, keys and counts only.
 
-The api service runs with `read_only: true` (BUNYIP-906), so `/tmp` is the only writable path inside the container; `compose.yml` mounts it as `tmpfs`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
+The api service's `/tmp` is a `tmpfs` mount in `compose.yml`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
 
 ## The passphrase
 
@@ -126,10 +126,12 @@ Always, with no flag:
 | `auto_ban_config` | The singleton `auto_ban_config` row. |
 | `email_config` | The singleton `email_config` row, minus the encrypted password columns (their plaintext is archived under `governed_secrets`). |
 | `stripe_config` | The singleton `stripe_config` row, minus the encrypted secret columns (same). |
+| `mirzam_config` | The singleton `mirzam_config` row: the switch, the Mirzam address and the two list slugs, minus the encrypted API token columns (same) and the last sync failure (`last_error`, `last_error_at`), which is runtime state. |
+| `mokosh_config` | The Mokosh Google OAuth client id (public: it travels in every sign-in redirect). Its secret half travels under `governed_secrets` as `MOKOSH_GOOGLE_CLIENT_SECRET`, so the pair survives a rebuilt volume together (BUNYIP-983). |
 | `rate_limit_configs` | Every per-action cap override. |
 | `feature_toggles` | Every stored feature toggle, key and state (BUNYIP-840). |
 | `system_settings` | The four settings the file configuration layer at `BUNYIP_CONFIG_DIR` holds: login approval, the signup bot guard, and the two country lists. |
-| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` and `SUPPORT_IMAP_PASSWORD`, resolved through whichever provider `SECRETS_STORAGE` declares. |
+| `governed_secrets` | The plaintext of `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN` and `MOKOSH_GOOGLE_CLIENT_SECRET`, resolved through whichever provider `SECRETS_STORAGE` declares. |
 
 Behind `--include-catalog`:
 
@@ -144,7 +146,7 @@ Behind `--include-oauth-clients`:
 
 | Section | Notes |
 |---------|-------|
-| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. |
+| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` is archived too (BUNYIP-983): a restored deployment whose calling apps could read no host secret would need every allow-list set again by hand. |
 
 ## What is NOT archived
 

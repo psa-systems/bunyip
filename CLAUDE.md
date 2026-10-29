@@ -121,6 +121,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Conformance](docs/invariants/build-ci.md#conformance): Follow `../governance/`; version metadata is version + hash + date.
 - [Forgejo org](docs/invariants/build-ci.md#forgejo-org): Repo lives in `psa-systems`; images publish to `psa-systems-private`.
 - [No em-dashes](docs/invariants/build-ci.md#no-em-dashes): No em-dash in any output or artifact.
+- [Renovate](docs/invariants/build-ci.md#renovate) (BUNYIP-961, BUNYIP-966): The caller passes `RENOVATE_CI_TOKEN` under the name the reusable workflow reads.
 
 ### Configuration, secrets and feature flags
 
@@ -129,6 +130,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Startup config validation](docs/invariants/config.md#startup-config-validation-bunyip-537) (BUNYIP-537): Classify every env var in `ENV_INVENTORY`; report all failures, never `panic!`.
 - [Configuration providers](docs/invariants/config.md#configuration-providers-bunyip-643-bunyip-537-bunyip-644) (BUNYIP-643/537/644/645): Resolve `database` > `file` > `environment` via `ConfigStack`.
 - [Secret sourcing (two tiers)](docs/invariants/config.md#secret-sourcing-two-tiers-bunyip-38-bunyip-542-bunyip-642) (BUNYIP-38/542/642): Group-1 secrets are files; Group-2 use `SECRETS_STORAGE`.
+- [Host secrets](docs/invariants/config.md#host-secrets-bunyip-983) (BUNYIP-983): `GET /v1/host/secrets/{KEY}` serves a registry key to an allow-listed machine client.
 - [Settings archive](docs/invariants/config.md#settings-archive-bunyip-714) (BUNYIP-714): Settings move as one passphrase-encrypted file; import replaces, never merges.
 
 ### Branding and email
@@ -158,6 +160,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [OCI errors log their cause](docs/invariants/api-web.md#oci-errors-log-their-cause-bunyip-565) (BUNYIP-565): Every `OciError::Internal` goes through `errors::context`, which logs first.
 - [Two-factor setup](docs/invariants/api-web.md#two-factor-setup-bunyip-886) (BUNYIP-886): Setup 409s an enrolled account, needs the password, and binds confirm to a one-time setup token.
 - [Feedback spam classifier](docs/invariants/api-web.md#feedback-spam-classifier-bunyip-932-bunyip-934) (BUNYIP-932, BUNYIP-934): Three weak signals, first match wins; admin reviews via mark/unmark-spam.
+- [Login approval](docs/invariants/api-web.md#login-approval-bunyip-373-bunyip-944) (BUNYIP-373, BUNYIP-944): `/login/approval` gates on the `bunyip_approval` cookie and clears it only on a verified code.
 
 ### UI
 
@@ -172,3 +175,4 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Amber contrast](docs/invariants/ui.md#amber-contrast-bunyip-548) (BUNYIP-548): Amber text uses the measured shades and meets AA over the tinted composite.
 - [Fetched list states](docs/invariants/ui.md#fetched-list-states-bunyip-461-bunyip-546-bunyip-635) (BUNYIP-461/546/635): Fetched lists show unreachable, empty and populated distinctly.
 - [Toast dismissal](docs/invariants/ui.md#toast-dismissal-bunyip-610-bunyip-98) (BUNYIP-610, BUNYIP-98): Error toasts wait for a click; others auto-dismiss scaled to message length.
+- [Audit Log filters](docs/invariants/ui.md#audit-log-filters-bunyip-930-bunyip-936-bunyip-937) (BUNYIP-930, BUNYIP-936, BUNYIP-937): `user_id`, `since`/`severity`/`action` chips, and `q` search, with their fixed option lists.
