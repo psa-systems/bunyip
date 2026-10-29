@@ -130,7 +130,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Startup config validation](docs/invariants/config.md#startup-config-validation-bunyip-537) (BUNYIP-537): Classify every env var in `ENV_INVENTORY`; report all failures, never `panic!`.
 - [Configuration providers](docs/invariants/config.md#configuration-providers-bunyip-643-bunyip-537-bunyip-644) (BUNYIP-643/537/644/645): Resolve `database` > `file` > `environment` via `ConfigStack`.
 - [Secret sourcing (two tiers)](docs/invariants/config.md#secret-sourcing-two-tiers-bunyip-38-bunyip-542-bunyip-642) (BUNYIP-38/542/642): Group-1 secrets are files; Group-2 use `SECRETS_STORAGE`.
-- [Host secrets](docs/invariants/config.md#host-secrets-bunyip-983) (BUNYIP-983): `GET /v1/host/secrets/{KEY}` serves a registry key to an allow-listed machine client.
+- [Host secrets and config](docs/invariants/config.md#host-secrets-bunyip-983) (BUNYIP-983, BUNYIP-1011): `/v1/host/secrets/{KEY}` and `/v1/host/config/{KEY}` serve a registry key to an allow-listed machine client, one list each.
 - [Settings archive](docs/invariants/config.md#settings-archive-bunyip-714) (BUNYIP-714): Settings move as one passphrase-encrypted file; import replaces, never merges.
 
 ### Branding and email

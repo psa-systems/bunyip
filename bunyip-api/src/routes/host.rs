@@ -22,8 +22,16 @@ use actix_web::web;
 use crate::handlers;
 
 pub fn configure(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::scope("/host").route(
-        "/secrets/{key:.*}",
-        web::get().to(handlers::host_secrets::get_host_secret),
-    ));
+    cfg.service(
+        web::scope("/host")
+            .route(
+                "/secrets/{key:.*}",
+                web::get().to(handlers::host_secrets::get_host_secret),
+            )
+            // BUNYIP-1011: the configuration twin, with its own allow-list.
+            .route(
+                "/config/{key:.*}",
+                web::get().to(handlers::host_config::get_host_config),
+            ),
+    );
 }

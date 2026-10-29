@@ -83,6 +83,18 @@ async fn register_machine_client(
     secret: &str,
     allowed_secret_keys: &[&str],
 ) -> Uuid {
+    register_with_lists(pool, name, secret, allowed_secret_keys, &[]).await
+}
+
+/// BUNYIP-1011: a registration with either allow-list, or both, so a test can
+/// prove a secrets credential cannot read configuration and the reverse.
+async fn register_with_lists(
+    pool: &PgPool,
+    name: &str,
+    secret: &str,
+    allowed_secret_keys: &[&str],
+    allowed_config_keys: &[&str],
+) -> Uuid {
     let client_id = Uuid::new_v4();
     let hash = bunyip_oidc::machine_client::hash_client_secret(secret)
         .await
@@ -93,12 +105,12 @@ async fn register_machine_client(
             client_id, client_secret_hash, client_type, name,
             redirect_uris, post_logout_redirect_uris,
             allowed_scopes, allowed_grant_types, allowed_secret_keys,
-            token_endpoint_auth_method, require_pkce, audience
+            allowed_config_keys, token_endpoint_auth_method, require_pkce, audience
         ) VALUES (
             $1, $2, 'confidential', $3,
             ARRAY[]::TEXT[], ARRAY[]::TEXT[],
             ARRAY[]::TEXT[], ARRAY['client_credentials']::TEXT[], $4,
-            'client_secret_basic', TRUE, 'https://bunyip.test/v1'
+            $5, 'client_secret_basic', TRUE, 'https://bunyip.test/v1'
         )
         "#,
     )
@@ -107,6 +119,12 @@ async fn register_machine_client(
     .bind(name)
     .bind(
         allowed_secret_keys
+            .iter()
+            .map(|k| k.to_string())
+            .collect::<Vec<_>>(),
+    )
+    .bind(
+        allowed_config_keys
             .iter()
             .map(|k| k.to_string())
             .collect::<Vec<_>>(),
@@ -361,6 +379,129 @@ async fn host_secrets_route_and_the_admin_pair_behind_it() {
     assert_eq!(revoked.status(), 401);
 
     for client in [allowed, other, typo] {
+        sqlx::query("DELETE FROM oauth_clients WHERE client_id = $1")
+            .bind(client)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}
+
+/// BUNYIP-1011: the configuration route, and the entitlement split that is
+/// the reason it is a second route rather than a second key on the first.
+#[actix_rt::test]
+async fn host_config_route_serves_facts_and_not_secrets() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let config = test_config();
+    let jwt = Arc::new(JwtService::new(JwtConfig::from_secret(
+        JWT_SECRET,
+        "bunyip-test",
+    )));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(jwt.clone())
+            .app_data(web::Data::new(config.app_key_set()))
+            .app_data(web::Data::new(config.clone()))
+            .service(web::scope("/v1").configure(bunyip_api::routes::host::configure)),
+    )
+    .await;
+
+    const CONFIG_KEY: &str = "mokosh/abuse_contact_email";
+    let config_secret = "host-config-reader-secret";
+    let reader = register_with_lists(
+        &pool,
+        "mokosh-host-config",
+        config_secret,
+        &[],
+        &[CONFIG_KEY],
+    )
+    .await;
+    let secrets_secret = "host-secrets-only-secret";
+    let secrets_only = register_with_lists(
+        &pool,
+        "mokosh-host-secrets-only",
+        secrets_secret,
+        &[KEY],
+        &[],
+    )
+    .await;
+
+    let fetch = |client: Uuid, secret: &str, path: String| {
+        test::TestRequest::get()
+            .uri(&path)
+            .insert_header(("authorization", basic(client, secret)))
+            .to_request()
+    };
+
+    // `SUPPORT_INBOX_EMAIL` is what this key serves, and `test_config` leaves
+    // it unset, so the honest answer is 404 before it is set.
+    let unset = test::call_service(
+        &app,
+        fetch(
+            reader,
+            config_secret,
+            format!("/v1/host/config/{CONFIG_KEY}"),
+        ),
+    )
+    .await;
+    assert_eq!(
+        unset.status(),
+        404,
+        "an unset value is a 404 naming where an operator sets it"
+    );
+
+    // The entitlement split, in both directions. This is what the second
+    // allow-list buys (BUNYIP-855 D9): a credential that reads facts cannot
+    // read secrets, and one that reads secrets cannot read facts, even though
+    // both are authentic and both keys exist.
+    let config_reader_asks_for_a_secret = test::call_service(
+        &app,
+        fetch(reader, config_secret, format!("/v1/host/secrets/{KEY}")),
+    )
+    .await;
+    assert_eq!(config_reader_asks_for_a_secret.status(), 403);
+    let secrets_reader_asks_for_a_fact = test::call_service(
+        &app,
+        fetch(
+            secrets_only,
+            secrets_secret,
+            format!("/v1/host/config/{CONFIG_KEY}"),
+        ),
+    )
+    .await;
+    assert_eq!(secrets_reader_asks_for_a_fact.status(), 403);
+
+    // And a key on the wrong route is a 404 even for the registration that
+    // lists it, because the two registries do not know each other's keys.
+    let wrong_route = test::call_service(
+        &app,
+        fetch(
+            secrets_only,
+            secrets_secret,
+            format!("/v1/host/config/{KEY}"),
+        ),
+    )
+    .await;
+    assert_eq!(
+        wrong_route.status(),
+        403,
+        "not listed on this route's allow-list, which is checked first"
+    );
+
+    let anonymous = test::call_service(
+        &app,
+        test::TestRequest::get()
+            .uri(&format!("/v1/host/config/{CONFIG_KEY}"))
+            .to_request(),
+    )
+    .await;
+    assert_eq!(anonymous.status(), 401);
+
+    for client in [reader, secrets_only] {
         sqlx::query("DELETE FROM oauth_clients WHERE client_id = $1")
             .bind(client)
             .execute(&pool)

@@ -140,6 +140,7 @@ mod tests {
             backchannel_logout_uri: None,
             lifecycle_event_uri: None,
             allowed_secret_keys: Vec::new(),
+            allowed_config_keys: Vec::new(),
             allowed_scopes: Vec::new(),
             access_token_ttl_seconds: 600,
             refresh_token_ttl_seconds: 2_592_000,

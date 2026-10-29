@@ -343,6 +343,7 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "lifecycle_event_uri",
             "allowed_scopes",
             "allowed_secret_keys",
+            "allowed_config_keys",
             "allowed_grant_types",
             "token_endpoint_auth_method",
             "require_pkce",
@@ -694,6 +695,11 @@ pub struct OauthClientRow {
     /// restores as default-deny.
     #[serde(default)]
     pub allowed_secret_keys: Vec<String>,
+    /// BUNYIP-1011: the host-CONFIG keys, archived for the same reason and
+    /// defaulted for the same one: an archive written before the column
+    /// existed restores as default-deny.
+    #[serde(default)]
+    pub allowed_config_keys: Vec<String>,
     pub allowed_grant_types: Vec<String>,
     pub token_endpoint_auth_method: String,
     pub require_pkce: bool,
@@ -983,7 +989,7 @@ async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppErr
     Ok(sqlx::query_as::<_, OauthClientRow>(
         "SELECT client_id, client_secret_hash, client_type, name, redirect_uris, \
          post_logout_redirect_uris, backchannel_logout_uri, lifecycle_event_uri, \
-         allowed_scopes, allowed_secret_keys, allowed_grant_types, \
+         allowed_scopes, allowed_secret_keys, allowed_config_keys, allowed_grant_types, \
          token_endpoint_auth_method, require_pkce, \
          access_token_ttl_seconds, refresh_token_ttl_seconds, refresh_idle_ttl_seconds, \
          audience, dpop_bound, disabled_at, tenant_claim_name, first_party, logo_uri \
@@ -2319,12 +2325,13 @@ async fn write_oauth_clients(
         sqlx::query(
             "INSERT INTO oauth_clients (client_id, client_secret_hash, client_type, name, \
              redirect_uris, post_logout_redirect_uris, backchannel_logout_uri, \
-             lifecycle_event_uri, allowed_scopes, allowed_secret_keys, allowed_grant_types, \
+             lifecycle_event_uri, allowed_scopes, allowed_secret_keys, allowed_config_keys, \
+             allowed_grant_types, \
              token_endpoint_auth_method, require_pkce, access_token_ttl_seconds, \
              refresh_token_ttl_seconds, refresh_idle_ttl_seconds, audience, dpop_bound, \
              disabled_at, tenant_claim_name, first_party, logo_uri, created_at, created_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-             $18, $19, $20, $21, $22, NOW(), $23) \
+             $18, $19, $20, $21, $22, $23, NOW(), $24) \
              ON CONFLICT (client_id) DO UPDATE SET \
              client_secret_hash = EXCLUDED.client_secret_hash, \
              client_type = EXCLUDED.client_type, name = EXCLUDED.name, \
@@ -2334,6 +2341,7 @@ async fn write_oauth_clients(
              lifecycle_event_uri = EXCLUDED.lifecycle_event_uri, \
              allowed_scopes = EXCLUDED.allowed_scopes, \
              allowed_secret_keys = EXCLUDED.allowed_secret_keys, \
+             allowed_config_keys = EXCLUDED.allowed_config_keys, \
              allowed_grant_types = EXCLUDED.allowed_grant_types, \
              token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method, \
              require_pkce = EXCLUDED.require_pkce, \
@@ -2355,6 +2363,7 @@ async fn write_oauth_clients(
         .bind(&client.lifecycle_event_uri)
         .bind(&client.allowed_scopes)
         .bind(&client.allowed_secret_keys)
+        .bind(&client.allowed_config_keys)
         .bind(&client.allowed_grant_types)
         .bind(&client.token_endpoint_auth_method)
         .bind(client.require_pkce)
