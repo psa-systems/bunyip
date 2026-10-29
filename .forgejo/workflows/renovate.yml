@@ -34,7 +34,7 @@ jobs:
     # will again flag `psa-systems/common` as a bare `github-digest`
     # lookup on the dashboard; accepted trade-off until the cross-repo
     # `vars.*` propagation gap is fixed upstream in `psa-systems/common`.
-    uses: psa-systems/common/.forgejo/workflows/renovate-reusable.yml@1f4d449a32d694f229b112a3f6a651534660cf55  # main; see comment above for the URL-form regression
+    uses: psa-systems/common/.forgejo/workflows/renovate-reusable.yml@6b78b2c6c49402ee6178c82233ed3e25817f6572  # main; see comment above for the URL-form regression
     with:
       target_repository: ${{ github.repository }}
     secrets:
