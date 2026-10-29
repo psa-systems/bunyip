@@ -345,6 +345,12 @@ jobs:
               mkdir ~/.cargo/bin
               ^tar -xzf $tmp -C ~/.cargo/bin cargo-binstall
               rm $tmp
+              # Prove the extracted binary is actually callable through cargo,
+              # so a silent fault (tar member mismatch, non-executable mode,
+              # mangled download) fails the step here instead of handing a
+              # fresh runner to the next step's compile-cargo-audit fallback
+              # that exhausts /tmp.
+              ^cargo binstall --version
           } else {
               print "cargo-binstall is already on PATH; skipping download"
           }
