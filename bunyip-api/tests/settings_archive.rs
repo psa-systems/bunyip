@@ -171,6 +171,13 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
     .execute(&pool)
     .await
     .expect("add an extra feature toggle");
+    sqlx::query(
+        "UPDATE mirzam_config SET base_url = 'https://changed.example.test', \
+         updates_list = 'changed' WHERE id = 1",
+    )
+    .execute(&pool)
+    .await
+    .expect("change the Mirzam settings");
 
     let reopened = settings_archive::open(&bytes, STRONG_PASSPHRASE)
         .await
@@ -237,6 +244,21 @@ async fn a_round_trip_restores_deletions_and_removes_additions() {
         .await,
         0,
         "the extra feature toggle survived a replace import"
+    );
+
+    let mirzam: (String, String, String) =
+        sqlx::query_as("SELECT base_url, updates_list, notices_list FROM mirzam_config")
+            .fetch_one(&pool)
+            .await
+            .expect("read the Mirzam settings");
+    assert_eq!(
+        mirzam,
+        (
+            "https://news.example.test".to_string(),
+            "product-updates".to_string(),
+            "notices".to_string()
+        ),
+        "the Mirzam settings were not restored"
     );
 
     // Idempotence: the second run is a no-op, which is what makes re-running a
@@ -353,6 +375,16 @@ async fn seed_fixture(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("seed a feature toggle");
+
+    // BUNYIP-997: the Mirzam settings, switched off so the archive needs no
+    // token to be a legal configuration.
+    sqlx::query(
+        "UPDATE mirzam_config SET enabled = FALSE, base_url = 'https://news.example.test', \
+         updates_list = 'product-updates', notices_list = 'notices' WHERE id = 1",
+    )
+    .execute(pool)
+    .await
+    .expect("seed the Mirzam settings");
 
     // A freshly-migrated `tier_config` has every tier visible with no price
     // mapped, which is exactly the state `visible_without_price_error` refuses.

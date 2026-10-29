@@ -120,6 +120,8 @@ The governed set is exactly the secrets with more than one possible provider:
 | `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`     | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY`     |
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
+| `MIRZAM_API_TOKEN`      | `mirzam_config.api_token`      | `MIRZAM_API_TOKEN_FILE`      | `<path>/MIRZAM_API_TOKEN`      |
+| `MOKOSH_GOOGLE_CLIENT_SECRET` | `mokosh_config.google_client_secret` | `MOKOSH_GOOGLE_CLIENT_SECRET_FILE` | `<path>/MOKOSH_GOOGLE_CLIENT_SECRET` |
 
 The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
@@ -406,7 +408,8 @@ Every variable below has a working default; set it only to tune the deployment.
   `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_MAILBOX`, `SUPPORT_IMAP_ENABLED`,
   `SUPPORT_IMAP_POLL_SECS`.
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only as `{NAME}_FILE`): `SMTP_PASSWORD`,
-  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`.
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`,
+  `MOKOSH_GOOGLE_CLIENT_SECRET`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
@@ -485,7 +488,7 @@ this repository.
 
 | Variable                                                                               | Consequence of the gap                                                                       |
 |----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`, `MOKOSH_GOOGLE_CLIENT_SECRET` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
 | `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |
@@ -570,6 +573,7 @@ committed code.
 | `tagline`                                                    | the hero caption, the footer line and the bunyip-web startup banner                                                 |
 | `meta_description`                                           | `<meta name="description">` and `og:description`                                                                    |
 | `og_image_url`                                               | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                                  |
+| `newsletter_url`                                             | the landing newsletter signup posts here: a Mirzam list's form address, absolute `http(s)://`; blank hides it       |
 | `theme_css`                                                  | CSS custom-property declarations emitted into `:root` (the brand ramp). No `<` or `>`; 4096 characters              |
 | `theme_color_light`, `theme_color_dark`                      | the two `<meta name="theme-color">` values (browser chrome). Hex colours (`#rgb`, `#rrggbb`, `#rrggbbaa`)           |
 | `mark_updated_at`, `favicon_updated_at`, `mascot_updated_at` | version markers for the three image slots. NULL means the slot is unset                                             |
@@ -623,6 +627,72 @@ SMTP tuning (BUNYIP-507), so it stays environment-only alongside the base URL an
 
 The **Source** the page shows is the highest-priority provider holding any of this section's keys, so it can now read
 `file` as well as `database` or `environment`. Run `bunyip-api config-status` for the per-key answer.
+
+### Mirzam (`mirzam_config`, admin page: Mirzam)
+
+Singleton row (BUNYIP-997): `enabled`, `base_url` (the Mirzam site, e.g. `https://news.psa.systems`, stored without a
+trailing `/`), `updates_list` and `notices_list` (the slugs of the product-updates `newsletter` list and the required
+account `notices` list). A save replaces all four; a blank address or slug is allowed only while the integration is
+switched off, and switching it on also needs the API token. Slugs follow Mirzam's own rule: lowercase letters and digits,
+words joined by single dashes, at most 64 characters. These columns have no file or environment provider.
+
+The API token is the governed secret `MIRZAM_API_TOKEN` (a Mirzam read-and-write token, made on Mirzam's API page), so it
+follows `SECRETS_STORAGE` like the SMTP password: written to the declared provider, never sent back to the browser, and
+read-only on the page in `environment` mode, where a typed token answers 409. Saves are audited
+(`admin_mirzam_config_updated`, recording whether the token changed and to which provider, never the token).
+
+**Check connection** (`POST /v1/admin/mirzam/check`) reads `GET {base_url}/api/v1/lists/{slug}` for both saved slugs
+with the saved token as a bearer token (10 second timeout, redirects reported rather than followed) and reports each
+list's name and kind, or what is wrong: an unreachable address, a refused token (`401` / `403`), an unknown slug
+(`404`), or a list of the wrong kind (the product-updates list must be `newsletter`, the notices list `notices`). The
+System Status page lists the integration as Unconfigured while it is switched off and as Failing when it is on with the
+address, a slug or the token missing, or when the last sync call failed.
+
+**Keeping account holders on the lists** (BUNYIP-998, `bunyip_domain::services::mirzam_sync`). While the integration is
+on and complete (address, both slugs, token), bunyip mirrors three account events onto the two lists:
+
+| Event in bunyip | Calls to Mirzam |
+|---|---|
+| Email verified (the verify link, a magic-link sign-in, an accepted admin invite, an admin force-verify; only the unverified-to-verified change) | `POST /api/v1/subscribers` for each list, with `consent: "recorded"`, `consent_note: "Account holder"` and the account's first and last name. The product-updates add sends `keep_unsubscribed: true`; the notices add leaves it out (see below). `201` and `409` are success. |
+| Account reactivated (an admin reactivates a deactivated or deleted account whose address is verified) | The same two adds as on verification. |
+| Email changed (a confirmed change, or an admin correction, of a verified address) | `PATCH /api/v1/subscribers/{old}` with `{"email": new}`. On `409` (Mirzam has the new address already) the new address is added to both lists and the old one unsubscribed from both; on `404` (Mirzam never had the old one) the new one is added. An admin correction that leaves the account unverified unsubscribes the old address instead, and one that verifies an unverified account adds the new one. |
+| Account deleted (self-delete, admin delete, admin deactivate, the non-production e2e purge and reaper) | `POST /api/v1/subscribers/{address}/unsubscribe` for each list. `200`, `409` and `404` are success. Nothing is erased. |
+
+Deactivation removes the account from both lists; reactivation rejoins the notices list, and rejoins product updates only
+if the person had not left it themselves. The two lists differ on purpose. Nobody leaves the notices list by their own
+choice (Mirzam's preference centre never offers it and its unsubscribe links refuse it), so an unsubscribed notices
+membership can only be bunyip's own removal of a former address or account: every notices add leaves `keep_unsubscribed`
+out, and Mirzam takes it as new consent and re-confirms the address. On product updates an administrator's removal cannot
+be told apart from the reader's own opt-out, so every product-updates add sends `keep_unsubscribed: true` and an
+unsubscribed address stays unsubscribed.
+
+An address that was never verified is never sent. Every call runs in a spawned task, so a Mirzam outage never fails or
+slows the request that caused it: one attempt plus a retry after 1 s and after 4 s when the failure is transient (no
+answer, `408`, `429`, `5xx`), each request with the 10 second timeout and no redirects followed. A call that runs out of
+attempts is logged at `warn` with the user id and stored in `mirzam_config.last_error` / `last_error_at`: the operation,
+the list, the user id and Mirzam's status and message, never the token or the address. The admin Mirzam page shows it
+under Sync, the System Status page reports the integration as Failing, and the next call that succeeds clears it. These
+two columns are runtime state, left out of the settings archive.
+
+**Backfilling existing accounts** (BUNYIP-999, `bunyip_domain::services::mirzam_backfill`). The events above only
+cover accounts that change after the integration is switched on. Once, on the day it is switched on and the connection
+check passes, put every account that already exists on the two lists:
+
+```nushell
+docker compose exec api /app/bunyip-api mirzam-backfill
+```
+
+It walks every live account with a verified address (never an unverified or a deactivated one) and makes the "email
+verified" calls for each, so product updates keep `keep_unsubscribed: true` and nobody who left it is put back. Calls
+are sequential, one account every 250 ms (about 8 requests a second, under Mirzam's 600 a minute per token), each with
+the retries above. It prints one count per account: `added` (newly put on at least one list), `already on` (on both
+already), `left alone (unsubscribed)` (had left product updates, which stays so) and `failed` (a call ran out of
+attempts), followed by one line per failed call naming the list and the user id, never the address or the token. A
+failure does not stop the run; the command exits non-zero when any account failed, or without calling Mirzam when the
+integration is switched off, incomplete, or has no `MIRZAM_API_TOKEN`. It is safe to run again: a second run reports
+everyone as already on or left alone and adds nothing, so after fixing the cause of a failure, re-run it as is. The
+backfill does not write `mirzam_config.last_error`. `left alone` comes from Mirzam's `409` code `unsubscribed` (Mirzam
+v0.38.0 and later); against an older Mirzam it falls back to the wording of the message.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
