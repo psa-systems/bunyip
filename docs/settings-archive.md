@@ -146,7 +146,7 @@ Behind `--include-oauth-clients`:
 
 | Section | Notes |
 |---------|-------|
-| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` is archived too (BUNYIP-983): a restored deployment whose calling apps could read no host secret would need every allow-list set again by hand. |
+| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` and `allowed_config_keys` are archived too (BUNYIP-983, BUNYIP-1011): a restored deployment whose calling apps could read no host secret or host fact would need every allow-list set again by hand. |
 
 ## What is NOT archived
 
