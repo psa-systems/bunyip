@@ -228,6 +228,11 @@ since = "v0.15.0"
 required = false
 
 [[variable]]
+name = "DRILLMARK_BACKCHANNEL_LOGOUT_URI"
+since = "v0.22.0"
+required = false
+
+[[variable]]
 name = "DRILLMARK_POST_LOGOUT_REDIRECT_URIS"
 since = "v0.15.0"
 required = false
@@ -375,6 +380,11 @@ required = false
 [[variable]]
 name = "MOKOSH_APPS_AUDIENCE"
 since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI"
+since = "v0.22.0"
 required = false
 
 [[variable]]

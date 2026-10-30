@@ -35,9 +35,18 @@ secrets below, which are `{NAME}_FILE`-only and are read only when `SECRETS_STOR
 
 Configuration changes in the last 5 releases, newest first, rendered by `just config-docs` from `crates/bunyip-domain/src/config.rs` and `crates/bunyip-domain/config/variables.toml` (edit those, not this section). **Breaking: won't start** marks a change after which the restart fails until the operator acts; apply it before restarting. **Breaking: feature off** marks a change after which the server runs but the named feature stops working or changes until the operator acts; review it before restarting. Both name the operator action and the issue that introduced them. An unmarked entry needs no action unless you relied on the old behavior. Upgrading across more releases than this? Run `just config-since <running version>`.
 
+<a id="release-v0-22-0"></a>
+
+### Unreleased (v0.22.0)
+
+#### Added
+
+- [`DRILLMARK_BACKCHANNEL_LOGOUT_URI`](#var-drillmark-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
+- [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
+
 <a id="release-v0-21-0"></a>
 
-### Unreleased (v0.21.0)
+### v0.21.0
 
 #### Added
 
@@ -68,12 +77,6 @@ No configuration changes.
 <a id="release-v0-18-1"></a>
 
 ### v0.18.1
-
-No configuration changes.
-
-<a id="release-v0-18-0"></a>
-
-### v0.18.0
 
 No configuration changes.
 
@@ -894,6 +897,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-download-concurrency-per-user"></a>`DOWNLOAD_CONCURRENCY_PER_USER` | no | v0.2.1 | Defaulted |
 | <a id="var-download-daily-limit-per-user"></a>`DOWNLOAD_DAILY_LIMIT_PER_USER` | no | v0.2.1 | Defaulted |
 | <a id="var-drillmark-audience"></a>`DRILLMARK_AUDIENCE` | no | v0.15.0 | Feature-gating |
+| <a id="var-drillmark-backchannel-logout-uri"></a>`DRILLMARK_BACKCHANNEL_LOGOUT_URI` | no | v0.22.0 | Feature-gating |
 | <a id="var-drillmark-post-logout-redirect-uris"></a>`DRILLMARK_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-drillmark-provider-status-url"></a>`DRILLMARK_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-drillmark-redirect-uris"></a>`DRILLMARK_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
@@ -924,6 +928,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-mailer-webhook-secret"></a>`MAILER_WEBHOOK_SECRET` | no | v0.17.0 | Feature-gating |
 | <a id="var-mirzam-api-token"></a>`MIRZAM_API_TOKEN` | no | v0.21.0 | Defaulted |
 | <a id="var-mokosh-apps-audience"></a>`MOKOSH_APPS_AUDIENCE` | no | v0.15.0 | Feature-gating |
+| <a id="var-mokosh-apps-backchannel-logout-uri"></a>`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI` | no | v0.22.0 | Feature-gating |
 | <a id="var-mokosh-apps-post-logout-redirect-uris"></a>`MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-mokosh-apps-redirect-uris"></a>`MOKOSH_APPS_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-mokosh-backup-api-url"></a>`MOKOSH_BACKUP_API_URL` | no | v0.15.0 | Feature-gating |
