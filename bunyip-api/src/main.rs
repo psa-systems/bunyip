@@ -326,6 +326,7 @@ async fn main() -> anyhow::Result<()> {
         "MOKOSH_APPS_REDIRECT_URIS",
         "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
         "MOKOSH_APPS_AUDIENCE",
+        "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
     upsert_spa_oidc_client(
@@ -335,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
         "DRILLMARK_REDIRECT_URIS",
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "DRILLMARK_AUDIENCE",
+        "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
 
@@ -1865,6 +1867,7 @@ async fn upsert_spa_oidc_client(
     redirect_uris_var: &str,
     post_logout_var: &str,
     audience_var: &str,
+    backchannel_logout_var: &str,
 ) -> anyhow::Result<()> {
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
@@ -1875,6 +1878,10 @@ async fn upsert_spa_oidc_client(
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
     let post_logout = secret_env(post_logout_var).unwrap_or_default();
+    // BUNYIP-858: an unset back-channel logout URI writes NULL so a wrongly
+    // configured environment sends nothing rather than inheriting whatever
+    // the migration seeded. The non-empty case is upserted as the string.
+    let backchannel_logout = secret_env(backchannel_logout_var).filter(|v| !v.is_empty());
 
     let split_csv = |s: &str| -> Vec<String> {
         s.split(',')
@@ -1893,19 +1900,22 @@ async fn upsert_spa_oidc_client(
             redirect_uris, post_logout_redirect_uris,
             allowed_scopes, allowed_grant_types,
             token_endpoint_auth_method, require_pkce,
-            audience, access_token_ttl_seconds
+            audience, access_token_ttl_seconds,
+            backchannel_logout_uri
         ) VALUES (
             $1::uuid, 'public', $2,
             $3, $4,
             ARRAY['openid', 'email', 'offline_access'],
             ARRAY['authorization_code', 'refresh_token'],
             'none', TRUE,
-            $5, 600
+            $5, 600,
+            $6
         )
         ON CONFLICT (client_id) DO UPDATE SET
             redirect_uris = EXCLUDED.redirect_uris,
             post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
-            audience = EXCLUDED.audience
+            audience = EXCLUDED.audience,
+            backchannel_logout_uri = EXCLUDED.backchannel_logout_uri
         "#,
     )
     .bind(client_id)
@@ -1913,6 +1923,7 @@ async fn upsert_spa_oidc_client(
     .bind(&redirect_list)
     .bind(&post_logout_list)
     .bind(&audience)
+    .bind(backchannel_logout.as_deref())
     .execute(pool)
     .await?;
 
@@ -1920,6 +1931,7 @@ async fn upsert_spa_oidc_client(
         client = name,
         redirect_uris = ?redirect_list,
         audience = %audience,
+        backchannel_logout_uri = ?backchannel_logout,
         "SPA OIDC client registered from environment"
     );
 
