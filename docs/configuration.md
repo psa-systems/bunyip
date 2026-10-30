@@ -431,9 +431,11 @@ logged at boot, one `WARN` per ignored provider, which is the stale-copy case wo
 | `MOKOSH_APPS_REDIRECT_URIS`             | -                           | the mokosh-apps OIDC client keeps the migration-seeded URIs         |
 | `MOKOSH_APPS_AUDIENCE`                  | -                           | the mokosh-apps OIDC client is not reconciled                       |
 | `MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS` | `MOKOSH_APPS_REDIRECT_URIS` | its post-logout redirect list is reconciled empty                   |
+| `MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`    | `MOKOSH_APPS_REDIRECT_URIS` | its back-channel logout URI stays empty, so bunyip sends no logout token on sign-out and the mokosh session outlives the bunyip session for up to the access-token TTL (BUNYIP-858) |
 | `DRILLMARK_REDIRECT_URIS`               | -                           | the drillmark OIDC client keeps the migration-seeded URIs           |
 | `DRILLMARK_AUDIENCE`                    | -                           | the drillmark OIDC client is not reconciled                         |
 | `DRILLMARK_POST_LOGOUT_REDIRECT_URIS`   | `DRILLMARK_REDIRECT_URIS`   | its post-logout redirect list is reconciled empty                   |
+| `DRILLMARK_BACKCHANNEL_LOGOUT_URI`      | `DRILLMARK_REDIRECT_URIS`   | its back-channel logout URI stays empty, so bunyip sends no logout token on sign-out (BUNYIP-858) |
 | `LETS_CHAT_REDIRECT_URIS`               | -                           | the lets-chat OIDC client keeps the migration-seeded URIs           |
 | `LETS_CHAT_AUDIENCE`                    | -                           | the lets-chat OIDC client is not reconciled                         |
 | `LETS_CHAT_POST_LOGOUT_REDIRECT_URIS`   | `LETS_CHAT_REDIRECT_URIS`   | its post-logout redirect list is reconciled empty                   |
