@@ -113,7 +113,7 @@ COPY --from=builder /build/target/release/bunyip-api /bunyip-api
 # ---- Stage 2: runtime -------------------------------------------------------
 # alpine 3.23 matches the `postgres:18.2-alpine3.23` pin in compose.yml, so the
 # repo validates one Alpine release rather than three (BUNYIP-426 F10).
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40 AS runtime
+FROM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS runtime
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown

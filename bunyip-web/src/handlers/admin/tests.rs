@@ -20,6 +20,7 @@ use super::feature_toggles::*;
 use super::feedback::*;
 use super::ip_bans::*;
 use super::memberships::*;
+use super::mirzam::*;
 use super::rate_limits::*;
 use super::stripe::*;
 use super::tier_settings::*;
@@ -3277,6 +3278,480 @@ mod toggle_switch_field_label_tests {
         assert!(
             APPLICATIONS_SRC.contains(r#"label for="is_hosted""#),
             "the hosted-app toggle's companion text must be a label for=\"is_hosted\", not a bare span"
+        );
+    }
+}
+
+/// BUNYIP-997: the Mirzam integration page.
+#[cfg(test)]
+mod mirzam_tests {
+    use super::*;
+    use crate::api::ApiError;
+
+    fn cfg(editable: bool, has_token: bool) -> MirzamConfigResponse {
+        serde_json::from_value(json!({
+            "enabled": true,
+            "base_url": "https://news.example.com",
+            "updates_list": "product-updates",
+            "notices_list": "notices",
+            "has_api_token": has_token,
+            "api_token_editable": editable,
+            "secrets_storage": if editable { "database" } else { "environment" },
+        }))
+        .unwrap()
+    }
+
+    fn form(token: &str) -> MirzamForm {
+        MirzamForm {
+            enabled: "true".into(),
+            base_url: " https://typed.example.com ".into(),
+            updates_list: " product-updates ".into(),
+            notices_list: "notices".into(),
+            api_token: token.into(),
+        }
+    }
+
+    fn render(c: &MirzamConfigResponse) -> String {
+        let values = MirzamValues::from_config(c);
+        mirzam_content(Ok(c), &values, None).into_string()
+    }
+
+    /// The token is write-only: a set token renders as a fixed-length mask and
+    /// an unset one as "Not set"; no value reaches the page either way.
+    #[test]
+    fn the_api_token_is_a_fixed_mask_never_the_secret() {
+        let html = render(&cfg(true, true));
+        assert!(html.contains(r#"placeholder="••••••••""#), "{html}");
+        assert!(html.contains(r#"data-pw-toggle="api_token""#), "{html}");
+        let html = render(&cfg(true, false));
+        assert!(html.contains(r#"placeholder="Not set""#), "{html}");
+    }
+
+    /// BUNYIP-998: the last failed sync call shows with when it failed, and
+    /// the block says so plainly when none is recorded.
+    #[test]
+    fn the_last_sync_failure_shows_until_a_call_succeeds() {
+        let mut c = cfg(true, true);
+        let html = render(&c);
+        assert!(html.contains("No failed calls."), "{html}");
+
+        c.last_error =
+            Some("Adding user 1 to list notices failed: Mirzam answered 503.".to_string());
+        c.last_error_at = Some(chrono::Utc::now().to_rfc3339());
+        let html = render(&c);
+        assert!(
+            html.contains("The last call to Mirzam failed just now."),
+            "{html}"
+        );
+        assert!(html.contains("Mirzam answered 503."), "{html}");
+        assert!(!html.contains("No failed calls."), "{html}");
+    }
+
+    /// In `SECRETS_STORAGE=environment` the token field is read-only, has no
+    /// reveal toggle, and names the file to edit.
+    #[test]
+    fn the_api_token_is_read_only_in_environment_mode() {
+        let html = render(&cfg(false, true));
+        assert!(
+            html.contains("readonly") && html.contains("disabled"),
+            "{html}"
+        );
+        assert!(!html.contains(r#"data-pw-toggle="api_token""#), "{html}");
+        assert!(html.contains("MIRZAM_API_TOKEN_FILE"), "{html}");
+        assert!(html.contains("./secrets/mirzam_api_token"), "{html}");
+    }
+
+    #[test]
+    fn the_page_has_every_setting_and_a_separate_check_form() {
+        let html = render(&cfg(true, true));
+        for field in [
+            r#"name="enabled""#,
+            r#"name="base_url""#,
+            r#"name="updates_list""#,
+            r#"name="notices_list""#,
+            r#"name="api_token""#,
+        ] {
+            assert!(html.contains(field), "{field} missing: {html}");
+        }
+        assert!(html.contains(r#"value="https://news.example.com""#));
+        assert!(html.contains(r#"action="/admin/mirzam/check""#));
+        assert!(html.contains("Check connection"));
+        assert!(
+            html.matches("<form").count() >= 2,
+            "the check is its own form, separate from Save"
+        );
+        assert!(
+            html.contains("<h1") && html.contains(">Mirzam</h1>"),
+            "{html}"
+        );
+    }
+
+    /// The four settings are always sent (the API replaces them whole); the
+    /// token only when typed, since blank means "keep the stored one".
+    #[test]
+    fn the_update_body_sends_every_setting_and_the_token_only_when_typed() {
+        let body = mirzam_update_body(&form(""));
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["base_url"], "https://typed.example.com");
+        assert_eq!(body["updates_list"], "product-updates");
+        assert_eq!(body["notices_list"], "notices");
+        assert!(body.get("api_token").is_none(), "{body}");
+
+        let body = mirzam_update_body(&form(" mzm_abc "));
+        assert_eq!(body["api_token"], "mzm_abc");
+
+        let mut off = form("");
+        off.enabled = String::new();
+        off.base_url = String::new();
+        let body = mirzam_update_body(&off);
+        assert_eq!(body["enabled"], false);
+        assert_eq!(
+            body["base_url"], "",
+            "a blank address is a deliberate clear"
+        );
+    }
+
+    #[test]
+    fn a_rejected_save_echoes_the_submitted_values_with_the_error_inside_the_form() {
+        let values = MirzamValues::from_form(&form("mzm_secret_typed"));
+        let html = mirzam_content(Ok(&cfg(true, true)), &values, Some("Must be an address."))
+            .into_string();
+        assert!(
+            html.contains(r#"value="https://typed.example.com""#),
+            "{html}"
+        );
+        assert!(
+            !html.contains("mzm_secret_typed"),
+            "the typed token is never echoed"
+        );
+        let form_at = html.find("<form").expect("settings form");
+        let error_at = html.find("Must be an address.").expect("inline error");
+        assert!(form_at < error_at, "the error renders inside the form");
+    }
+
+    #[test]
+    fn an_unreachable_api_renders_the_error_state() {
+        let e = ApiError {
+            status: 0,
+            code: "NETWORK".into(),
+            message: "connection refused".into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        let html = mirzam_content(Err(&e), &MirzamValues::default(), None).into_string();
+        assert!(html.contains("Could not reach the API to load the Mirzam settings."));
+        assert!(!html.contains(r#"name="base_url""#));
+    }
+
+    /// The page path with the toast params a check redirect carries, decoded,
+    /// in the order they appear.
+    fn toasts(location: &str) -> Vec<(String, String)> {
+        let (path, query) = location.split_once('?').expect("a toast query");
+        assert_eq!(path, "/admin/mirzam", "{location}");
+        url::form_urlencoded::parse(query.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect()
+    }
+
+    /// BUNYIP-1014: a save lands back on the page with the confirmation toast
+    /// the other admin pages show, rather than a silent reload.
+    #[test]
+    fn a_save_redirects_with_a_confirmation_toast() {
+        assert_eq!(
+            toasts(crate::handlers::admin::mirzam::SAVED),
+            vec![("toast_ok".to_string(), "Mirzam settings saved".to_string())]
+        );
+    }
+
+    /// BUNYIP-1014: one success toast for the lists that are right and one
+    /// error toast for the ones that are not, each line naming the list, its
+    /// slug and what was found or what is wrong.
+    #[test]
+    fn a_check_toasts_each_list_and_its_outcome() {
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": true,
+                 "name": "Product Updates", "kind": "newsletter",
+                 "message": "Found Product Updates (newsletter)."},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": "Mirzam refused the API token (401)"}
+            ]
+        }))
+        .unwrap();
+        // The reason had no full stop; the line gains one so a second line in
+        // the same toast does not run on from it.
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![
+                (
+                    "toast_ok".to_string(),
+                    "Product updates list (product-updates): Found Product Updates (newsletter)."
+                        .to_string()
+                ),
+                (
+                    "toast_err".to_string(),
+                    "Notices list (notices): Mirzam refused the API token (401).".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// Both lists right: one success toast carrying both, and no error toast.
+    #[test]
+    fn a_passing_check_is_one_success_toast_naming_both_lists() {
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": true,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": true,
+                 "message": "Found Product updates (newsletter)."},
+                {"list": "notices_list", "slug": "notices", "ok": true,
+                 "message": "Found Account notices (notices)."}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_ok".to_string(),
+                "Product updates list (product-updates): Found Product updates (newsletter).\nNotices list (notices): Found Account notices (notices)."
+                    .to_string()
+            )]
+        );
+    }
+
+    /// Lists that fail for the same reason share one line, so an unreachable
+    /// address is named once; a different reason gets its own line.
+    #[test]
+    fn lists_failing_for_the_same_reason_share_one_line() {
+        let unreachable = "Could not reach https://mirzam.invalid: Name or service not known";
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": false,
+                 "message": unreachable},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": unreachable}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_err".to_string(),
+                format!(
+                    "Product updates list (product-updates) and Notices list (notices): {unreachable}."
+                )
+            )]
+        );
+
+        let result: MirzamCheckResult = serde_json::from_value(json!({
+            "ok": false,
+            "lists": [
+                {"list": "updates_list", "slug": "product-updates", "ok": false,
+                 "message": "No list with this slug (404)."},
+                {"list": "notices_list", "slug": "notices", "ok": false,
+                 "message": "Mirzam refused the API token (401)."}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            toasts(&check_redirect(Ok(result))),
+            vec![(
+                "toast_err".to_string(),
+                "Product updates list (product-updates): No list with this slug (404).\nNotices list (notices): Mirzam refused the API token (401)."
+                    .to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn a_check_with_no_result_or_an_api_error_is_never_silent() {
+        let empty: MirzamCheckResult = serde_json::from_value(json!({})).unwrap();
+        assert!(!empty.ok);
+        let t = toasts(&check_redirect(Ok(empty)));
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].0, "toast_err", "{t:?}");
+
+        let e = ApiError {
+            status: 400,
+            code: "VALIDATION_ERROR".into(),
+            message: "No API token is set. Save one before checking the connection.".into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        let t = toasts(&check_redirect(Err(e)));
+        assert_eq!(t.len(), 1, "{t:?}");
+        assert_eq!(t[0].0, "toast_err", "{t:?}");
+        assert!(t[0].1.contains("No API token is set"), "{t:?}");
+    }
+}
+
+/// BUNYIP-983: the Mokosh host settings page.
+#[cfg(test)]
+mod mokosh_tests {
+    use super::*;
+    use crate::api::ApiError;
+
+    const CLIENT_ID: &str = "123456789012-abc123def456.apps.googleusercontent.com";
+
+    fn cfg(editable: bool, has_secret: bool) -> MokoshConfigResponse {
+        serde_json::from_value(json!({
+            "google_client_id": CLIENT_ID,
+            "has_google_client_secret": has_secret,
+            "google_client_secret_editable": editable,
+            "secrets_storage": if editable { "database" } else { "environment" },
+        }))
+        .unwrap()
+    }
+
+    fn render(c: &MokoshConfigResponse, confirm: Option<&str>) -> String {
+        let values = MokoshValues::from_config(c);
+        mokosh_content(Ok(c), &values, None, confirm).into_string()
+    }
+
+    /// The id is shown because it is public; the secret is write-only, a fixed
+    /// mask when set and "Not set" when not.
+    #[test]
+    fn the_id_is_shown_and_the_secret_is_a_fixed_mask() {
+        let html = render(&cfg(true, true), None);
+        assert!(html.contains(CLIENT_ID), "the id is public: {html}");
+        assert!(html.contains(r#"placeholder="••••••••""#), "{html}");
+        assert!(
+            html.contains(r#"data-pw-toggle="google_client_secret""#),
+            "{html}"
+        );
+        let html = render(&cfg(true, false), None);
+        assert!(html.contains(r#"placeholder="Not set""#), "{html}");
+    }
+
+    /// In `SECRETS_STORAGE=environment` the secret field is read-only, has no
+    /// reveal toggle, and names the file to edit.
+    #[test]
+    fn the_secret_is_read_only_in_environment_mode() {
+        let html = render(&cfg(false, true), None);
+        assert!(
+            html.contains("readonly") && html.contains("disabled"),
+            "{html}"
+        );
+        assert!(
+            !html.contains(r#"data-pw-toggle="google_client_secret""#),
+            "{html}"
+        );
+        assert!(html.contains("MOKOSH_GOOGLE_CLIENT_SECRET_FILE"), "{html}");
+        assert!(
+            html.contains("./secrets/mokosh_google_client_secret"),
+            "{html}"
+        );
+    }
+
+    /// BUNYIP-855 D10: the first save of a changed id comes back as a warning,
+    /// and the page then offers the same change with the confirmation set. The
+    /// hidden field appears only on that second pass, so an admin cannot
+    /// confirm a change they have not been warned about.
+    #[test]
+    fn a_changed_id_is_confirmed_on_the_page_and_not_before() {
+        let plain = render(&cfg(true, true), None);
+        assert!(
+            !plain.contains(r#"name="confirm_client_id_change""#),
+            "nothing to confirm yet: {plain}"
+        );
+        assert!(
+            plain.contains(">Save<") || plain.contains("Save"),
+            "{plain}"
+        );
+
+        let warned = render(
+            &cfg(true, true),
+            Some("Changing the client id stops Google contact sync for every Mokosh tenant."),
+        );
+        assert!(
+            warned.contains(r#"input type="hidden" name="confirm_client_id_change" value="true""#),
+            "{warned}"
+        );
+        assert!(warned.contains("Save anyway"), "{warned}");
+        assert!(
+            warned.contains("amber"),
+            "the warning is amber, not red: it has not failed yet: {warned}"
+        );
+    }
+
+    /// The warning is told apart from an ordinary 409 (the read-only provider
+    /// sends one too) by the instruction the API puts in it, and the sentence
+    /// the page shows drops that machine instruction.
+    #[test]
+    fn only_the_changed_id_conflict_offers_a_confirmation() {
+        let warning = ApiError {
+            status: 409,
+            code: "CONFLICT".into(),
+            message: "Changing the client id stops Google contact sync for every Mokosh tenant \
+                      until each one reconnects their Google account: their existing permission \
+                      was granted to the old client. Send the same change again with \
+                      confirm_client_id_change to go ahead."
+                .into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        assert!(is_client_id_warning(&warning));
+        let shown = warning_text(&warning);
+        assert!(shown.starts_with("Changing the client id stops"), "{shown}");
+        assert!(
+            !shown.contains("confirm_client_id_change"),
+            "the button is the instruction now: {shown}"
+        );
+
+        let read_only = ApiError {
+            status: 409,
+            code: "CONFLICT".into(),
+            message: "SECRETS_STORAGE=environment, so MOKOSH_GOOGLE_CLIENT_SECRET is owned by \
+                      the environment and cannot be changed here."
+                .into(),
+            retry_after: None,
+            request_id: None,
+            bucket: None,
+        };
+        assert!(
+            !is_client_id_warning(&read_only),
+            "a read-only provider is an error with nothing to confirm"
+        );
+    }
+
+    /// The id is always sent (the API replaces it whole, and a blank one is a
+    /// deliberate clear); the secret only when typed.
+    #[test]
+    fn the_update_body_sends_the_id_and_the_secret_only_when_typed() {
+        let form = |secret: &str, confirm: &str| MokoshForm {
+            google_client_id: format!("  {CLIENT_ID}  "),
+            google_client_secret: secret.into(),
+            confirm_client_id_change: confirm.into(),
+        };
+        let body = mokosh_update_body(&form("", ""));
+        assert_eq!(body["google_client_id"], CLIENT_ID, "trimmed: {body}");
+        assert_eq!(body["confirm_client_id_change"], false);
+        assert!(body.get("google_client_secret").is_none(), "{body}");
+
+        let body = mokosh_update_body(&form("  fixture-typed-secret  ", "true"));
+        assert_eq!(body["google_client_secret"], "fixture-typed-secret");
+        assert_eq!(body["confirm_client_id_change"], true);
+    }
+
+    /// BUNYIP-1014: a save lands back on the page with the confirmation toast
+    /// the other admin pages show, rather than a silent reload.
+    #[test]
+    fn a_save_redirects_with_a_confirmation_toast() {
+        let (path, query) = crate::handlers::admin::mokosh::SAVED
+            .split_once('?')
+            .expect("a toast query");
+        assert_eq!(path, "/admin/mokosh");
+        let params: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes())
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+        assert_eq!(
+            params,
+            vec![("toast_ok".to_string(), "Mokosh settings saved".to_string())]
         );
     }
 }

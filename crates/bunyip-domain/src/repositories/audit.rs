@@ -127,7 +127,10 @@ impl AuditLogRepository {
         end_date: Option<DateTime<Utc>>,
         search: Option<&str>,
     ) -> Result<(Vec<AuditLog>, i64), AppError> {
-        let offset = (page - 1) * per_page;
+        // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+        // BUNYIP-946 F14, so a page value large enough to overflow an i32
+        // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         // Build the same filter clause on both the page query and the count
         // query via QueryBuilder so every placeholder is actually bound (the

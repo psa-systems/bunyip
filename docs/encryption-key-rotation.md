@@ -8,9 +8,10 @@ Bunyip encrypts three kinds of secret in Postgres with ONE key,
 | `user_totp`     | `encrypted_secret` + the `pending_*` staged re-key columns  |
 | `stripe_config` | `secret_key`, `webhook_secret`                              |
 | `email_config`  | `smtp_password`, `imap_password`                            |
+| `mirzam_config` | `api_token`                                                 |
 
-The `stripe_config` and `email_config` columns are the `database` form of the
-four governed integration secrets. `SECRETS_STORAGE` decides whether bunyip
+The `stripe_config`, `email_config` and `mirzam_config` columns are the
+`database` form of the five governed integration secrets. `SECRETS_STORAGE` decides whether bunyip
 reads them at all (BUNYIP-542): under `environment` or `infisical` they are
 either empty or a leftover copy, which `bunyip-api secrets-status` reports and
 `secrets-purge --confirm` removes. `reencrypt-secrets` rewrites whatever is
@@ -49,8 +50,8 @@ Take a database backup first; the pass is operator-triggered precisely so you
 control when it happens.
 
 The admin API exposes the same pass per store: `GET /v1/admin/key-health`,
-`GET /v1/admin/key-rotation/{totp|stripe|email}/status` and
-`POST /v1/admin/key-rotation/{totp|stripe|email}/reencrypt`.
+`GET /v1/admin/key-rotation/{totp|stripe|email|mirzam}/status` and
+`POST /v1/admin/key-rotation/{totp|stripe|email|mirzam}/reencrypt`.
 
 ## Rotating to a new key
 
@@ -76,7 +77,7 @@ one shared by the Stripe and SMTP secrets. To collapse them:
 3. Replace the two secret files with one: `./secrets/app_encryption_key`. The
    compose file now mounts only that, as `APP_ENCRYPTION_KEY_FILE`.
 4. Restart the api and confirm `GET /v1/admin/key-health` reports `healthy` for
-   `totp`, `stripe` and `email` (rows still on a retired key read fine and are
+   `totp`, `stripe`, `email` and `mirzam` (rows still on a retired key read fine and are
    flagged `needs_reencrypt: true`).
 5. Run the re-encrypt pass, then clear `APP_ENCRYPTION_KEY_PREV` and restart.
 

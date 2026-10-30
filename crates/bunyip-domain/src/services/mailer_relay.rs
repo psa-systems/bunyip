@@ -208,11 +208,18 @@ mod tests {
         (MailerRelay::new(Arc::new(email), suppression), stub)
     }
 
+    // BUNYIP-863: `*.test` is a reserved TLD and is skipped before the
+    // transport, so these two "a message reaches the transport" tests use a
+    // real-shaped domain. The suppression tests below keep `customer.test`
+    // because `SuppressAll` short-circuits before the reserved-recipient
+    // check in `send_relay` runs.
+    const DELIVERABLE_RECIPIENT: &str = "member@customer.io";
+
     #[tokio::test]
     async fn a_relayed_message_reaches_the_transport_from_bunyips_sending_identity() {
         let (relay, stub) = relay_with(relay_config(), Arc::new(NoSuppression));
         let message = RelayMessage::new(
-            "member@customer.test",
+            DELIVERABLE_RECIPIENT,
             "Your ticket was updated",
             "Ticket 42 moved to In Progress.",
             None,
@@ -232,7 +239,7 @@ mod tests {
             1,
             "the envelope carries the one recipient"
         );
-        assert_eq!(envelope.to()[0].to_string(), "member@customer.test");
+        assert_eq!(envelope.to()[0].to_string(), DELIVERABLE_RECIPIENT);
         assert_eq!(
             envelope.from().map(|a| a.to_string()).as_deref(),
             Some("noreply@mail.a8n.systems")
@@ -249,7 +256,7 @@ mod tests {
     async fn an_html_body_is_relayed_as_the_alternative_part() {
         let (relay, stub) = relay_with(relay_config(), Arc::new(NoSuppression));
         let message = RelayMessage::new(
-            "member@customer.test",
+            DELIVERABLE_RECIPIENT,
             "Invoice ready",
             "Invoice 7 is ready.",
             Some("<p>Invoice 7 is ready.</p>"),
