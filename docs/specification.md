@@ -356,8 +356,7 @@ The full per-variable reference is `docs/configuration.md`.
   the development images (`cargo watch`).
 - `compose.dev.yml` and `compose.dev-sso.yml` are development variants.
 - `just` drives development; `just pre-commit` and `just check` are the gates. CI workflows are in
-  `.forgejo/workflows/`: `check`, `audit`, `build-api`, `build-web`, `create-release`, `release-images`, `e2e`,
-  `e2e-pr`, `renovate`.
+  `.forgejo/workflows/`: `check`, `audit`, `build-api`, `build-web`, `create-release`, `e2e`, `e2e-pr`, `renovate`.
 - Liveness: `GET /health` and `GET /v1/health` on the API, `GET /healthz` on the web server (no database dependency).
   `GET /version` reports the build version, revision and update status.
 - `GET /e2e-bootstrapped` returns `false` without querying when `ENVIRONMENT` is production.
