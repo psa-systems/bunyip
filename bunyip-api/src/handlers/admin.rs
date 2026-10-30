@@ -4325,7 +4325,10 @@ async fn check_email_key(
 }
 
 /// BUNYIP-997: the Mirzam API token's `database`-provider ciphertext.
-async fn check_mirzam_key(pool: &PgPool, keys: &EncryptionKeySet) -> Result<KeyHealthCheck, AppError> {
+async fn check_mirzam_key(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<KeyHealthCheck, AppError> {
     let row = MirzamConfigRepository::get(pool).await?;
     Ok(combine_key_health(vec![(
         "api_token".to_string(),
@@ -4340,7 +4343,10 @@ async fn check_mirzam_key(pool: &PgPool, keys: &EncryptionKeySet) -> Result<KeyH
 
 /// BUNYIP-983: the Mokosh Google client secret's `database`-provider
 /// ciphertext.
-async fn check_mokosh_key(pool: &PgPool, keys: &EncryptionKeySet) -> Result<KeyHealthCheck, AppError> {
+async fn check_mokosh_key(
+    pool: &PgPool,
+    keys: &EncryptionKeySet,
+) -> Result<KeyHealthCheck, AppError> {
     let row = MokoshConfigRepository::get(pool).await?;
     Ok(combine_key_health(vec![(
         "google_client_secret".to_string(),

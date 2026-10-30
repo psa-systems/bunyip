@@ -38,7 +38,10 @@ impl MokoshConfigRow {
     /// answer and the one an operator can act on.
     ///
     /// [`MirzamConfigRow::db_api_token`]: crate::models::mirzam::MirzamConfigRow::db_api_token
-    pub fn db_google_client_secret(&self, key_set: &crate::services::EncryptionKeySet) -> Option<String> {
+    pub fn db_google_client_secret(
+        &self,
+        key_set: &crate::services::EncryptionKeySet,
+    ) -> Option<String> {
         let (ciphertext, nonce) =
             match (&self.google_client_secret, &self.google_client_secret_nonce) {
                 (Some(ct), Some(nonce)) => (ct, nonce),
