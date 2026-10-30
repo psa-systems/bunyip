@@ -150,7 +150,7 @@ pub struct Config {
 pub enum SecretsProvider {
     /// The process environment, through `{NAME}_FILE` compose secrets.
     Environment,
-    /// The `email_config` / `stripe_config` rows, encrypted under
+    /// The `email_config` / `stripe_config` / `mirzam_config` rows, encrypted under
     /// `APP_ENCRYPTION_KEY`.
     Database,
     /// The Infisical folder at `INFISICAL_SECRET_PATH`.
@@ -221,15 +221,24 @@ pub enum GovernedSecret {
     StripeWebhookSecret,
     /// `email_config.imap_password` / `SUPPORT_IMAP_PASSWORD` (BUNYIP-571).
     SupportImapPassword,
+    /// `mirzam_config.api_token` / `MIRZAM_API_TOKEN` (BUNYIP-997).
+    MirzamApiToken,
+    /// `mokosh_config.google_client_secret` / `MOKOSH_GOOGLE_CLIENT_SECRET`
+    /// (BUNYIP-983). The secret half of the Google OAuth client bunyip serves
+    /// to a hosted Mokosh; the id half is public and lives on the same row as
+    /// an ordinary setting.
+    MokoshGoogleClientSecret,
 }
 
 impl GovernedSecret {
     /// Every governed secret, in report order.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 6] = [
         Self::SmtpPassword,
         Self::StripeSecretKey,
         Self::StripeWebhookSecret,
         Self::SupportImapPassword,
+        Self::MirzamApiToken,
+        Self::MokoshGoogleClientSecret,
     ];
 
     /// The variable name in the `environment` provider, which is also the key
@@ -240,6 +249,8 @@ impl GovernedSecret {
             Self::StripeSecretKey => "STRIPE_SECRET_KEY",
             Self::StripeWebhookSecret => "STRIPE_WEBHOOK_SECRET",
             Self::SupportImapPassword => "SUPPORT_IMAP_PASSWORD",
+            Self::MirzamApiToken => "MIRZAM_API_TOKEN",
+            Self::MokoshGoogleClientSecret => "MOKOSH_GOOGLE_CLIENT_SECRET",
         }
     }
 
@@ -261,6 +272,14 @@ impl GovernedSecret {
                 "support-queue ingestion: replies to the system mailbox are not polled into \
                  support tickets"
             }
+            Self::MirzamApiToken => {
+                "the Mirzam integration: account holders are not kept on the product-updates \
+                 and notices lists, and the connection check is refused"
+            }
+            Self::MokoshGoogleClientSecret => {
+                "Google contact sync on every hosted Mokosh: the host-secrets route answers \
+                 \"not set\", so a Mokosh tenant cannot connect their Google account"
+            }
         }
     }
 
@@ -272,6 +291,8 @@ impl GovernedSecret {
             Self::StripeSecretKey => "secret_key",
             Self::StripeWebhookSecret => "webhook_secret",
             Self::SupportImapPassword => "imap_password",
+            Self::MirzamApiToken => "api_token",
+            Self::MokoshGoogleClientSecret => "google_client_secret",
         }
     }
 
@@ -283,6 +304,8 @@ impl GovernedSecret {
             Self::StripeSecretKey => "stripe_secret_key",
             Self::StripeWebhookSecret => "stripe_webhook_secret",
             Self::SupportImapPassword => "support_imap_password",
+            Self::MirzamApiToken => "mirzam_api_token",
+            Self::MokoshGoogleClientSecret => "mokosh_google_client_secret",
         }
     }
 
@@ -2085,6 +2108,16 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     )
     .gated_by("MOKOSH_APPS_REDIRECT_URIS"),
     EnvVarSpec::gating(
+        "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
+        "the mokosh-apps client is reconciled with no back-channel logout URI, so bunyip sends no \
+         logout token on sign-out and the mokosh session outlives the bunyip session for up to \
+         the access-token TTL (BUNYIP-858)",
+        "Set it to this deployment's \
+         https://<mokosh-api-host>/api/v1/bunyip/oauth2/backchannel-logout endpoint, or leave \
+         unset to send no logout token.",
+    )
+    .gated_by("MOKOSH_APPS_REDIRECT_URIS"),
+    EnvVarSpec::gating(
         "DRILLMARK_REDIRECT_URIS",
         "the drillmark SPA OIDC client is not reconciled from the environment, so it keeps the \
          redirect URIs the migration seeded (BUNYIP-57)",
@@ -2099,6 +2132,15 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "the drillmark client is reconciled with an empty post-logout redirect list",
         "Set it to the comma-separated post-logout redirect URIs.",
+    )
+    .gated_by("DRILLMARK_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
+        "the drillmark client is reconciled with no back-channel logout URI, so bunyip sends no \
+         logout token on sign-out (BUNYIP-858)",
+        "Set it to this deployment's \
+         https://<drillmark-host>/api/v1/bunyip/oauth2/backchannel-logout endpoint, or leave \
+         unset to send no logout token.",
     )
     .gated_by("DRILLMARK_REDIRECT_URIS"),
     EnvVarSpec::gating(
@@ -2271,6 +2313,16 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "SUPPORT_IMAP_PASSWORD",
         "inbound IMAP password; governed by SECRETS_STORAGE, read only as \
          SUPPORT_IMAP_PASSWORD_FILE",
+    ),
+    EnvVarSpec::defaulted(
+        "MIRZAM_API_TOKEN",
+        "Mirzam API write token; governed by SECRETS_STORAGE, read only as \
+         MIRZAM_API_TOKEN_FILE",
+    ),
+    EnvVarSpec::defaulted(
+        "MOKOSH_GOOGLE_CLIENT_SECRET",
+        "Google OAuth client secret the host-secrets route serves to a hosted Mokosh; \
+         governed by SECRETS_STORAGE, read only as MOKOSH_GOOGLE_CLIENT_SECRET_FILE",
     ),
     EnvVarSpec::defaulted("AUTO_BAN_ENABLED", "auto-ban switch"),
     EnvVarSpec::defaulted("AUTO_BAN_THRESHOLD", "auto-ban failure threshold"),

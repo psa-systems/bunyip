@@ -392,7 +392,7 @@ pub async fn load_client(pool: &PgPool, client_id: Uuid) -> Result<Option<OAuthC
             id, client_id, client_secret_hash, client_type, name, logo_uri,
             redirect_uris, post_logout_redirect_uris,
             backchannel_logout_uri, lifecycle_event_uri,
-            allowed_scopes,
+            allowed_scopes, allowed_secret_keys, allowed_config_keys,
             access_token_ttl_seconds, refresh_token_ttl_seconds,
             refresh_idle_ttl_seconds, audience,
             created_at, disabled_at,
@@ -1588,6 +1588,21 @@ pub struct OAuthClient {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
+    /// BUNYIP-983: host-secret keys this registration may read at
+    /// `GET /v1/host/secrets/{KEY}`. Empty for every registration that does
+    /// not name one, which is the default-deny the route depends on.
+    ///
+    /// Deliberately not `allowed_scopes`: a scope is what a USER consents to
+    /// on the authorize screen, this is what a MACHINE may read with its own
+    /// credential, and sharing one column would let a consent screen widen a
+    /// secret entitlement.
+    pub allowed_secret_keys: Vec<String>,
+    /// BUNYIP-1011: host-CONFIG keys this registration may read at
+    /// `GET /v1/host/config/{KEY}`. Separate from
+    /// [`Self::allowed_secret_keys`] because BUNYIP-855 D9 settled that the
+    /// two credentials stay apart: reading a non-secret suite fact does not
+    /// entitle a caller to a secret.
+    pub allowed_config_keys: Vec<String>,
     pub access_token_ttl_seconds: i32,
     pub refresh_token_ttl_seconds: i32,
     pub refresh_idle_ttl_seconds: i32,
@@ -1986,6 +2001,8 @@ mod tests {
             post_logout_redirect_uris: vec![],
             backchannel_logout_uri: None,
             lifecycle_event_uri: None,
+            allowed_secret_keys: Vec::new(),
+            allowed_config_keys: Vec::new(),
             allowed_scopes: vec!["openid".to_string()],
             access_token_ttl_seconds: 600,
             refresh_token_ttl_seconds: 2_592_000,

@@ -91,6 +91,7 @@ fn the_storage_spelling_of_the_provider_does_not_come_back() {
         "bunyip-api/src/main.rs",
         "bunyip-api/src/handlers/admin.rs",
         "bunyip-api/src/handlers/admin_stripe.rs",
+        "bunyip-api/src/handlers/admin_mirzam.rs",
     ] {
         let source = read(relative);
         for retired in ["SecretsStorage", "read_only_store_error"] {
@@ -178,6 +179,10 @@ fn admin_saves_go_through_the_declared_provider() {
             "bunyip-api/src/handlers/admin_stripe.rs",
             "create_stripe_webhook",
         ),
+        (
+            "bunyip-api/src/handlers/admin_mirzam.rs",
+            "update_mirzam_config",
+        ),
     ] {
         let source = read(relative);
         let marker = format!("\npub async fn {handler}(");
@@ -238,7 +243,7 @@ fn the_database_only_stripe_readers_have_no_request_or_boot_callers() {
 /// `secrets-migrate --to environment`.
 #[test]
 fn every_governed_secret_is_fully_described() {
-    assert_eq!(GovernedSecret::ALL.len(), 4);
+    assert_eq!(GovernedSecret::ALL.len(), 6);
     for secret in GovernedSecret::ALL {
         assert!(!secret.name().is_empty());
         assert!(
@@ -255,7 +260,9 @@ fn every_governed_secret_is_fully_described() {
             "SMTP_PASSWORD",
             "STRIPE_SECRET_KEY",
             "STRIPE_WEBHOOK_SECRET",
-            "SUPPORT_IMAP_PASSWORD"
+            "SUPPORT_IMAP_PASSWORD",
+            "MIRZAM_API_TOKEN",
+            "MOKOSH_GOOGLE_CLIENT_SECRET"
         ]
     );
 }

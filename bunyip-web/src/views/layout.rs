@@ -290,13 +290,22 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 // dismissed regions never block clicks. BUNYIP-818: the
                 // container itself carries no aria-live; each pill announces
                 // itself via its own `role` (`status` or `alert`), so a live
-                // region is never nested inside another.
+                // region is never nested inside another. BUNYIP-1015: `top-20`
+                // puts it below the `h-16` header bar (public header and app
+                // topbar alike), so a pill never covers the theme icons or the
+                // avatar; `left-4` bounds it at phone width, `sm:left-auto`
+                // lets it shrink to its pills at the right on wider screens.
                 div id="bunyip-toast-root"
-                    class="pointer-events-none fixed top-4 right-4 z-50 flex flex-col gap-2" {}
+                    class=(TOAST_ROOT_CLASS) {}
             }
         }
     }
 }
+
+/// The toast container's classes (BUNYIP-1015). A constant so the test that
+/// keeps it below the header reads the same string the shell renders.
+pub(crate) const TOAST_ROOT_CLASS: &str =
+    "pointer-events-none fixed top-20 right-4 left-4 z-50 flex flex-col items-end gap-2 sm:left-auto";
 
 /// The nav mark: the uploaded brand image when one is set (BUNYIP-560),
 /// otherwise the reed-and-eyes glyph ported from the Dioxus `BrandMark`
@@ -693,6 +702,23 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
             external: false,
             badge: None,
         },
+        // BUNYIP-997: the Mirzam newsletter integration.
+        NavItem {
+            title: "Mirzam",
+            href: "/admin/mirzam",
+            icon: "link-2",
+            external: false,
+            badge: None,
+        },
+        // BUNYIP-983: the Mokosh host settings bunyip serves to the suite.
+        NavItem {
+            title: "Mokosh",
+            href: "/admin/mokosh",
+            // BUNYIP-1014: "key-round" was not in the set and rendered blank.
+            icon: "briefcase",
+            external: false,
+            badge: None,
+        },
         NavItem {
             title: "Mailer Suppressions",
             href: "/admin/mailer-suppressions",
@@ -1050,6 +1076,36 @@ pub fn admin_shell(
 mod tests {
     use super::*;
     use crate::api::types::{MembershipStatus, MembershipTier};
+
+    /// BUNYIP-1014: a nav entry's glyph is a `NavItem::icon` string, not an
+    /// `icon("...")` call, so `every_icon_name_used_in_the_views_resolves`
+    /// never saw it, and the admin Mokosh entry shipped `"key-round"`, a name
+    /// `inner()` does not know, as an empty `<svg>`. Every entry of every
+    /// authenticated shell must name a glyph the set renders.
+    #[test]
+    fn every_nav_entry_names_a_known_icon() {
+        let mut offenders = Vec::new();
+        for (admin, is_admin, is_member) in [
+            (true, true, true),
+            (false, true, true),
+            (false, false, true),
+            (false, false, false),
+        ] {
+            for item in shell_nav_sections(admin, is_admin, is_member, None)
+                .iter()
+                .flatten()
+            {
+                if !web_kit::ui::icon_is_known(item.icon) {
+                    offenders.push(format!("{} ({}): {}", item.title, item.href, item.icon));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "unknown nav icon renders an empty <svg>; add it to `inner()`:\n{}",
+            offenders.join("\n")
+        );
+    }
 
     fn test_user(role: UserRole) -> User {
         User {
@@ -2265,6 +2321,51 @@ mod tests {
         assert!(markup.contains(r#"src="/assets/js/sse.js?v="#));
         assert!(markup.contains("data-api-origin="));
         assert!(markup.ends_with("></script>"));
+    }
+
+    /// BUNYIP-1015: a toast is readable on its own and never covers the header
+    /// controls. Every palette entry paints an opaque `bg-*` (no `/<alpha>`, so
+    /// the header cannot show through), and the container starts below the
+    /// `h-16` header bar (`top-20` is 5rem, the bar is 4rem) rather than over it.
+    #[test]
+    fn toasts_are_opaque_and_sit_below_the_header() {
+        const JS: &str = include_str!("../../assets/js/app.js");
+        let palette = JS
+            .split("var TOAST_PALETTE = {")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("TOAST_PALETTE in app.js");
+        let mut kinds = 0;
+        for line in palette.lines().filter(|l| l.contains(':')) {
+            kinds += 1;
+            let bg: Vec<&str> = line
+                .split(['\'', ' '])
+                .filter(|t| t.starts_with("bg-"))
+                .collect();
+            assert_eq!(bg.len(), 1, "one background per kind: {line}");
+            assert!(
+                !bg[0].contains('/'),
+                "a see-through toast background: {line}"
+            );
+        }
+        assert_eq!(kinds, 3, "success, error and info: {palette}");
+
+        assert!(
+            TOAST_ROOT_CLASS.contains("fixed top-20 "),
+            "{TOAST_ROOT_CLASS}"
+        );
+        let user = test_user(UserRole::Admin);
+        let topbar = app_topbar("T", &user, html! {}).into_string();
+        assert!(
+            topbar.contains("flex h-16 "),
+            "the topbar height moved: {topbar}"
+        );
+        let cfg = Config::from_env();
+        let public = header(&cfg, None, false, false, false).into_string();
+        assert!(
+            public.contains("flex h-16 "),
+            "the header height moved: {public}"
+        );
     }
 
     /// BUNYIP-610: the toast that fills `#bunyip-toast-root` is the last layer a

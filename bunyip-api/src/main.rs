@@ -326,6 +326,7 @@ async fn main() -> anyhow::Result<()> {
         "MOKOSH_APPS_REDIRECT_URIS",
         "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
         "MOKOSH_APPS_AUDIENCE",
+        "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
     upsert_spa_oidc_client(
@@ -335,6 +336,7 @@ async fn main() -> anyhow::Result<()> {
         "DRILLMARK_REDIRECT_URIS",
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "DRILLMARK_AUDIENCE",
+        "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
 
@@ -672,18 +674,26 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // BUNYIP-998: keeps account holders on Mirzam's lists, off the request
+    // path. Inert while the integration is off or incomplete.
+    let mirzam_sync =
+        bunyip_api::mirzam_sync::mirzam_sync(pool.clone(), config.clone(), app_key_set.clone());
+
     // Initialize Auth service
-    let auth_service = Arc::new(AuthService::new(
-        pool.clone(),
-        (*jwt_service).clone(),
-        tier_config.clone(),
-        config.bootstrap_admin_email.clone(),
-        email_service.clone(),
-        geoip,
-        config.login_approval_enabled,
-        config.country_allow.clone(),
-        config.country_deny.clone(),
-    ));
+    let auth_service = Arc::new(
+        AuthService::new(
+            pool.clone(),
+            (*jwt_service).clone(),
+            tier_config.clone(),
+            config.bootstrap_admin_email.clone(),
+            email_service.clone(),
+            geoip,
+            config.login_approval_enabled,
+            config.country_allow.clone(),
+            config.country_deny.clone(),
+        )
+        .with_mirzam_sync(mirzam_sync.clone()),
+    );
 
     info!("Auth service initialized");
 
@@ -1235,6 +1245,7 @@ async fn main() -> anyhow::Result<()> {
         const E2E_REAPER_MAX_AGE_SECS: i64 = 6 * 3600;
         const E2E_DISPOSABLE_EMAIL_PATTERN: &str = "%+e2e-%";
         let reaper_pool = pool.clone();
+        let reaper_mirzam = mirzam_sync.clone();
         tokio::spawn(async move {
             info!("E2E disposable-account reaper started (non-production)");
             let mut interval = tokio::time::interval(Duration::from_secs(E2E_REAPER_INTERVAL_SECS));
@@ -1248,8 +1259,25 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 {
                     Ok(reaped) => {
-                        if reaped > 0 {
-                            info!(reaped, "Reaped stale e2e disposable accounts");
+                        if !reaped.is_empty() {
+                            info!(
+                                reaped = reaped.len(),
+                                "Reaped stale e2e disposable accounts"
+                            );
+                        }
+                        // BUNYIP-998: a reaped account leaves Mirzam's lists
+                        // like any deleted one. A row already soft-deleted
+                        // left them when it was deleted.
+                        for (user_id, email, was_verified, soft_deleted) in reaped {
+                            if !soft_deleted {
+                                reaper_mirzam.notify(
+                                    bunyip_domain::services::mirzam_sync::AccountChange::Deleted {
+                                        user_id,
+                                        email,
+                                        was_verified,
+                                    },
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -1393,6 +1421,7 @@ async fn main() -> anyhow::Result<()> {
                     as Arc<bunyip_domain::middleware::auth::BunyipAtJwtVerifier>
             }))
             .app_data(web::Data::new(auth_service.clone()))
+            .app_data(web::Data::new(mirzam_sync.clone()))
             .app_data(web::Data::new(email_service.clone()))
             .app_data(web::Data::new(mailer_relay.clone()))
             .app_data(web::Data::new(suppression.clone()))
@@ -1708,6 +1737,36 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        "mirzam-backfill" => {
+            // BUNYIP-999: put the accounts that predate the Mirzam integration
+            // on its two lists. Safe to re-run: an address already on a list,
+            // or one that left product updates, is left as it is. The counts
+            // print first, then any failure fails the run.
+            let report = bunyip_api::mirzam_sync::backfill(
+                pool,
+                config,
+                &key_set,
+                &bunyip_domain::services::mirzam_sync::MIRZAM_RETRY_DELAYS,
+                bunyip_domain::services::mirzam_backfill::MIRZAM_BACKFILL_PACE,
+            )
+            .await?;
+            info!(
+                added = report.added,
+                already_on = report.already_on,
+                left_alone = report.left_alone,
+                failed = report.failed,
+                "mirzam-backfill finished"
+            );
+            print!("{report}");
+            if report.failed > 0 {
+                anyhow::bail!(
+                    "mirzam-backfill: {} account(s) failed; fix the cause and re-run, which leaves \
+                     the accounts already done as they are",
+                    report.failed
+                );
+            }
+            Ok(())
+        }
         other => run_reencrypt_subcommand(other, pool, config).await,
     }
 }
@@ -1780,7 +1839,7 @@ async fn run_reencrypt_subcommand(
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
-             reconcile-duplicate-prices, settings-export, settings-import)"
+             reconcile-duplicate-prices, settings-export, settings-import, mirzam-backfill)"
         ),
     }
 }
@@ -1808,6 +1867,7 @@ async fn upsert_spa_oidc_client(
     redirect_uris_var: &str,
     post_logout_var: &str,
     audience_var: &str,
+    backchannel_logout_var: &str,
 ) -> anyhow::Result<()> {
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
@@ -1818,6 +1878,10 @@ async fn upsert_spa_oidc_client(
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
     let post_logout = secret_env(post_logout_var).unwrap_or_default();
+    // BUNYIP-858: an unset back-channel logout URI writes NULL so a wrongly
+    // configured environment sends nothing rather than inheriting whatever
+    // the migration seeded. The non-empty case is upserted as the string.
+    let backchannel_logout = secret_env(backchannel_logout_var).filter(|v| !v.is_empty());
 
     let split_csv = |s: &str| -> Vec<String> {
         s.split(',')
@@ -1836,19 +1900,22 @@ async fn upsert_spa_oidc_client(
             redirect_uris, post_logout_redirect_uris,
             allowed_scopes, allowed_grant_types,
             token_endpoint_auth_method, require_pkce,
-            audience, access_token_ttl_seconds
+            audience, access_token_ttl_seconds,
+            backchannel_logout_uri
         ) VALUES (
             $1::uuid, 'public', $2,
             $3, $4,
             ARRAY['openid', 'email', 'offline_access'],
             ARRAY['authorization_code', 'refresh_token'],
             'none', TRUE,
-            $5, 600
+            $5, 600,
+            $6
         )
         ON CONFLICT (client_id) DO UPDATE SET
             redirect_uris = EXCLUDED.redirect_uris,
             post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
-            audience = EXCLUDED.audience
+            audience = EXCLUDED.audience,
+            backchannel_logout_uri = EXCLUDED.backchannel_logout_uri
         "#,
     )
     .bind(client_id)
@@ -1856,6 +1923,7 @@ async fn upsert_spa_oidc_client(
     .bind(&redirect_list)
     .bind(&post_logout_list)
     .bind(&audience)
+    .bind(backchannel_logout.as_deref())
     .execute(pool)
     .await?;
 
@@ -1863,6 +1931,7 @@ async fn upsert_spa_oidc_client(
         client = name,
         redirect_uris = ?redirect_list,
         audience = %audience,
+        backchannel_logout_uri = ?backchannel_logout,
         "SPA OIDC client registered from environment"
     );
 
