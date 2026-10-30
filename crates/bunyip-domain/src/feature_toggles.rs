@@ -7,18 +7,25 @@ use std::sync::{Arc, Mutex, RwLock};
 /// One admin-managed feature switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
+    /// Pricing surface (BUNYIP-841). The registry entry is the public
+    /// read surface; the DB column `tier_config.pricing_enabled` is the
+    /// current writer and still drives `GET /v1/pricing`'s 200-unpublished
+    /// branch. A follow-up migration (per the ticket's second AC) will
+    /// move the state here and drop the column.
+    Pricing,
     /// Tenant hostnames (BUNYIP-591). Gates nothing yet; the routing writer lands with BUNYIP-679.
     TenantHostnames,
 }
 
 impl Feature {
     /// Every registered feature, in admin-page order.
-    pub const ALL: &'static [Feature] = &[Feature::TenantHostnames];
+    pub const ALL: &'static [Feature] = &[Feature::Pricing, Feature::TenantHostnames];
 
     /// The stable key: the `feature_toggles.key` value and the wire name.
     /// Never rename one; a renamed key reads as a new, off feature.
     pub const fn key(self) -> &'static str {
         match self {
+            Feature::Pricing => "pricing",
             Feature::TenantHostnames => "tenant_hostnames",
         }
     }
@@ -26,6 +33,7 @@ impl Feature {
     /// The admin page's row title.
     pub const fn label(self) -> &'static str {
         match self {
+            Feature::Pricing => "Pricing",
             Feature::TenantHostnames => "Tenant Hostnames",
         }
     }
@@ -33,6 +41,9 @@ impl Feature {
     /// The admin page's help text: what the switch shows or hides.
     pub const fn help(self) -> &'static str {
         match self {
+            Feature::Pricing => {
+                "Public pricing surface at /pricing. The live source today is still `tier_config.pricing_enabled`; this toggle is a parallel surface that a follow-up migration will cut over to."
+            }
             Feature::TenantHostnames => {
                 "Custom hostnames per tenant. Nothing reads this switch yet, so flipping it changes nothing today."
             }
@@ -42,6 +53,7 @@ impl Feature {
     /// The owning issue, for code and logs only (never user-facing copy).
     pub const fn issue(self) -> &'static str {
         match self {
+            Feature::Pricing => "BUNYIP-841",
             Feature::TenantHostnames => "BUNYIP-591",
         }
     }
