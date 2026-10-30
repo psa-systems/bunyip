@@ -2108,6 +2108,16 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     )
     .gated_by("MOKOSH_APPS_REDIRECT_URIS"),
     EnvVarSpec::gating(
+        "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
+        "the mokosh-apps client is reconciled with no back-channel logout URI, so bunyip sends no \
+         logout token on sign-out and the mokosh session outlives the bunyip session for up to \
+         the access-token TTL (BUNYIP-858)",
+        "Set it to this deployment's \
+         https://<mokosh-api-host>/api/v1/bunyip/oauth2/backchannel-logout endpoint, or leave \
+         unset to send no logout token.",
+    )
+    .gated_by("MOKOSH_APPS_REDIRECT_URIS"),
+    EnvVarSpec::gating(
         "DRILLMARK_REDIRECT_URIS",
         "the drillmark SPA OIDC client is not reconciled from the environment, so it keeps the \
          redirect URIs the migration seeded (BUNYIP-57)",
@@ -2122,6 +2132,15 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "the drillmark client is reconciled with an empty post-logout redirect list",
         "Set it to the comma-separated post-logout redirect URIs.",
+    )
+    .gated_by("DRILLMARK_REDIRECT_URIS"),
+    EnvVarSpec::gating(
+        "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
+        "the drillmark client is reconciled with no back-channel logout URI, so bunyip sends no \
+         logout token on sign-out (BUNYIP-858)",
+        "Set it to this deployment's \
+         https://<drillmark-host>/api/v1/bunyip/oauth2/backchannel-logout endpoint, or leave \
+         unset to send no logout token.",
     )
     .gated_by("DRILLMARK_REDIRECT_URIS"),
     EnvVarSpec::gating(
