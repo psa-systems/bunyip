@@ -94,8 +94,16 @@ async fn connect_and_migrate() -> Option<PgPool> {
 }
 
 async fn cleanup(pool: &PgPool, user_id: Uuid) {
-    // login_approval_codes + login_devices + refresh tokens all cascade on the
-    // user FK, so one delete reclaims everything the test wrote.
+    // login_approval_codes + login_devices + refresh tokens cascade on the
+    // user FK, so those come away with the user delete. `audit_logs.actor_id`
+    // deliberately does NOT cascade (audit history is immutable in production,
+    // migration `20241230000009_create_audit_logs.sql:4`), so the test fixture
+    // deletes its own audit rows first (BUNYIP-889).
+    sqlx::query("DELETE FROM audit_logs WHERE actor_id = $1")
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .expect("cleanup audit_logs");
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(user_id)
         .execute(pool)

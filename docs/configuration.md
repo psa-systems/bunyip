@@ -29,6 +29,56 @@ Secrets resolve through the `{NAME}_FILE` convention first (a compose secret und
 variable (a dev `.env`). An empty value counts as unset everywhere. The exception is the four governed integration
 secrets below, which are `{NAME}_FILE`-only and are read only when `SECRETS_STORAGE=environment`.
 
+## Recently added
+
+<!-- BEGIN GENERATED: recently-added (just config-docs) -->
+
+Configuration changes in the last 5 releases, newest first, rendered by `just config-docs` from `crates/bunyip-domain/src/config.rs` and `crates/bunyip-domain/config/variables.toml` (edit those, not this section). **Breaking: won't start** marks a change after which the restart fails until the operator acts; apply it before restarting. **Breaking: feature off** marks a change after which the server runs but the named feature stops working or changes until the operator acts; review it before restarting. Both name the operator action and the issue that introduced them. An unmarked entry needs no action unless you relied on the old behavior. Upgrading across more releases than this? Run `just config-since <running version>`.
+
+<a id="release-v0-21-0"></a>
+
+### Unreleased (v0.21.0)
+
+#### Added
+
+- [`MIRZAM_API_TOKEN`](#var-mirzam-api-token) (Required: no) - Optional. Leave it unset to keep the default.
+- [`MOKOSH_GOOGLE_CLIENT_SECRET`](#var-mokosh-google-client-secret) (Required: no) - Optional. Leave it unset to keep the default.
+
+<a id="release-v0-20-0"></a>
+
+### v0.20.0
+
+No configuration changes.
+
+<a id="release-v0-19-0"></a>
+
+### v0.19.0
+
+#### Added
+
+- [`DUNITE_ARGON2_MAX_CONCURRENT`](#var-dunite-argon2-max-concurrent) (Required: no) - Optional. Leave it unset to keep the default.
+- [`DUNITE_ARGON2_PERMIT_TIMEOUT_SECS`](#var-dunite-argon2-permit-timeout-secs) (Required: no) - Optional. Leave it unset to keep the default.
+
+<a id="release-v0-18-2"></a>
+
+### v0.18.2
+
+No configuration changes.
+
+<a id="release-v0-18-1"></a>
+
+### v0.18.1
+
+No configuration changes.
+
+<a id="release-v0-18-0"></a>
+
+### v0.18.0
+
+No configuration changes.
+
+<!-- END GENERATED: recently-added -->
+
 ## The configuration boundary: system-level vs application-level (BUNYIP-622)
 
 Every configuration key is on one of two sides of a security-led boundary. A key is **system-level** when modifying it
@@ -120,6 +170,8 @@ The governed set is exactly the secrets with more than one possible provider:
 | `STRIPE_SECRET_KEY`     | `stripe_config.secret_key`     | `STRIPE_SECRET_KEY_FILE`     | `<path>/STRIPE_SECRET_KEY`     |
 | `STRIPE_WEBHOOK_SECRET` | `stripe_config.webhook_secret` | `STRIPE_WEBHOOK_SECRET_FILE` | `<path>/STRIPE_WEBHOOK_SECRET` |
 | `SUPPORT_IMAP_PASSWORD` | `email_config.imap_password`   | `SUPPORT_IMAP_PASSWORD_FILE` | `<path>/SUPPORT_IMAP_PASSWORD` |
+| `MIRZAM_API_TOKEN`      | `mirzam_config.api_token`      | `MIRZAM_API_TOKEN_FILE`      | `<path>/MIRZAM_API_TOKEN`      |
+| `MOKOSH_GOOGLE_CLIENT_SECRET` | `mokosh_config.google_client_secret` | `MOKOSH_GOOGLE_CLIENT_SECRET_FILE` | `<path>/MOKOSH_GOOGLE_CLIENT_SECRET` |
 
 The declared provider is the ONLY one consulted. There is no fallback and no precedence chain: in `database` mode the
 environment slot and Infisical are not read at all, and vice versa. Group-1 startup secrets (`DATABASE_URL`,
@@ -406,7 +458,8 @@ Every variable below has a working default; set it only to tune the deployment.
   `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_MAILBOX`, `SUPPORT_IMAP_ENABLED`,
   `SUPPORT_IMAP_POLL_SECS`.
 - **Governed secrets** (read only when `SECRETS_STORAGE=environment`, and only as `{NAME}_FILE`): `SMTP_PASSWORD`,
-  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`.
+  `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`,
+  `MOKOSH_GOOGLE_CLIENT_SECRET`.
 - **Abuse controls**: `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`,
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
@@ -485,7 +538,7 @@ this repository.
 
 | Variable                                                                               | Consequence of the gap                                                                       |
 |----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
+| `SMTP_PASSWORD`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SUPPORT_IMAP_PASSWORD`, `MIRZAM_API_TOKEN`, `MOKOSH_GOOGLE_CLIENT_SECRET` | deliberate: governed secrets, read only as `{NAME}_FILE` under `SECRETS_STORAGE=environment` |
 | `BUNYIP_COOKIE_SHARED_DOMAIN`                                                          | the cross-subdomain OP session cookie cannot be enabled                                      |
 | `MOKOSH_APPS_*`, `DRILLMARK_*`, `LETS_CHAT_*`                                          | those OIDC clients keep whatever the migrations seeded; no reconciliation runs               |
 | `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`                                          | the `applications.webhook_url` upsert never runs; Backup stays a stub                        |
@@ -570,6 +623,7 @@ committed code.
 | `tagline`                                                    | the hero caption, the footer line and the bunyip-web startup banner                                                 |
 | `meta_description`                                           | `<meta name="description">` and `og:description`                                                                    |
 | `og_image_url`                                               | `og:image` / `twitter:image`; must be an absolute `http(s)://` URL                                                  |
+| `newsletter_url`                                             | the landing newsletter signup posts here: a Mirzam list's form address, absolute `http(s)://`; blank hides it       |
 | `theme_css`                                                  | CSS custom-property declarations emitted into `:root` (the brand ramp). No `<` or `>`; 4096 characters              |
 | `theme_color_light`, `theme_color_dark`                      | the two `<meta name="theme-color">` values (browser chrome). Hex colours (`#rgb`, `#rrggbb`, `#rrggbbaa`)           |
 | `mark_updated_at`, `favicon_updated_at`, `mascot_updated_at` | version markers for the three image slots. NULL means the slot is unset                                             |
@@ -623,6 +677,78 @@ SMTP tuning (BUNYIP-507), so it stays environment-only alongside the base URL an
 
 The **Source** the page shows is the highest-priority provider holding any of this section's keys, so it can now read
 `file` as well as `database` or `environment`. Run `bunyip-api config-status` for the per-key answer.
+
+### Mirzam (`mirzam_config`, admin page: Mirzam)
+
+Singleton row (BUNYIP-997): `enabled`, `base_url` (the Mirzam site, e.g. `https://news.psa.systems`, stored without a
+trailing `/`), `updates_list` and `notices_list` (the slugs of the product-updates `newsletter` list and the required
+account `notices` list). A save replaces all four; a blank address or slug is allowed only while the integration is
+switched off, and switching it on also needs the API token. Slugs follow Mirzam's own rule: lowercase letters and digits,
+words joined by single dashes, at most 64 characters. These columns have no file or environment provider.
+
+The API token is the governed secret `MIRZAM_API_TOKEN` (a Mirzam read-and-write token, made on Mirzam's API page), so it
+follows `SECRETS_STORAGE` like the SMTP password: written to the declared provider, never sent back to the browser, and
+read-only on the page in `environment` mode, where a typed token answers 409. Saves are audited
+(`admin_mirzam_config_updated`, recording whether the token changed and to which provider, never the token).
+
+**Check connection** (`POST /v1/admin/mirzam/check`) reads `GET {base_url}/api/v1/lists/{slug}` for both saved slugs
+with the saved token as a bearer token (10 second timeout, redirects reported rather than followed) and reports each
+list's name and kind, or what is wrong: an unreachable address, a refused token (`401` / `403`), an unknown slug
+(`404`), or a list of the wrong kind (the product-updates list must be `newsletter`, the notices list `notices`). The
+System Status page lists the integration as Unconfigured while it is switched off and as Failing when it is on with the
+address, a slug or the token missing, or when the last sync call failed.
+
+On the admin page (BUNYIP-1014) a save and a check both come back as toasts, through the same `?toast_ok=` /
+`?toast_err=` redirect the other admin pages use: Save shows "Mirzam settings saved", and Check connection shows one
+success toast naming each list that is right and one error toast naming each list that is wrong and why, one line per
+list, with lists that fail for the same reason sharing a line (an error toast stays until dismissed). A failed save is the exception: it re-renders the form with the error above it, so the typed
+values are kept.
+
+**Keeping account holders on the lists** (BUNYIP-998, `bunyip_domain::services::mirzam_sync`). While the integration is
+on and complete (address, both slugs, token), bunyip mirrors three account events onto the two lists:
+
+| Event in bunyip | Calls to Mirzam |
+|---|---|
+| Email verified (the verify link, a magic-link sign-in, an accepted admin invite, an admin force-verify; only the unverified-to-verified change) | `POST /api/v1/subscribers` for each list, with `consent: "recorded"`, `consent_note: "Account holder"` and the account's first and last name. The product-updates add sends `keep_unsubscribed: true`; the notices add leaves it out (see below). `201` and `409` are success. |
+| Account reactivated (an admin reactivates a deactivated or deleted account whose address is verified) | The same two adds as on verification. |
+| Email changed (a confirmed change, or an admin correction, of a verified address) | `PATCH /api/v1/subscribers/{old}` with `{"email": new}`. On `409` (Mirzam has the new address already) the new address is added to both lists and the old one unsubscribed from both; on `404` (Mirzam never had the old one) the new one is added. An admin correction that leaves the account unverified unsubscribes the old address instead, and one that verifies an unverified account adds the new one. |
+| Account deleted (self-delete, admin delete, admin deactivate, the non-production e2e purge and reaper) | `POST /api/v1/subscribers/{address}/unsubscribe` for each list. `200`, `409` and `404` are success. Nothing is erased. |
+
+Deactivation removes the account from both lists; reactivation rejoins the notices list, and rejoins product updates only
+if the person had not left it themselves. The two lists differ on purpose. Nobody leaves the notices list by their own
+choice (Mirzam's preference centre never offers it and its unsubscribe links refuse it), so an unsubscribed notices
+membership can only be bunyip's own removal of a former address or account: every notices add leaves `keep_unsubscribed`
+out, and Mirzam takes it as new consent and re-confirms the address. On product updates an administrator's removal cannot
+be told apart from the reader's own opt-out, so every product-updates add sends `keep_unsubscribed: true` and an
+unsubscribed address stays unsubscribed.
+
+An address that was never verified is never sent. Every call runs in a spawned task, so a Mirzam outage never fails or
+slows the request that caused it: one attempt plus a retry after 1 s and after 4 s when the failure is transient (no
+answer, `408`, `429`, `5xx`), each request with the 10 second timeout and no redirects followed. A call that runs out of
+attempts is logged at `warn` with the user id and stored in `mirzam_config.last_error` / `last_error_at`: the operation,
+the list, the user id and Mirzam's status and message, never the token or the address. The admin Mirzam page shows it
+under Sync, the System Status page reports the integration as Failing, and the next call that succeeds clears it. These
+two columns are runtime state, left out of the settings archive.
+
+**Backfilling existing accounts** (BUNYIP-999, `bunyip_domain::services::mirzam_backfill`). The events above only
+cover accounts that change after the integration is switched on. Once, on the day it is switched on and the connection
+check passes, put every account that already exists on the two lists:
+
+```nushell
+docker compose exec api /app/bunyip-api mirzam-backfill
+```
+
+It walks every live account with a verified address (never an unverified or a deactivated one) and makes the "email
+verified" calls for each, so product updates keep `keep_unsubscribed: true` and nobody who left it is put back. Calls
+are sequential, one account every 250 ms (about 8 requests a second, under Mirzam's 600 a minute per token), each with
+the retries above. It prints one count per account: `added` (newly put on at least one list), `already on` (on both
+already), `left alone (unsubscribed)` (had left product updates, which stays so) and `failed` (a call ran out of
+attempts), followed by one line per failed call naming the list and the user id, never the address or the token. A
+failure does not stop the run; the command exits non-zero when any account failed, or without calling Mirzam when the
+integration is switched off, incomplete, or has no `MIRZAM_API_TOKEN`. It is safe to run again: a second run reports
+everyone as already on or left alone and adds nothing, so after fixing the cause of a failure, re-run it as is. The
+backfill does not write `mirzam_config.last_error`. `left alone` comes from Mirzam's `409` code `unsubscribed`, so the
+backfill needs Mirzam v0.38.0 or later.
 
 ### Auto-ban (`auto_ban_config`, admin page: Auto-ban Settings)
 
@@ -715,3 +841,144 @@ splash) under `prefers-color-scheme: light` and `dark` are the `theme_css`, `the
 columns of that same record, so one admin edit moves the page and the chrome together (BUNYIP-549 / BUNYIP-560). There
 is **no compiled-in default** behind them: an empty column means the `:root` block and the `theme-color` metas are
 omitted rather than painted one product's green. Set the palette on the admin Branding page.
+
+## All variables
+
+<!-- BEGIN GENERATED: all-variables (just config-docs) -->
+
+Every variable, with the release it first shipped in, rendered by `just config-docs` from `crates/bunyip-domain/src/config.rs` and `crates/bunyip-domain/config/variables.toml` (edit those, not this section). The reason the api reads it, and how its absence is reported, is in [The reporting contract] and the classification tables above.
+
+| Variable | Required | Added in | Classification |
+| --- | --- | --- | --- |
+| <a id="var-admin-notification-emails"></a>`ADMIN_NOTIFICATION_EMAILS` | no | v0.2.1 | Feature-gating |
+| <a id="var-app-database-url"></a>`APP_DATABASE_URL` | no | v0.8.0 | Feature-gating |
+| <a id="var-app-encryption-key"></a>`APP_ENCRYPTION_KEY` | yes | v0.12.0 | Required in production |
+| <a id="var-app-encryption-key-prev"></a>`APP_ENCRYPTION_KEY_PREV` | no | v0.12.0 | Defaulted |
+| <a id="var-app-key-version"></a>`APP_KEY_VERSION` | no | v0.12.0 | Defaulted |
+| <a id="var-app-name"></a>`APP_NAME` | no | v0.2.1 | Defaulted |
+| <a id="var-app-port"></a>`APP_PORT` | no | v0.2.1 | Defaulted |
+| <a id="var-app-url"></a>`APP_URL` | no | v0.2.1 | Defaulted |
+| <a id="var-auto-ban-duration-secs"></a>`AUTO_BAN_DURATION_SECS` | no | v0.2.1 | Defaulted |
+| <a id="var-auto-ban-enabled"></a>`AUTO_BAN_ENABLED` | no | v0.2.1 | Defaulted |
+| <a id="var-auto-ban-threshold"></a>`AUTO_BAN_THRESHOLD` | no | v0.2.1 | Defaulted |
+| <a id="var-auto-ban-window-secs"></a>`AUTO_BAN_WINDOW_SECS` | no | v0.2.1 | Defaulted |
+| <a id="var-bootstrap-admin-email"></a>`BOOTSTRAP_ADMIN_EMAIL` | no | v0.8.0 | Feature-gating |
+| <a id="var-bunyip-api-public-origin"></a>`BUNYIP_API_PUBLIC_ORIGIN` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-api-url"></a>`BUNYIP_API_URL` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-app-domain"></a>`BUNYIP_APP_DOMAIN` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-app-password"></a>`BUNYIP_APP_PASSWORD` | no | v0.8.0 | Feature-gating |
+| <a id="var-bunyip-billing-trial-period-days"></a>`BUNYIP_BILLING_TRIAL_PERIOD_DAYS` | no | v0.15.0 | Defaulted |
+| <a id="var-bunyip-bind-addr"></a>`BUNYIP_BIND_ADDR` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-community-url"></a>`BUNYIP_COMMUNITY_URL` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-config-dir"></a>`BUNYIP_CONFIG_DIR` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-config-file"></a>`BUNYIP_CONFIG_FILE` | no | v0.15.0 | Defaulted |
+| <a id="var-bunyip-cookie-shared-domain"></a>`BUNYIP_COOKIE_SHARED_DOMAIN` | no | v0.5.0 | Defaulted |
+| <a id="var-bunyip-e2e-bootstrap-allow"></a>`BUNYIP_E2E_BOOTSTRAP_ALLOW` | no | v0.5.0 | Defaulted |
+| <a id="var-bunyip-e2e-totp-secret"></a>`BUNYIP_E2E_TOTP_SECRET` | no | v0.15.0 | Defaulted |
+| <a id="var-bunyip-oidc-issuer"></a>`BUNYIP_OIDC_ISSUER` | no | v0.17.0 | Defaulted |
+| <a id="var-bunyip-seed-allow"></a>`BUNYIP_SEED_ALLOW` | no | v0.15.0 | Defaulted |
+| <a id="var-bunyip-update-check-token"></a>`BUNYIP_UPDATE_CHECK_TOKEN` | no | v0.15.0 | Feature-gating |
+| <a id="var-bunyip-update-check-url"></a>`BUNYIP_UPDATE_CHECK_URL` | no | v0.15.0 | Feature-gating |
+| <a id="var-bunyip-webhook-signing-secret"></a>`BUNYIP_WEBHOOK_SIGNING_SECRET` | yes | v0.15.0 | Required in production |
+| <a id="var-bunyip-web-origin"></a>`BUNYIP_WEB_ORIGIN` | no | v0.2.1 | Defaulted |
+| <a id="var-cookie-domain"></a>`COOKIE_DOMAIN` | no | v0.2.1 | Defaulted |
+| <a id="var-cors-origin"></a>`CORS_ORIGIN` | no | v0.2.1 | Defaulted |
+| <a id="var-country-allow"></a>`COUNTRY_ALLOW` | no | v0.17.0 | Defaulted |
+| <a id="var-country-deny"></a>`COUNTRY_DENY` | no | v0.17.0 | Defaulted |
+| <a id="var-csp-connect-src"></a>`CSP_CONNECT_SRC` | no | v0.17.0 | Defaulted |
+| <a id="var-csp-form-action"></a>`CSP_FORM_ACTION` | no | v0.17.0 | Defaulted |
+| <a id="var-database-url"></a>`DATABASE_URL` | yes | v0.2.1 | Required |
+| <a id="var-db-pool-metrics-interval-secs"></a>`DB_POOL_METRICS_INTERVAL_SECS` | no | v0.15.0 | Defaulted |
+| <a id="var-download-cache-dir"></a>`DOWNLOAD_CACHE_DIR` | no | v0.2.1 | Defaulted |
+| <a id="var-download-cache-max-bytes"></a>`DOWNLOAD_CACHE_MAX_BYTES` | no | v0.2.1 | Defaulted |
+| <a id="var-download-concurrency-per-user"></a>`DOWNLOAD_CONCURRENCY_PER_USER` | no | v0.2.1 | Defaulted |
+| <a id="var-download-daily-limit-per-user"></a>`DOWNLOAD_DAILY_LIMIT_PER_USER` | no | v0.2.1 | Defaulted |
+| <a id="var-drillmark-audience"></a>`DRILLMARK_AUDIENCE` | no | v0.15.0 | Feature-gating |
+| <a id="var-drillmark-post-logout-redirect-uris"></a>`DRILLMARK_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-drillmark-provider-status-url"></a>`DRILLMARK_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
+| <a id="var-drillmark-redirect-uris"></a>`DRILLMARK_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-dunite-argon2-max-concurrent"></a>`DUNITE_ARGON2_MAX_CONCURRENT` | no | v0.19.0 | Defaulted |
+| <a id="var-dunite-argon2-permit-timeout-secs"></a>`DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` | no | v0.19.0 | Defaulted |
+| <a id="var-email-enabled"></a>`EMAIL_ENABLED` | no | v0.2.1 | Defaulted |
+| <a id="var-email-log-tokens"></a>`EMAIL_LOG_TOKENS` | no | v0.5.0 | Defaulted |
+| <a id="var-environment"></a>`ENVIRONMENT` | no | v0.2.1 | Defaulted |
+| <a id="var-forgejo-api-token"></a>`FORGEJO_API_TOKEN` | no | v0.2.1 | Feature-gating |
+| <a id="var-forgejo-base-url"></a>`FORGEJO_BASE_URL` | no | v0.2.1 | Feature-gating |
+| <a id="var-forgejo-release-cache-ttl-secs"></a>`FORGEJO_RELEASE_CACHE_TTL_SECS` | no | v0.2.1 | Defaulted |
+| <a id="var-host-ip"></a>`HOST_IP` | no | v0.2.1 | Defaulted |
+| <a id="var-infisical-address"></a>`INFISICAL_ADDRESS` | no | v0.14.0 | Feature-gating |
+| <a id="var-infisical-client-id"></a>`INFISICAL_CLIENT_ID` | no | v0.14.0 | Feature-gating |
+| <a id="var-infisical-client-secret"></a>`INFISICAL_CLIENT_SECRET` | no | v0.14.0 | Feature-gating |
+| <a id="var-infisical-enabled"></a>`INFISICAL_ENABLED` | no | v0.14.0 | Feature-gating |
+| <a id="var-infisical-environment"></a>`INFISICAL_ENVIRONMENT` | no | v0.15.0 | Defaulted |
+| <a id="var-infisical-project-id"></a>`INFISICAL_PROJECT_ID` | no | v0.14.0 | Feature-gating |
+| <a id="var-infisical-secret-path"></a>`INFISICAL_SECRET_PATH` | no | v0.14.0 | Defaulted |
+| <a id="var-ip2location-db-path"></a>`IP2LOCATION_DB_PATH` | no | v0.8.0 | Feature-gating |
+| <a id="var-ip2proxy-db-path"></a>`IP2PROXY_DB_PATH` | no | v0.12.0 | Feature-gating |
+| <a id="var-jwt-secret"></a>`JWT_SECRET` | yes | v0.15.0 | Required in production |
+| <a id="var-lets-chat-audience"></a>`LETS_CHAT_AUDIENCE` | no | v0.15.0 | Feature-gating |
+| <a id="var-lets-chat-client-secret-hash"></a>`LETS_CHAT_CLIENT_SECRET_HASH` | no | v0.15.0 | Feature-gating |
+| <a id="var-lets-chat-post-logout-redirect-uris"></a>`LETS_CHAT_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-lets-chat-redirect-uris"></a>`LETS_CHAT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-login-approval-enabled"></a>`LOGIN_APPROVAL_ENABLED` | no | v0.8.0 | Defaulted |
+| <a id="var-mailer-webhook-secret"></a>`MAILER_WEBHOOK_SECRET` | no | v0.17.0 | Feature-gating |
+| <a id="var-mirzam-api-token"></a>`MIRZAM_API_TOKEN` | no | v0.21.0 | Defaulted |
+| <a id="var-mokosh-apps-audience"></a>`MOKOSH_APPS_AUDIENCE` | no | v0.15.0 | Feature-gating |
+| <a id="var-mokosh-apps-post-logout-redirect-uris"></a>`MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-mokosh-apps-redirect-uris"></a>`MOKOSH_APPS_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-mokosh-backup-api-url"></a>`MOKOSH_BACKUP_API_URL` | no | v0.15.0 | Feature-gating |
+| <a id="var-mokosh-google-client-secret"></a>`MOKOSH_GOOGLE_CLIENT_SECRET` | no | v0.21.0 | Defaulted |
+| <a id="var-mokosh-provider-status-url"></a>`MOKOSH_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
+| <a id="var-mokosh-webhook-url"></a>`MOKOSH_WEBHOOK_URL` | no | v0.15.0 | Feature-gating |
+| <a id="var-oci-blob-cache-dir"></a>`OCI_BLOB_CACHE_DIR` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-blob-cache-max-bytes"></a>`OCI_BLOB_CACHE_MAX_BYTES` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-concurrent-manifests-per-user"></a>`OCI_CONCURRENT_MANIFESTS_PER_USER` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-manifest-cache-ttl-secs"></a>`OCI_MANIFEST_CACHE_TTL_SECS` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-pulls-per-user-per-day"></a>`OCI_PULLS_PER_USER_PER_DAY` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-registry-enabled"></a>`OCI_REGISTRY_ENABLED` | no | v0.2.1 | Feature-gating |
+| <a id="var-oci-registry-port"></a>`OCI_REGISTRY_PORT` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-registry-realm"></a>`OCI_REGISTRY_REALM` | no | v0.2.1 | Defaulted |
+| <a id="var-oci-registry-service"></a>`OCI_REGISTRY_SERVICE` | no | v0.2.1 | Feature-gating |
+| <a id="var-oci-token-ttl-secs"></a>`OCI_TOKEN_TTL_SECS` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-access-token-ttl-seconds"></a>`OIDC_ACCESS_TOKEN_TTL_SECONDS` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-code-ttl-seconds"></a>`OIDC_CODE_TTL_SECONDS` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-issuer"></a>`OIDC_ISSUER` | no | v0.2.1 | Feature-gating |
+| <a id="var-oidc-jwt-active-kid"></a>`OIDC_JWT_ACTIVE_KID` | yes | v0.2.1 | Required in production |
+| <a id="var-oidc-jwt-private-key-path"></a>`OIDC_JWT_PRIVATE_KEY_PATH` | yes | v0.2.1 | Required in production |
+| <a id="var-oidc-jwt-public-keys-dir"></a>`OIDC_JWT_PUBLIC_KEYS_DIR` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-lifecycle-event-key"></a>`OIDC_LIFECYCLE_EVENT_KEY` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-refresh-idle-ttl-seconds"></a>`OIDC_REFRESH_IDLE_TTL_SECONDS` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-refresh-token-ttl-seconds"></a>`OIDC_REFRESH_TOKEN_TTL_SECONDS` | no | v0.2.1 | Defaulted |
+| <a id="var-oidc-rs-audience"></a>`OIDC_RS_AUDIENCE` | no | v0.5.0 | Defaulted |
+| <a id="var-provider-status-client-id"></a>`PROVIDER_STATUS_CLIENT_ID` | no | v0.17.0 | Feature-gating |
+| <a id="var-provider-status-client-secret"></a>`PROVIDER_STATUS_CLIENT_SECRET` | no | v0.17.0 | Feature-gating |
+| <a id="var-rust-log"></a>`RUST_LOG` | no | v0.2.1 | Defaulted |
+| <a id="var-secrets-storage"></a>`SECRETS_STORAGE` | yes | v0.15.0 | Required |
+| <a id="var-session-idle-ttl-remember-seconds"></a>`SESSION_IDLE_TTL_REMEMBER_SECONDS` | no | v0.17.0 | Defaulted |
+| <a id="var-session-idle-ttl-seconds"></a>`SESSION_IDLE_TTL_SECONDS` | no | v0.17.0 | Defaulted |
+| <a id="var-setup-default-admin"></a>`SETUP_DEFAULT_ADMIN` | no | v0.15.0 | Feature-gating |
+| <a id="var-signup-bot-guard-enabled"></a>`SIGNUP_BOT_GUARD_ENABLED` | no | v0.8.0 | Defaulted |
+| <a id="var-smtp-ehlo-name"></a>`SMTP_EHLO_NAME` | no | v0.14.0 | Defaulted |
+| <a id="var-smtp-from"></a>`SMTP_FROM` | no | v0.2.1 | Defaulted |
+| <a id="var-smtp-host"></a>`SMTP_HOST` | no | v0.2.1 | Feature-gating |
+| <a id="var-smtp-password"></a>`SMTP_PASSWORD` | no | v0.2.1 | Defaulted |
+| <a id="var-smtp-port"></a>`SMTP_PORT` | no | v0.2.1 | Defaulted |
+| <a id="var-smtp-tls"></a>`SMTP_TLS` | no | v0.2.1 | Defaulted |
+| <a id="var-smtp-username"></a>`SMTP_USERNAME` | no | v0.2.1 | Defaulted |
+| <a id="var-stripe-secret-key"></a>`STRIPE_SECRET_KEY` | no | v0.15.0 | Defaulted |
+| <a id="var-stripe-webhook-secret"></a>`STRIPE_WEBHOOK_SECRET` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-enabled"></a>`SUPPORT_IMAP_ENABLED` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-host"></a>`SUPPORT_IMAP_HOST` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-mailbox"></a>`SUPPORT_IMAP_MAILBOX` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-password"></a>`SUPPORT_IMAP_PASSWORD` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-poll-secs"></a>`SUPPORT_IMAP_POLL_SECS` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-port"></a>`SUPPORT_IMAP_PORT` | no | v0.15.0 | Defaulted |
+| <a id="var-support-imap-username"></a>`SUPPORT_IMAP_USERNAME` | no | v0.15.0 | Defaulted |
+| <a id="var-support-inbox-email"></a>`SUPPORT_INBOX_EMAIL` | no | v0.15.0 | Defaulted |
+| <a id="var-tier-early-adopter-slots"></a>`TIER_EARLY_ADOPTER_SLOTS` | no | v0.2.1 | Defaulted |
+| <a id="var-tier-early-adopter-trial-days"></a>`TIER_EARLY_ADOPTER_TRIAL_DAYS` | no | v0.2.1 | Defaulted |
+| <a id="var-tier-lifetime-slots"></a>`TIER_LIFETIME_SLOTS` | no | v0.2.1 | Defaulted |
+| <a id="var-tier-standard-trial-days"></a>`TIER_STANDARD_TRIAL_DAYS` | no | v0.2.1 | Defaulted |
+| <a id="var-trusted-proxy-cidr"></a>`TRUSTED_PROXY_CIDR` | no | v0.3.0 | Feature-gating |
+
+<!-- END GENERATED: all-variables -->
