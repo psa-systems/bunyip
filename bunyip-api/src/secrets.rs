@@ -27,7 +27,9 @@
 use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::stripe::{decrypt_secret, encrypt_secret};
-use bunyip_domain::repositories::{EmailConfigRepository, StripeConfigRepository};
+use bunyip_domain::repositories::{
+    EmailConfigRepository, MirzamConfigRepository, MokoshConfigRepository, StripeConfigRepository,
+};
 use bunyip_domain::services::{EncryptionKeySet, InfisicalClient};
 use sqlx::PgPool;
 use tracing::{error, warn};
@@ -153,6 +155,8 @@ pub async fn survey(
 ) -> Result<Survey, AppError> {
     let email_row = EmailConfigRepository::get(pool).await?;
     let stripe_row = StripeConfigRepository::get(pool).await?;
+    let mirzam_row = MirzamConfigRepository::get(pool).await?;
+    let mokosh_row = MokoshConfigRepository::get(pool).await?;
 
     let db_value = |secret: GovernedSecret| -> Option<String> {
         match secret {
@@ -176,6 +180,8 @@ pub async fn survey(
             GovernedSecret::SupportImapPassword => {
                 bunyip_domain::config::EmailConfig::db_imap_password(&email_row, key_set)
             }
+            GovernedSecret::MirzamApiToken => mirzam_row.db_api_token(key_set),
+            GovernedSecret::MokoshGoogleClientSecret => mokosh_row.db_google_client_secret(key_set),
         }
     };
 
@@ -290,6 +296,14 @@ pub async fn read_secret(
                 Ok(bunyip_domain::config::EmailConfig::db_imap_password(
                     &row, key_set,
                 ))
+            }
+            GovernedSecret::MirzamApiToken => {
+                let row = MirzamConfigRepository::get(pool).await?;
+                Ok(row.db_api_token(key_set))
+            }
+            GovernedSecret::MokoshGoogleClientSecret => {
+                let row = MokoshConfigRepository::get(pool).await?;
+                Ok(row.db_google_client_secret(key_set))
             }
         },
         SecretsProvider::Infisical => {
@@ -506,7 +520,53 @@ pub async fn write_secret(
                     )
                     .await?;
                 }
-                (_, Some(admin)) => {
+                // BUNYIP-997: explicit arms ahead of the Stripe fall-through,
+                // which would otherwise write the token into
+                // `stripe_config.webhook_secret`.
+                (GovernedSecret::MirzamApiToken, Some(admin)) => {
+                    MirzamConfigRepository::update_api_token(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                        admin,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MirzamApiToken, None) => {
+                    MirzamConfigRepository::update_api_token_encryption(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MokoshGoogleClientSecret, Some(admin)) => {
+                    MokoshConfigRepository::update_client_secret(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                        admin,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MokoshGoogleClientSecret, None) => {
+                    MokoshConfigRepository::update_client_secret_encryption(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                    )
+                    .await?;
+                }
+                // Named rather than `_`, so a new governed secret is a compile
+                // error here instead of a silent write into `stripe_config`.
+                (
+                    GovernedSecret::StripeSecretKey | GovernedSecret::StripeWebhookSecret,
+                    Some(admin),
+                ) => {
                     StripeConfigRepository::update(
                         pool,
                         secret_key.0,
@@ -522,7 +582,7 @@ pub async fn write_secret(
                     )
                     .await?;
                 }
-                (_, None) => {
+                (GovernedSecret::StripeSecretKey | GovernedSecret::StripeWebhookSecret, None) => {
                     StripeConfigRepository::update_secret_encryption(
                         pool,
                         secret_key.0,
@@ -606,6 +666,14 @@ async fn clear_database_secret(pool: &PgPool, secret: GovernedSecret) -> Result<
         GovernedSecret::SupportImapPassword => {
             "UPDATE email_config SET imap_password = NULL, imap_password_nonce = NULL, \
              updated_at = NOW() WHERE id = 1"
+        }
+        GovernedSecret::MirzamApiToken => {
+            "UPDATE mirzam_config SET api_token = NULL, api_token_nonce = NULL, \
+             updated_at = NOW() WHERE id = 1"
+        }
+        GovernedSecret::MokoshGoogleClientSecret => {
+            "UPDATE mokosh_config SET google_client_secret = NULL, \
+             google_client_secret_nonce = NULL, updated_at = NOW() WHERE id = 1"
         }
     };
     sqlx::query(statement).execute(pool).await?;
