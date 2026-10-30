@@ -107,6 +107,8 @@ immutable `Cache-Control`; references are versioned by `asset()` as `path?v=<ver
 | `MAILER_AUTH_FAILURES` | 10 / 60 s, per IP |
 | `HOST_SECRET_READ` | 30 / 60 s |
 | `HOST_SECRET_AUTH_FAILURES` | 10 / 60 s, per IP |
+| `HOST_CONFIG_READ` | 30 / 60 s |
+| `HOST_CONFIG_AUTH_FAILURES` | 10 / 60 s, per IP |
 | `ADMIN_DIAGNOSTICS` | 60 / 60 s |
 
   OAuth (`OAUTH_TOKEN` 60, `OAUTH_AUTHORIZE` 120, `OAUTH_USERINFO` 240, `OAUTH_REVOKE` 60, `OAUTH_DISCOVERY` 120)
@@ -408,9 +410,10 @@ supported, `request` and `request_uri` parameters unsupported. Served with `Cach
 
 Registered with the `client_credentials` marker grant. Credentials are HTTP Basic, verified directly at the consuming
 endpoint (no token is minted). Consumers: `POST /v1/mailer/send` (and `/v1/mailer/webhooks/feedback`, HMAC-signed,
-fail-closed) and `GET /v1/host/secrets/{KEY}` (allow-list in `oauth_clients.allowed_secret_keys`; an allow-list miss is
-403 regardless of key existence). CLI: `bunyip-api machine-client register|rotate|disable|list`; the secret is printed
-once and never logged.
+fail-closed), `GET /v1/host/secrets/{KEY}` (allow-list in `oauth_clients.allowed_secret_keys`; an allow-list miss is
+403 regardless of key existence), and `GET /v1/host/config/{KEY}` (allow-list in `oauth_clients.allowed_config_keys`;
+same allow-list-before-existence rule). CLI: `bunyip-api machine-client register|rotate|disable|list`; the secret is
+printed once and never logged.
 
 ## 10. OCI registry
 
