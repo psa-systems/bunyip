@@ -525,8 +525,8 @@ then build, clippy, fmt and the docker builder stage. Toolchain-less machines us
 ### 14.3 CI workflows (`.forgejo/workflows/`)
 
 `check` (push and PR), `audit` (weekly dependency audit), `build-api` and `build-web` (image builds),
-`create-release` (on merge of a release PR, via `pull_request_target`), `release-images` (dispatch the tagged image
-builds), `e2e` and `e2e-pr` (Playwright), `renovate` (scheduled). Every workflow job runs under Nushell.
+`create-release` (on merge of a release PR, via `pull_request_target`), `e2e` and `e2e-pr` (Playwright), `renovate`
+(scheduled). Every workflow job runs under Nushell.
 
 ### 14.4 Releases
 
