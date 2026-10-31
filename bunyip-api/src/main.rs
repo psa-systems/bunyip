@@ -156,6 +156,8 @@ async fn main() -> anyhow::Result<()> {
     // the `secrets-*` pre-flight family. Migrations stay owned by the server
     // path below, so a subcommand runs against the schema a running deployment
     // already has.
+    // SPEC-2.2.2: a first positional argument is dispatched as a maintenance
+    // subcommand and the process exits without binding either listener below.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(subcommand) = args.first() {
         return run_subcommand(subcommand, &args[1..], &pool, &config).await;
@@ -195,6 +197,9 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     // Run database migrations
+    // SPEC-2.2.3: migrations run before the RLS role is fully provisioned and
+    // before either listener in SPEC-2.2.4 binds; a failure here aborts
+    // startup non-zero.
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -1313,6 +1318,8 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("failed to build backchannel logout HTTP client: {e}"))?;
 
+    // SPEC-2.2.4 / SPEC-2.2.5: the primary server always starts; its
+    // middleware order below is the one SPEC-2.2.5 fixes.
     let primary = HttpServer::new(move || {
         // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
         // back with credentials; everything else gets no
@@ -1500,6 +1507,9 @@ async fn main() -> anyhow::Result<()> {
 
         info!(address = %oci_addr, "Starting OCI registry server");
 
+        // SPEC-2.2.4: the OCI server starts only when OCI is enabled and a
+        // Forgejo registry client is configured; it is awaited alongside the
+        // primary server below.
         let oci = HttpServer::new(move || {
             App::new()
                 // Same external-client-IP attribution in the root span as the
@@ -1836,6 +1846,8 @@ async fn run_reencrypt_subcommand(
             }
             Ok(())
         }
+        // SPEC-2.2.2: an unrecognized subcommand is an error naming every
+        // known one, not a silently-ignored argument or a server start.
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
