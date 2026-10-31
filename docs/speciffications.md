@@ -453,7 +453,9 @@ A separate listener (enabled by `OCI_REGISTRY_ENABLED` plus a configured Forgejo
 
 Suppression: `mailer_suppressions(address PK, reason, detail, ...)`, with `reason` of `bounce` or `complaint`, fed by
 the signed provider webhook and checked on every send. A suppressed relay send returns status `suppressed` with no
-message id.
+message id. A reserved-domain recipient (BUNYIP-863) never reaches SMTP either, but the relay returns `status:
+"sent"` with a generated message id anyway, indistinguishable from a real send; see `docs/mailer-relay.md` for the
+trigger list.
 
 ## 12. Feedback
 
