@@ -102,6 +102,8 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration. A missing or malformed required variable is reported
     // as one error! line per variable (all of them, in this one run) and exits
     // non-zero: an operator message, not a panic and a backtrace (BUNYIP-537).
+    // SPEC-2.2.1: configuration loads before any listener binds or database
+    // connection opens.
     let mut config = match Config::from_env() {
         Ok(config) => config,
         Err(e) => {
