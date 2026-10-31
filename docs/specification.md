@@ -1,378 +1,170 @@
 # Bunyip Specification
 
-This document describes what the Bunyip workspace implements, as read from the source in this repository. Where a
-statement and the code disagree, the code is the authority.
-
-## 1. Purpose and scope
-
-Bunyip is a SaaS account, billing and distribution platform. Operators and members use it for:
-
-- account signup and sign-in (password, magic link, two-factor, login approval)
-- subscription billing through Stripe
-- a platform admin area
-- an OpenID Connect / OAuth 2.1 provider (the OP) for first-party relying-party products
-- a read-only, authenticated OCI registry front for application images
-- authenticated application downloads and a catalog of hosted applications
-- a mailer relay and a host-secret/host-config read API for registered machine clients
-
-It does not: host the products that consume its OIDC provider; accept image pushes (OCI writes are rejected);
-provide dynamic OIDC client registration or token introspection; store invoices or payment history (read live from
-Stripe).
-
-## 2. Architecture
-
-### 2.1 Workspace members (`Cargo.toml`)
-
-| Member | Kind | Role |
-|---|---|---|
-| `bunyip-api` | binary (actix-web 4) | Backend `/v1` API, OIDC issuer, OCI listener, migrations, maintenance subcommands |
-| `bunyip-web` | binary (Axum 0.7) | Server-rendered browser front-end; a backend-for-frontend over the API |
-| `crates/bunyip-domain` | library | Models, repositories, services, `Config`, middleware, email templates |
-| `crates/bunyip-oidc` | library | OIDC / OAuth 2.1 routes, handlers and provider service |
-| `crates/bunyip-oci` | library | OCI registry routes, handlers, caches, token service |
-| `crates/web-kit` | library | Shared server-rendered UI pieces, CSRF and client-IP middleware |
+This is the normative requirement set for the Bunyip workspace. Each numbered statement has a stable id
+`SPEC-<section>.<n>` (for example `SPEC-2.1.3`), uses "must" / "must not", names its trigger, the required
+observable outcome, and the required failure behavior. Where a requirement and the code disagree, fix the
+requirement or the code in a follow-up: this document, not an older summary, prose comment, or README, is the
+source of truth going forward. A requirement is cited at its implementing or enforcing site with a short
+`// SPEC-<id>: <why, if non-obvious>` comment in the file's own comment syntax; the comment never restates the
+requirement text.
+
+Sections 1 and 2 below are written at requirement level. Sections 3 to 14 are a heading skeleton only: each is
+populated by its own tracked issue (see `docs/ROADMAP.md`) and carries no body until then. Section numbers are
+fixed so parallel work does not conflict; do not renumber a section to insert or remove one.
+
+## 1. Purpose and non-goals
+
+Bunyip is a SaaS account, billing, and distribution platform: operator and member account management, Stripe
+subscription billing, a platform admin area, an OpenID Connect / OAuth 2.1 provider for first-party relying-party
+products, a read-only authenticated OCI registry front, authenticated application downloads with a catalog of
+hosted applications, and a mailer relay plus a host-secret/host-config read API for registered machine clients. The
+functional detail for each of these areas is normative in sections 7 to 12 of this document (populated by the
+sibling issues listed in `docs/ROADMAP.md`), not here; this section fixes the boundary of what Bunyip is and is
+not, so later sections do not have to re-derive it.
+
+- `SPEC-1.1` Bunyip must not host, or embed a runtime for, the first-party products that consume its OIDC
+  provider (mokosh-apps, drillmark, lets-chat, and any other registered relying party): those are deployed and run
+  as separate services, and bunyip's own binaries (`bunyip-api`, `bunyip-web`) must contain no code path that
+  starts, proxies application traffic for, or serves the UI of a relying party.
+- `SPEC-1.2` The OCI listener must reject every image push: `POST`, `PUT`, `PATCH`, and `DELETE` under `/v2/` must
+  return an error response rather than accepting, storing, or forwarding a manifest or blob upload.
+- `SPEC-1.3` Bunyip's OIDC provider must not implement, and must not expose an endpoint for, dynamic client
+  registration (RFC 7591) or token introspection (RFC 7662); every OAuth client is provisioned out of band (seed
+  migration or the `machine-client` subcommand), and a request to an introspection or registration path must fall
+  through to the normal unmatched-route handling rather than a dedicated handler.
+- `SPEC-1.4` Bunyip must not persist its own copy of invoices or payment history: a request for billing history
+  (invoices, payments) must be served by a live read against Stripe at request time, not from a local table, so a
+  change made directly in Stripe is reflected on the next request with no local cache to invalidate.
+- `SPEC-1.5` Bunyip must treat PostgreSQL, reached only from `bunyip-api`, as its sole system of record: no other
+  workspace member (`bunyip-web`, or a library crate consumed by either binary) may open its own database
+  connection; a feature that needs persisted state must read or write it through a `bunyip-api` `/v1/*` call.
+
+## 2. Architecture and process model
+
+### 2.1 Workspace members and binaries
+
+`Cargo.toml` is the single workspace manifest: `[workspace.package]` fixes one version, edition, author, license,
+and repository for every member, and `[workspace.dependencies]` pins one shared version of `tokio`, `serde`,
+`uuid`, `chrono`, `tracing`, `tracing-subscriber`, and a handful of small crates so the members cannot drift onto
+different point releases of the same dependency.
+
+- `SPEC-2.1.1` The workspace must declare exactly six members: the two binary crates `bunyip-api` and `bunyip-web`,
+  and the four library crates `crates/bunyip-domain`, `crates/bunyip-oci`, `crates/bunyip-oidc`, and
+  `crates/web-kit`. Adding a seventh workspace member, or removing one of the six, is an architecture change that
+  must update this section in the same change.
+- `SPEC-2.1.2` The dependency direction must be strictly downward and acyclic: `bunyip-api` depends on
+  `bunyip-oci` and `bunyip-oidc`; `bunyip-oci`, `bunyip-oidc`, and `bunyip-web` depend on `bunyip-domain`;
+  `bunyip-domain`, `bunyip-oci`, and `bunyip-oidc` depend on the `dunite-*` crates (git dependencies of
+  `https://dev.a8n.run/psa-systems/dunite`, pinned by commit `rev`, never `branch`). `bunyip-web`'s dependency on
+  `bunyip-domain` is for shared response DTOs and CIDR-parsing types only (`bunyip-web/Cargo.toml`, BUNYIP-761):
+  it must not call a `bunyip-domain` repository, service, or anything else that opens a database connection
+  (`SPEC-1.5`). No `dunite-*` crate may depend on anything in `crates/` or either binary crate.
+  `[workspace.lints.clippy] too_many_arguments = "allow"` is the one workspace-wide lint relaxation; no other lint
+  may be silenced at the workspace level.
+- `SPEC-2.1.3` `bunyip-api/Cargo.toml` must declare exactly four `[[bin]]` targets: `bunyip-api`
+  (`src/main.rs`, the server described in `SPEC-2.2`), `bunyip-e2e-bootstrap`, `seed`, and `gen-demo-seed`. Only
+  the first binds a network listener or touches application traffic; the other three are one-shot CLI tools
+  invoked by an operator or by the e2e suite, never started as a long-running service.
+- `SPEC-2.1.4` `bunyip-web/Cargo.toml` must declare exactly one `[[bin]]` target, `bunyip-web`
+  (`src/main.rs`, described in `SPEC-2.3`).
+- `SPEC-2.1.5` Every workspace member's build must use the exact Rust toolchain pinned in `rust-toolchain.toml`
+  (`[toolchain] channel`, with the `clippy` and `rustfmt` components); a build invoked without that pin available
+  must fail toolchain resolution rather than silently compiling with a different installed channel.
+
+### 2.2 `bunyip-api` process model
+
+`bunyip-api` (`bunyip-api/src/main.rs`) is a single OS process built on `tokio` and `actix-web`.
+
+- `SPEC-2.2.1` On every invocation, `bunyip-api` must load configuration (`Config::from_env`) before doing
+  anything else observable (opening a database connection, binding a listener): a missing or malformed required
+  environment variable must be reported as one logged error line per failing variable and the process must exit
+  with a non-zero status without binding any listener.
+- `SPEC-2.2.2` When invoked with a first positional command-line argument, `bunyip-api` must treat that argument
+  as a maintenance subcommand name, dispatch it (`run_subcommand`), run it to completion against the already-open
+  database pool, and exit without binding either HTTP listener in `SPEC-2.2.4`. An argument that does not match
+  one of the known subcommand names (`secrets-status`, `secrets-migrate`, `secrets-purge`, `config-status`,
+  `machine-client`, `reconcile-duplicate-prices`, `settings-export`, `settings-import`, `mirzam-backfill`,
+  `reencrypt-secrets`) must return an error that names all of the known subcommands, rather than starting the
+  server or silently ignoring the argument.
+- `SPEC-2.2.3` When invoked with no subcommand argument, `bunyip-api` must, in order: reconcile legacy migration
+  checksums, ensure the `bunyip_app` database role shell exists, run every pending migration under
+  `bunyip-api/migrations` via `sqlx::migrate!`, and only then provision the full `bunyip_app` RLS role (when
+  `BUNYIP_APP_PASSWORD` is set) and proceed to serve traffic. A migration failure must abort startup (non-zero
+  exit) before any listener binds.
+- `SPEC-2.2.4` `bunyip-api` must run at most two `actix_web::HttpServer` instances inside the one process: a
+  primary server bound to `server_addr()` (`HOST_IP:APP_PORT`) that always starts, and a second OCI registry
+  server bound to `HOST_IP:OCI_REGISTRY_PORT` that starts only when `config.oci.enabled` is true and a Forgejo
+  registry client is configured (`FORGEJO_BASE_URL` and `FORGEJO_API_TOKEN` both set). When the OCI server does
+  not start, `bunyip-api` must log that it is disabled and continue serving on the primary server alone; when it
+  does start, the process must await both servers (`tokio::try_join!`) so that either one exiting ends the
+  process.
+- `SPEC-2.2.5` The primary server's middleware stack must wrap every request, outermost first, in this order:
+  auto-ban, the rate-limit floor, CORS, the CSRF origin guard, the request-id tag, security headers, the access
+  logger, request tracing, then response compression innermost. The OCI server's stack is request tracing, the
+  access logger, security headers, the request-id tag, then the registry's `WWW-Authenticate` middleware; it
+  registers no CORS or CSRF layer because it carries no cookie-authenticated or browser-originated route.
+  `APP_PORT` has no code default of `4401`: an unset `APP_PORT` resolves to `4000` in `Config::from_env`; the
+  reference `compose.yml` deployment is what sets `APP_PORT=4401` in its environment. `OCI_REGISTRY_PORT`
+  defaults to `18081` in code when unset.
 
-`bunyip-api` has four binaries: `bunyip-api` (default), `bunyip-e2e-bootstrap` (E2E account seeder), `seed`
-(file-driven seed loader) and `gen-demo-seed` (emits seed JSON, never touches a database). `e2e/` is a Playwright
-project (Node) that drives the deployed stack.
-
-Shared framework crates are consumed as git dependencies and are not part of this workspace. The workspace version is
-set once in `[workspace.package]`. The Rust toolchain is pinned in `rust-toolchain.toml` (with `clippy` and `rustfmt`).
-
-### 2.2 Runtime and data flow
+### 2.3 `bunyip-web` process model
 
-- The browser talks only to `bunyip-web`. It calls `bunyip-api` `/v1/*` server-side, forwarding the `Cookie` header and
-  relaying `Set-Cookie`, and adds `X-Forwarded-For` with the resolved end-user address.
-- `bunyip-api` is the only component with a database. PostgreSQL is accessed with sqlx; migrations run at startup
-  (`sqlx::migrate!("./migrations")`).
-- `bunyip-api` runs two actix `HttpServer`s in one process: the primary API and, when enabled, the OCI registry
-  listener.
-- Relying-party products use `/.well-known/*` and `/oauth2/*` on `bunyip-api`; the login and consent UI is served by
-  `bunyip-web`.
-
-### 2.3 Listeners
-
-| Listener | Default port | Source |
-|---|---|---|
-| `bunyip-web` | 4400 (`BUNYIP_BIND_ADDR`) | `bunyip-web` config |
-| `bunyip-api` primary | 4401 (`APP_PORT`, bind address `HOST_IP`) | `Config` |
-| OCI registry | 18081 (`OCI_REGISTRY_PORT`) | `Config`, only when enabled |
-
-## 3. Functional requirements
-
-### 3.1 Accounts and sessions
-
-- A visitor can register (a signup challenge from `GET /v1/auth/register-challenge` is required), sign in with
-  password, request a magic link, reset a password, and accept an admin invite.
-- Login returns either a session (cookies), a two-factor challenge, or a login-approval challenge. A trusted-device
-  cookie can skip the TOTP prompt for non-admins.
-- The access token is a JWT in the `access_token` cookie (30 minutes). The refresh token is in the `refresh_token`
-  cookie; its absolute lifetime is 30 days with remember-me and 1 day without.
-- A user can list and revoke sessions, list and revoke trusted devices, change password, change and verify email,
-  upload an avatar, record OAuth consents, and delete the account (`DELETE /v1/users/me`).
-- Two-factor (TOTP) supports setup, confirm, verify, disable, recovery-code regeneration and rekey.
-- One-time token lifetimes in code: magic link 15 minutes, password reset 1 hour, email verification and email change
-  1 hour, admin invite 7 days, login-approval code 15 minutes, trusted device 30 days.
-- Resend of verification and reset mail is limited to a rolling 3600 second window.
-
-### 3.2 Billing
-
-- A member can start a Stripe checkout, cancel at period end, cancel immediately, reactivate, open the billing portal,
-  and list payments and invoices (read live from Stripe). `GET /v1/pricing` is public.
-- The Stripe webhook (`POST /v1/webhooks/stripe`) verifies the signature, records events in `stripe_webhook_events`
-  for idempotency and applies membership changes. A payment failure opens a 30-day grace period.
-- Stripe credentials are stored encrypted in `stripe_config` and edited by an admin; admin routes manage products,
-  prices (create, update, archive, unarchive, replace) and webhook endpoints.
-- Tier and slot settings live in `tier_config`; an admin can grant and revoke membership and lifetime membership.
-
-### 3.3 Applications, entitlements and downloads
-
-- Applications and groups are catalog rows. Public routes list applications, groups and application docs.
-- Entitlements (`application_entitlements`) gate restricted applications; Stripe prices can be mapped to applications
-  (`stripe_price_entitlements`).
-- Members download release assets through the API, which proxies a Forgejo-compatible release source, with a
-  per-user concurrency limit, a per-user daily limit and an on-disk cache.
-- An admin can refresh the release and OCI metadata of an application.
-
-### 3.4 OIDC provider
-
-- Authorization-code flow with mandatory PKCE `S256`, refresh-token rotation with reuse detection, userinfo,
-  revocation, RP-initiated logout and back-channel logout, JWKS publication, and EdDSA-signed tokens.
-- Per-client tenant assignment (`oauth_client_user_tenants`), lifecycle events through an outbox
-  (`lifecycle_event_outbox`, `lifecycle_event_delivery`).
-- Machine clients (registered in `oauth_clients` with the `client_credentials` marker) authenticate with HTTP Basic
-  at the mailer relay and host endpoints.
-
-### 3.5 OCI registry
-
-- Read-only pull of application images through an authenticated token exchange and a proxied upstream registry, with a
-  manifest cache and a disk blob cache.
-
-### 3.6 Feedback, support and mail
-
-- Public `POST /v1/feedback` stores feedback; admins review, mark spam, archive, restore, export and respond.
-- Support tickets and messages are ingested from a monitored mailbox over IMAP and answered by admins.
-- Outbound mail goes through SMTP. A suppression list (`mailer_suppressions`) is checked on relayed sends and fed by a
-  signed bounce/complaint webhook.
-
-### 3.7 Administration
-
-Admin routes cover users, roles, invites, IP bans, auto-ban config, rate-limit overview/history/whitelist/config, audit
-logs, error logs, feature toggles, branding and brand assets, email and mailer settings, system configuration,
-product-integration configuration, provider status, key health and key rotation, notifications, seed
-export/import, and account backup/restore.
-
-## 4. Interfaces
-
-### 4.1 `bunyip-api` HTTP routes
-
-Auth column: none, optional (cookie if present), user (valid access token), admin, machine (HTTP Basic machine
-client), signed (signature checked in the handler).
-
-Root level:
-
-| Method and path | Auth |
-|---|---|
-| GET `/`, `/health`, `/version`, `/e2e-bootstrapped` | none |
-| GET `/.well-known/openid-configuration`, `/.well-known/jwks.json` | none |
-| GET `/oauth2/authorize`, `/oauth2/userinfo`, `/oauth2/logout`; POST `/oauth2/token`, `/oauth2/revoke` | per OAuth rules |
-
-`/v1/auth` (auth is per handler; challenge and setup routes carry their own tokens):
-
-`POST /register`, `GET /register-challenge`, `POST /login`, `POST /logout`, `GET /logout`, `POST /logout-all`,
-`POST /refresh`, `POST /magic-link`, `POST /magic-link/verify`, `POST /login-approval/verify`,
-`POST /password-reset`, `GET /password-reset/verify`, `POST /password-reset/confirm`, `POST /2fa/setup`,
-`POST /2fa/setup/resume`, `POST /2fa/confirm`, `POST /2fa/verify`, `POST /2fa/disable`, `POST /2fa/recovery-codes`,
-`POST /2fa/rekey`, `POST /2fa/rekey/confirm`, `GET /2fa/status`, `POST /invite/accept`, `GET /redirect`,
-`GET /setup/status`.
-
-`/v1` other scopes:
-
-| Scope | Routes |
-|---|---|
-| `/health`, `/version` | GET, none |
-| `/users` | GET/DELETE `/me`; PUT `/me/profile`; GET/POST/DELETE `/me/avatar`; POST `/me/consents`; GET `/me/oauth-clients/{client_id}/identity`; PUT `/me/password`; POST `/me/email`, `/me/email/confirm`, `/me/email/verify`, `/me/email/verify/confirm`; GET `/me/sessions`; POST `/me/sessions/revoke-others`; DELETE `/me/sessions/{session_id}`; GET `/me/trusted-devices`; POST `/me/trusted-devices/{id}/revoke` |
-| `/account` | backup download and restore (admin) |
-| `/downloads` | GET list |
-| `/events` | GET (server-sent events stream) |
-| `/applications` | GET `""`, `/{slug}`, `/{slug}/downloads`, `/{slug}/downloads/{asset_name}`, `/{slug}/downloads/{version}/{asset_name}`, `/{slug}/docs`, `/{slug}/docs/{doc_slug}` |
-| `/application-docs`, `/application-groups` | GET list |
-| `/billing` | POST setup-intent; GET `/invoices`, `/invoices/{invoice_id}/download` |
-| `/feedback` | POST `""` |
-| `/mailer` | POST `/send`, POST `/webhooks/feedback` (machine and signed) |
-| `/memberships` | GET `/me`, `/payments`; POST `/checkout`, `/cancel`, `/cancel-now`, `/reactivate`, `/billing-portal` |
-| `/pricing`, `/branding`, `/branding/assets/{kind}` | GET, none |
-| `/webhooks` | POST `/stripe` (signed) |
-| `/host` | GET `/secrets/{key}`, `/config/{key}` (machine) |
-| `/admin` | admin; see 4.2 |
-
-### 4.2 `/v1/admin` route families
-
-`stats`, `health`, `integrations`, `providers/status`, `key-health`, `users` (list, get, delete, status, role, email,
-email verify, two-factor reset, reset-password, impersonate, lifetime, lifetime revoke, tier, entitlements),
-`applications` (CRUD, reorder, docs, group, restricted, stripe-prices, downloads refresh, oci refresh),
-`application-docs`, `application-groups`, `memberships` (list, grant, revoke), `account-deletes/{user_id}/replay`,
-`ip-enrichment`, `ip-bans`, `mailer-suppressions`, `rate-limits` (list, history, overview, reset, whitelist),
-`rate-limit-configs`, `audit-logs`, `logs`, `seed` (templates, export, import), `feedback` (list, new-count, export,
-archive, restore, attachments, status, mark-spam, unmark-spam, respond, delete), `support/tickets`, `system-config`,
-`oauth-clients/{client_id}/user-tenants`, `invites`, `pricing/status`, `tier-config`, `tier-settings`,
-`feature-toggles`, `branding` (and assets), `email` (get, put, test, test-send), `mirzam`, `mokosh`, `auto-ban-config`,
-`stripe` (config, permissions, products, prices, webhooks), `notifications`, `key-rotation/{key_id}/status` and
-`/reencrypt`.
-
-### 4.3 OCI listener
-
-| Route | Behavior |
-|---|---|
-| GET `/auth/token` | token exchange |
-| GET `/v2`, `/v2/` | version probe |
-| GET, HEAD `/v2/{slug}/manifests/{reference}` | manifest |
-| GET, HEAD `/v2/{slug}/blobs/{digest}` | blob |
-| POST, PUT, PATCH, DELETE `/v2/{tail}` | rejected as unsupported |
-
-### 4.4 `bunyip-web` routes
-
-Public: `/healthz`, `/`, `/pricing`, `/our-story`, `/roadmap`, `/terms`, `/privacy`, `/docs`, `/docs/:slug`,
-`/apps/:slug/docs[/:doc_slug]`, `/brand/:kind`, `/favicon.ico`, static files under `/assets`. Authentication pages:
-`/login`, `/logout`, `/register`, `/settings/confirm-email`, `/settings/verify-email`. Member pages: `/dashboard`,
-`/applications`, `/downloads`, `/downloads/:slug/:asset`, `/billing`, `/checkout/success`, `/membership-required`,
-`/membership`, `/community`, `/settings` and its sessions, trusted-device and two-factor sub-routes. Admin pages live
-under `/admin` (status, providers, audit logs, logs, seed, invites, IP bans, rate limits, users, memberships, feedback,
-applications, groups, entitlements, tier settings, features, branding, email, mailer suppressions, system config,
-integrations, auto-ban settings, Stripe products/prices/webhooks) plus `/integrations/backup`. Unmatched routes return
-the branded 404. Mutations are form posts.
-
-### 4.5 `bunyip-api` subcommands
-
-Run as `bunyip-api <subcommand>`; any other argument is an error that lists the known names.
-
-| Subcommand | Purpose |
-|---|---|
-| `secrets-status [--json]` | report which store serves each governed secret |
-| `secrets-migrate --to <environment\|database\|infisical> [--dry-run] [--allow-missing]` | move governed secrets between stores |
-| `secrets-purge [--confirm]` | remove secrets from non-selected stores |
-| `config-status [--json]` | report which provider serves each admin-managed configuration key |
-| `machine-client register\|rotate\|disable\|list` | manage machine-client credentials |
-| `reconcile-duplicate-prices [--apply]` | report (or archive) duplicate active Stripe prices |
-| `settings-export`, `settings-import` | move settings as an encrypted archive |
-| `mirzam-backfill` | backfill mailing-list sync |
-| `reencrypt-secrets` | re-encrypt stored secrets under the current key |
-
-## 5. Data model
-
-PostgreSQL. Migrations are in `bunyip-api/migrations/` (122 `.sql` files plus a README) and are applied at startup.
-Committed migrations are not edited in place.
-
-Tables created by migrations (excluding dropped ones), by family:
-
-| Family | Tables |
-|---|---|
-| Accounts and sessions | `users`, `user_avatars`, `refresh_tokens`, `refresh_token_families`, `refresh_tokens_v2`, `access_token_blocklist`, `op_sessions` |
-| One-time tokens | `magic_link_tokens`, `password_reset_tokens`, `email_verification_tokens`, `email_change_requests`, `admin_invites` |
-| Two-factor and devices | `user_totp`, `recovery_codes`, `trusted_devices`, `login_approval_codes`, `login_devices` |
-| Protection and audit | `ip_bans`, `auto_ban_config`, `rate_limits`, `rate_limit_history`, `rate_limit_traffic`, `rate_limit_whitelist`, `rate_limit_configs`, `audit_logs`, `admin_notifications` |
-| Feedback and support | `feedback`, `feedback_archive`, `feedback_attachments`, `feedback_spam_reasons`, `support_tickets`, `support_messages` |
-| Mail | `email_config`, `mailer_suppressions` |
-| Billing | `stripe_config`, `tier_config`, `stripe_webhook_events`, `stripe_price_entitlements` |
-| Catalog | `applications`, `application_groups`, `application_versions`, `application_docs`, `application_entitlements`, `download_cache`, `download_daily_counts` |
-| OIDC | `oauth_clients`, `oauth_authorization_codes`, `user_application_access`, `oauth_client_user_tenants`, `lifecycle_event_outbox`, `lifecycle_event_delivery`, `account_delete_dispatch_failures` |
-| OCI | `oci_blob_cache`, `oci_pull_daily_counts` |
-| Configuration and branding | `feature_toggles`, `branding`, `branding_assets`, `mirzam_config`, `mokosh_config` |
-
-`subscriptions`, `payment_history` and `invoices` were created and later dropped.
-
-Constraints and behavior verified in code:
-
-- Row-level security is enabled and forced with policy `user_isolation` on `trusted_devices`, `user_totp`,
-  `recovery_codes`, `application_entitlements` and `email_change_requests`. It takes effect only for the unprivileged
-  `bunyip_app` role (pool from `APP_DATABASE_URL`); without it the app pool falls back to the primary pool.
-- Each database pool allows 10 connections; with the RLS pool configured one replica holds up to 20.
-- `stripe_webhook_events` carries `event_id`, `event_type`, `received_at` and a processing status.
-- The feature-toggle registry holds one feature, `tenant_hostnames`.
-- At-rest encryption uses one AES-256-GCM key set (`APP_ENCRYPTION_KEY`, previous keys in `APP_ENCRYPTION_KEY_PREV`)
-  for TOTP secrets, Stripe credentials and the SMTP password.
-
-## 6. Configuration
-
-### 6.1 Mechanism
-
-Every environment variable `bunyip-api` reads is declared in `ENV_INVENTORY` with a class; a test fails the build if
-`bunyip-api` or `bunyip-web` source reads an undeclared variable.
-
-- Required: startup fails with one error line per missing variable, exit non-zero (`DATABASE_URL`, `SECRETS_STORAGE`).
-- Required in production (`ENVIRONMENT` is `production`, the default): `JWT_SECRET`, `APP_ENCRYPTION_KEY`,
-  `BUNYIP_WEBHOOK_SIGNING_SECRET`, and, when `OIDC_ISSUER` is set, `OIDC_JWT_PRIVATE_KEY_PATH` and
-  `OIDC_JWT_ACTIVE_KID`.
-- Feature-gating: one startup warning per absent variable naming the feature that is off.
-- Defaulted: documented in `docs/configuration.md`.
-- Secrets can be supplied as `{NAME}_FILE` (path to a file; an empty file means not configured).
-- Admin-managed configuration resolves through a provider stack: database rows, then files in `BUNYIP_CONFIG_DIR`,
-  then environment.
-- `SECRETS_STORAGE` (`environment`, `database` or `infisical`) selects the one store for governed integration secrets
-  (SMTP password, Stripe keys, IMAP password, mailing-list token, a hosted-product OAuth client secret).
-
-### 6.2 Variables by area (names from `ENV_INVENTORY`)
-
-| Area | Variables |
-|---|---|
-| Runtime | `ENVIRONMENT`, `RUST_LOG`, `HOST_IP`, `APP_PORT`, `APP_NAME`, `APP_URL`, `BUNYIP_CONFIG_FILE`, `BUNYIP_CONFIG_DIR`, `DB_POOL_METRICS_INTERVAL_SECS`, `DUNITE_ARGON2_MAX_CONCURRENT`, `DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` |
-| Database | `DATABASE_URL`, `APP_DATABASE_URL`, `BUNYIP_APP_PASSWORD` |
-| Secrets and keys | `SECRETS_STORAGE`, `JWT_SECRET`, `APP_ENCRYPTION_KEY`, `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION`, `BUNYIP_WEBHOOK_SIGNING_SECRET`, `INFISICAL_ENABLED`, `INFISICAL_ADDRESS`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT`, `INFISICAL_SECRET_PATH`, `INFISICAL_CLIENT_ID`, `INFISICAL_CLIENT_SECRET` |
-| Browser origin and cookies | `CORS_ORIGIN` (also the CSRF allow-list), `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION` |
-| Client IP and abuse | `TRUSTED_PROXY_CIDR`, `COUNTRY_ALLOW`, `COUNTRY_DENY`, `AUTO_BAN_ENABLED`, `AUTO_BAN_THRESHOLD`, `AUTO_BAN_WINDOW_SECS`, `AUTO_BAN_DURATION_SECS`, `IP2LOCATION_DB_PATH`, `IP2PROXY_DB_PATH`, `RATE_LIMIT_{ACTION}_MAX_REQUESTS`, `RATE_LIMIT_{ACTION}_WINDOW_SECONDS` |
-| First admin | `SETUP_DEFAULT_ADMIN`, `BOOTSTRAP_ADMIN_EMAIL` |
-| Sign-in policy | `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED` |
-| OIDC provider | `OIDC_ISSUER`, `OIDC_JWT_PRIVATE_KEY_PATH`, `OIDC_JWT_ACTIVE_KID`, `OIDC_JWT_PUBLIC_KEYS_DIR`, `OIDC_ACCESS_TOKEN_TTL_SECONDS` (default 600, clamped 60 to 900), `OIDC_REFRESH_TOKEN_TTL_SECONDS` (default 2592000), `OIDC_REFRESH_IDLE_TTL_SECONDS` (default 1209600), `OIDC_CODE_TTL_SECONDS` (default 60, max 120), `SESSION_IDLE_TTL_SECONDS` (default 28800), `SESSION_IDLE_TTL_REMEMBER_SECONDS` (default 1209600), `OIDC_LIFECYCLE_EVENT_KEY`, `OIDC_RS_AUDIENCE` |
-| Hosted-product OIDC clients | `*_REDIRECT_URIS`, `*_AUDIENCE`, `*_POST_LOGOUT_REDIRECT_URIS` and one client secret hash for each of the three seeded hosted products; `MOKOSH_WEBHOOK_URL`, `MOKOSH_BACKUP_API_URL`, `MOKOSH_PROVIDER_STATUS_URL`, `DRILLMARK_PROVIDER_STATUS_URL`, `PROVIDER_STATUS_CLIENT_ID`, `PROVIDER_STATUS_CLIENT_SECRET` |
-| Email | `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_EHLO_NAME`, `SMTP_FROM`, `ADMIN_NOTIFICATION_EMAILS`, `MAILER_WEBHOOK_SECRET`, `SUPPORT_INBOX_EMAIL`, `SUPPORT_IMAP_HOST`, `SUPPORT_IMAP_PORT`, `SUPPORT_IMAP_USERNAME`, `SUPPORT_IMAP_PASSWORD`, `SUPPORT_IMAP_MAILBOX`, `SUPPORT_IMAP_ENABLED`, `SUPPORT_IMAP_POLL_SECS` |
-| Stripe (read only as `*_FILE`) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` |
-| Billing and tiers | `TIER_LIFETIME_SLOTS`, `TIER_EARLY_ADOPTER_SLOTS`, `TIER_EARLY_ADOPTER_TRIAL_DAYS`, `TIER_STANDARD_TRIAL_DAYS`, `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` |
-| Distribution | `FORGEJO_BASE_URL`, `FORGEJO_API_TOKEN`, `DOWNLOAD_CACHE_DIR`, `DOWNLOAD_CACHE_MAX_BYTES`, `DOWNLOAD_CONCURRENCY_PER_USER`, `DOWNLOAD_DAILY_LIMIT_PER_USER`, `FORGEJO_RELEASE_CACHE_TTL_SECS` |
-| OCI | `OCI_REGISTRY_ENABLED`, `OCI_REGISTRY_SERVICE` (required when enabled), `OCI_REGISTRY_PORT`, `OCI_REGISTRY_REALM`, `OCI_BLOB_CACHE_DIR`, `OCI_BLOB_CACHE_MAX_BYTES`, `OCI_MANIFEST_CACHE_TTL_SECS`, `OCI_CONCURRENT_MANIFESTS_PER_USER`, `OCI_PULLS_PER_USER_PER_DAY`, `OCI_TOKEN_TTL_SECS` |
-| Update check | `BUNYIP_UPDATE_CHECK_URL`, `BUNYIP_UPDATE_CHECK_TOKEN` |
-| Other integrations | `MIRZAM_API_TOKEN`, `MOKOSH_GOOGLE_CLIENT_SECRET` |
-| Test and seed tooling | `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW` |
-| `bunyip-web` | `BUNYIP_BIND_ADDR`, `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`, `TRUSTED_PROXY_CIDR`, `RUST_LOG` |
-
-The full per-variable reference is `docs/configuration.md`.
-
-## 7. Security
-
-- **Tokens and cookies.** Session access tokens are HS256 JWTs signed with `JWT_SECRET`; OIDC tokens are EdDSA JWTs
-  signed with the Ed25519 key at `OIDC_JWT_PRIVATE_KEY_PATH`. Cookies: `access_token`, `refresh_token`,
-  `bunyip_trusted_device`, `bunyip_op_session`.
-- **Authorization extractors** (`crates/bunyip-domain/src/middleware/auth.rs`): authenticated user, optional user,
-  admin, verified admin (two-factor verified), super admin, member.
-- **CSRF.** `bunyip-api` checks Origin/Referer on cookie-authenticated writes against `CORS_ORIGIN`. `bunyip-web`
-  enforces same-origin on state-changing posts.
-- **Headers.** `bunyip-api` sets security headers and a CSP whose `connect-src` and `form-action` are widened with
-  the CORS origins. `bunyip-web` sets a CSP on every response.
-- **Rate limits.** A floor of 100 requests per 60 s keyed by user (authenticated) and 60 per 60 s keyed by IP
-  (unauthenticated), with exempt health, version, pricing, Stripe webhook and mailer paths. Per-action limits
-  (requests / seconds): `LOGIN` 10/60, `MAGIC_LINK` 3/600, `PASSWORD_RESET` 3/3600, `REGISTRATION` 10/3600,
-  `TWO_FACTOR_VERIFY_FAILURES` 5/900, `FEEDBACK_SUBMIT` 20/3600, `SMTP_TEST` 6/300, `MAILER_SEND` 60/60,
-  `MAILER_AUTH_FAILURES` 10/60, `HOST_SECRET_READ` 30/60, `HOST_SECRET_AUTH_FAILURES` 10/60, `HOST_CONFIG_READ` 30/60,
-  `HOST_CONFIG_AUTH_FAILURES` 10/60, `ADMIN_DIAGNOSTICS` 60/60, `OAUTH_TOKEN` 60/60, `OAUTH_AUTHORIZE` 120/60,
-  `OAUTH_USERINFO` 240/60, `OAUTH_REVOKE` 60/60, `OAUTH_DISCOVERY` 120/60, `OCI_TOKEN_FAILURES` 5/60,
-  `OCI_TOKEN_THROUGHPUT` 60/60, `OCI_TOKEN_IP_FAILURES` 20/60. Overrides come from `rate_limit_configs` rows or the
-  `RATE_LIMIT_*` variables.
-- **Auto-ban.** Offending IPs are banned in memory and persisted to `ip_bans` (defaults from the `AUTO_BAN_*`
-  variables); the ban check is the outermost API middleware.
-- **Input.** JSON bodies are limited to 32768 bytes; malformed input returns the generic error envelope.
-- **Secrets at rest.** AES-256-GCM key set (section 5). Secrets can be mounted as files. Startup reports every missing
-  required secret together and exits non-zero rather than panicking.
-- **OIDC.** Only `authorization_code` and `refresh_token` grants, PKCE `S256`, EdDSA ID tokens, back-channel logout.
-  Discovery advertises `response_types_supported: ["code"]`.
-- **Stripe webhook.** Signature verified; handler failure returns an error so Stripe retries.
-- **Machine clients.** Credentials are verified against an Argon2id hash on `oauth_clients`; the secret is shown once
-  by the CLI. Host-secret reads are limited to an allow-list on the caller's registration.
-- **Transport headers** such as HSTS are not set by `bunyip-web`; the edge proxy is expected to set them.
-
-## 8. Integrations and dependencies
-
-| Role | Service |
-|---|---|
-| Database | PostgreSQL (compose image `postgres:18.2-alpine3.23`) |
-| Payments | Stripe |
-| Mail out / in | SMTP relay; IMAP mailbox for support ingestion |
-| Release and image source | Forgejo-compatible server (release assets, generic packages, container registry) |
-| Secret store | Infisical (when `SECRETS_STORAGE=infisical`) |
-| Geo / proxy data | IP2Location and IP2Proxy database files (optional) |
-| Update check | HTTP endpoint at `BUNYIP_UPDATE_CHECK_URL` (optional) |
-| First-party products | OIDC relying parties, a backup adapter, a provider-status feed and a mailing-list sync, each gated by its own variables |
-
-## 9. Deployment and operations
-
-- `compose.yml` runs three services on one bridge network: `postgres`, `api` and `web`. The `api` and `web` images are
-  required, pinned tags (`BUNYIP_API_IMAGE`, `BUNYIP_WEB_IMAGE`). Published ports bind to `HOST_IP` (default
-  loopback): 4401, 18081 and 4400.
-- Secrets are compose file secrets read through the `{NAME}_FILE` convention. Containers run with `no-new-privileges`,
-  all capabilities dropped (four re-added for the entrypoint user switch) and a read-only root filesystem.
-- Named volumes: Postgres data, a configuration-layer directory (`/app/config`), the OCI blob cache and the download
-  cache. The OIDC key directory is mounted read-only.
-- `bunyip-api/oci-build/Dockerfile` builds a static musl image with `HEALTHCHECK` on `GET /v1/health` (30 s interval)
-  and entrypoint `gosu-entrypoint.sh /app/bunyip-api`. `bunyip-web/oci-build/Dockerfile` builds a glibc image with
-  entrypoint `gosu-entrypoint.sh` and `CMD /app/bunyip-web`. `bunyip-api/Dockerfile` and `bunyip-web/Dockerfile` are
-  the development images (`cargo watch`).
-- `compose.dev.yml` and `compose.dev-sso.yml` are development variants.
-- `just` drives development; `just pre-commit` and `just check` are the gates. CI workflows are in
-  `.forgejo/workflows/`: `check`, `audit`, `build-api`, `build-web`, `create-release`, `e2e`, `e2e-pr`, `renovate`.
-- Liveness: `GET /health` and `GET /v1/health` on the API, `GET /healthz` on the web server (no database dependency).
-  `GET /version` reports the build version, revision and update status.
-- `GET /e2e-bootstrapped` returns `false` without querying when `ENVIRONMENT` is production.
-
-## 10. Non-functional behavior
-
-- **Logging.** `tracing` with an `EnvFilter` from `RUST_LOG` (default `info`), initialized before configuration loads
-  so configuration failures are logged. An in-memory error-log buffer feeds the admin logs view. The access log
-  records the trusted external client IP; every request carries a request id.
-- **Middleware order in `bunyip-api`** (outermost first): auto-ban, rate-limit floor, CORS (`max_age` 3600), CSRF
-  origin guard, request id, security headers, access log, request tracing, response compression.
-- **Middleware order in `bunyip-web`** (outermost first): compression, CSP, client-IP forwarding, CSRF origin check,
-  unknown-host gate.
-- **Errors.** Failures return an error envelope with a non-2xx status; OIDC, OCI and webhook endpoints use their
-  protocol-specific error shapes.
-- **Shutdown.** The primary server uses a 30 second shutdown timeout.
-- **Refresh jobs.** The API re-reads branding and feature toggles every 60 seconds.
-- **Audit.** Security-relevant actions are written to `audit_logs`.
-- **Database pool metrics** are sampled when `DB_POOL_METRICS_INTERVAL_SECS` is set.
+`bunyip-web` (`bunyip-web/src/main.rs`) is a single OS process built on `tokio` and `axum`; it is the only
+component the browser talks to directly.
+
+- `SPEC-2.3.1` On startup, before binding its listener, `bunyip-web` must load its configuration from the
+  environment, perform one blocking fetch of the branding record and the feature-flag snapshot from `bunyip-api`,
+  and install both into process-wide state, so the first response it serves already reflects the current brand
+  and flags rather than a compiled-in placeholder. A failure of either startup fetch must be logged and must not
+  abort the process: it falls back to an unbranded default (branding) or every flag off (feature flags), and a
+  background refresh task retries on an interval.
+- `SPEC-2.3.2` `bunyip-web` must run exactly one HTTP listener, bound to `BUNYIP_BIND_ADDR` (default
+  `0.0.0.0:4400` when unset), serving one `axum::Router` built in `main()`; it must not open a second listener or
+  a second `axum::serve` call in the same process.
+- `SPEC-2.3.3` Every `bunyip-api` call `bunyip-web` makes on behalf of a browser request must forward the
+  inbound `Cookie` header to `bunyip-api` and relay any `Set-Cookie` response header back to the browser
+  unmodified, and must add an `X-Forwarded-For` header carrying the end-user address resolved from the inbound
+  connection (honoring `bunyip-web`'s own `TRUSTED_PROXY_CIDR`), so a cookie-session or audit record on
+  `bunyip-api` attributes to the real client rather than to the `bunyip-web` container.
+- `SPEC-2.3.4` The router's outermost-to-innermost middleware order must be: compression, the CSP header layer,
+  client-IP resolution, the CSRF origin check, then the unknown-host gate; any route not matched by an explicit
+  `.route()` or `.nest_service()` registration must fall through to the branded 404 handler rather than axum's
+  default 404.
+
+### 2.4 Runtime data flow and listeners
+
+- `SPEC-2.4.1` A browser must never call `bunyip-api` directly: every authenticated or data-bearing request from
+  the browser goes to `bunyip-web`, which is the only member permitted to originate a `/v1/*` or `/oauth2/*` or
+  `/.well-known/*` call to `bunyip-api` on the browser's behalf (`SPEC-2.3.3`). A first-party relying-party
+  product (a separate deployment, not a workspace member) is the one exception: it calls `bunyip-api`'s
+  `/.well-known/*` and `/oauth2/*` endpoints directly as an OIDC relying party, while its own login and consent UI
+  is still served by `bunyip-web`'s `/oauth2/consent` page.
+- `SPEC-2.4.2` The three listeners this workspace's binaries bind, and their configuration source, must be:
+  `bunyip-web` on `BUNYIP_BIND_ADDR` (code default `0.0.0.0:4400`); `bunyip-api`'s primary server on
+  `HOST_IP:APP_PORT` (code default `0.0.0.0:4000`, overridden to `4401` by the reference `compose.yml`); and
+  `bunyip-api`'s OCI registry server on `HOST_IP:OCI_REGISTRY_PORT` (code default `18081`), bound only under the
+  condition in `SPEC-2.2.4`.
+
+## 3. CI, scripts and end-to-end tests
+
+## 4. Data model and migrations
+
+## 5. OIDC provider crate
+
+## 6. OCI registry crate
+
+## 7. Domain crate core (root, models, repositories, middleware)
+
+## 8. Domain crate services
+
+## 9. API application core (root, binaries, routes)
+
+## 10. API handlers
+
+## 11. Web application core (root, api client, routes, skin, views, assets, image build)
+
+## 12. Web handlers
+
+## 13. Shared web UI crate
+
+## 14. Workspace build, packaging and deployment
