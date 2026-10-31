@@ -55,7 +55,12 @@ different point releases of the same dependency.
 - `SPEC-2.1.2` The dependency direction must be strictly downward and acyclic: `bunyip-api` depends on
   `bunyip-oci` and `bunyip-oidc`; `bunyip-oci`, `bunyip-oidc`, and `bunyip-web` depend on `bunyip-domain`;
   `bunyip-domain`, `bunyip-oci`, and `bunyip-oidc` depend on the `dunite-*` crates (git dependencies of
-  `https://dev.a8n.run/psa-systems/dunite`, pinned by commit `rev`, never `branch`). `bunyip-web`'s dependency on
+  `https://dev.a8n.run/psa-systems/dunite`, pinned by commit `rev`, never `branch`). `bunyip-api` also takes four
+  `dunite-*` crates as its own direct dependencies, not only transitively through `bunyip-oci`/`bunyip-oidc`/
+  `bunyip-domain` (`bunyip-api/Cargo.toml`): `dunite-core` for the Origin/Referer CSRF guard
+  (`dunite_core::middleware::OriginGuard`, wired in `main.rs`), `dunite-image-upload` for upload content
+  validation, `dunite-update-check` for the self-hosted update checker, and `dunite-events` for its own event
+  emission. `bunyip-web`'s dependency on
   `bunyip-domain` is for shared response DTOs and CIDR-parsing types only (`bunyip-web/Cargo.toml`, BUNYIP-761):
   it must not call a `bunyip-domain` repository, service, or anything else that opens a database connection
   (`SPEC-1.5`). No `dunite-*` crate may depend on anything in `crates/` or either binary crate.
