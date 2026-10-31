@@ -15,6 +15,7 @@ Bunyip is the PSA Systems SaaS platform. It provides:
 - an OpenID Connect / OAuth 2.1 provider for first-party products
 - an authenticated OCI registry front for application images
 - application downloads and a catalog of hosted applications
+- a mailer relay and a host-secret/host-config read API for registered machine clients
 
 Out of scope: the products that consume the OIDC provider, and the shared `dunite-*` crates (consumed as git
 dependencies and not described here beyond how Bunyip uses them).
@@ -277,6 +278,9 @@ Admin invites, user management (status, role, email, 2FA reset, password reset, 
 and unban by an admin; create is super-admin), auto-ban config, rate-limit overview, history, whitelist and config
 (config writes are super-admin), audit logs, mailer suppressions, support tickets, and account backup and restore
 (`/v1/account/backup`, `/restore`, 8 MiB limit, admin only).
+
+Mirzam newsletter integration: API-token settings page and connection check (see `docs/configuration.md`'s Mirzam
+section). Mokosh Google OAuth client: host-secret registration and rotation (see `docs/host-secrets.md`).
 
 ## 7. Billing
 
