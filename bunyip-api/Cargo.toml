@@ -82,7 +82,7 @@ thiserror = "1"
 anyhow = "1"
 
 # Auth / crypto / encoding.
-jsonwebtoken = "9"
+jsonwebtoken = "10"
 base64 = "0.21"
 bytes = "1"
 ipnetwork = "0.20"
