@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.28
 #
 # Development image for bunyip-api: the actix-web backend with hot reload
 # (cargo-watch, bundled in the builder image). Source is bind-mounted at runtime

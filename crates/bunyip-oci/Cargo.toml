@@ -16,26 +16,26 @@ bunyip-domain = { path = "../bunyip-domain" }
 # Wave 1 bump: 8617fc8 adds `errors::context::{OciErrorContext, internal_fault}`
 # (DUNITE-19) and `middleware::WwwAuthenticate` (DUNITE-21), both of which this
 # crate used to carry locally. The local copies come out below.
-dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-oci = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 
-actix-web = "4"
-async-trait = "0.1"
-futures-util = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-base64 = "0.21"
-hex = "0.4"
-ipnetwork = "0.20"
-sha2 = "0.10"
-bytes = "1"
-tokio-util = { version = "0.7", features = ["codec"] }
-tokio = { version = "1", features = ["full", "signal"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
+actix-web = "4.18.1"
+async-trait = "0.1.92"
+futures-util = "0.3.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tracing = "0.1.44"
+base64 = "0.23.1"
+hex = "0.4.3"
+ipnetwork = "0.21.1"
+sha2 = "0.11.1"
+bytes = "1.12.1"
+tokio-util = { version = "0.7.20", features = ["codec"] }
+tokio = { version = "1.54.1", features = ["full", "signal"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
-actix-rt = "2"
-wiremock = "0.6"
-tempfile = "3"
+actix-rt = "2.15.0"
+wiremock = "0.6.5"
+tempfile = "3.27.0"

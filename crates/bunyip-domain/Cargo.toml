@@ -24,16 +24,16 @@ workspace = true
 # (A1/A3/A6/A7 only moved into dunite-oci, dunite-webhook, and a new leaf), but
 # the whole graph pins one rev so dunite-oci's `AppError` and bunyip-domain's
 # `AppError` are the same type after the bump.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres. Moves
 # with dunite-core.
-dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # OIDC OP-session kernel: the shared `check_op_session_alive` tri-arm liveness
 # predicate (BUNYIP-885). bunyip-oidc already pins this crate at the same rev;
 # the hub refresh path here calls the same predicate so the two op-session
 # checks cannot drift apart again. Moves with dunite-core.
-dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
 # that introduced the crate; the dunite-core/download pins stay at c5730bc since
@@ -44,12 +44,12 @@ dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90f
 # a descendant of the DUNITE-10 merge, so it carries the classified
 # `StripeServiceError::Stripe` variant BUNYIP-516 maps as well as the
 # `unarchive_price` BUNYIP-513 uses.
-dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
+dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
 # merged rev in a follow-up.
-dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
 # + runtime config land in a follow-up.
@@ -59,112 +59,112 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # (HTTP status + Stripe `error.code` / `error.type`, no free-text Stripe message)
 # plus the `list_webhook_endpoints` 403-check that BUNYIP-516's `stripe_err`
 # permission mapping depends on. Moves in lock-step with dunite-stripe-core above.
-dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this
 # crate's models. The User row + repository stay here (a8n's schema has not
 # caught up) and nothing in the crate derives FromRow (a8n is on sqlx 0.7).
 # Pinned to the branch rev that introduced it.
-dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-531: the login-location signal (IP2Location lookup, the non-public-address
 # filter, the record/unchanged/alert branch) extracted from this crate in
 # DEV-525 and shared with a8n-tools.
-dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # BUNYIP-437: the ASN / VPN enrichment counterpart to dunite-geoip. Reads an
 # IP2Proxy PX .BIN (address -> ASN, owning org, network category, VPN/proxy
 # likelihood); advisory only, never a spam verdict. Same offline, leaf, owns-its-
 # error contract as dunite-geoip.
-dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-527: the HIBP k-anonymity password-breach check and the outbound
 # HMAC-signed webhook sender, extracted from this crate's services. Leaf crates
 # (own their types, no dunite-core dep), so they pin independently of the
 # dunite-core graph rev.
-dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
+dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Wave 1 bump: dunite-webhook moves to 8617fc8 for the new inbound HMAC
 # signature verifier (DUNITE-22, mirrors the outbound signing scheme).
-dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # BUNYIP-553/827: the semaphore-bounded blocking-pool wrapper that keeps a
 # ~100 ms / 64 MiB Argon2 hash off the request future. Extracted from
 # bunyip-domain into its own leaf (DUNITE-20); this crate's `argon2_offload`
 # module is now a thin shim mapping `OffloadError` to `AppError`.
-dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Wave 2 bump: shared mailer vocabulary (BUNYIP-602/603/604) extracted into
 # its own leaf (DUNITE-24): the `SuppressionList` + `SuppressionReason` +
 # `NoSuppression` + `RelayMessage` + `normalize_address` primitives that
 # `services/mailer_relay.rs` and `services/mailer_webhook.rs` used to carry
 # locally. Bunyip keeps `MailerRelay`, `DbSuppressionList`, and
 # `MailerSuppressionRepository`.
-dunite-mailer = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-mailer = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-528: the in-process event bus + SSE framing (generic over the event type),
 # extracted from services/event_bus.rs + handlers/events.rs. Leaf crate.
-dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
-async-trait = "0.1"
+dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
+async-trait = "0.1.92"
 
 # Web framework + multipart.
-actix-web = "4"
-actix-cors = "0.7"
-actix-multipart = "0.7"
-futures-util = "0.3"
+actix-web = "4.18.1"
+actix-cors = "0.7.2"
+actix-multipart = "0.8.5"
+futures-util = "0.3.34"
 
 # Serialization.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 # BUNYIP-579: the file-based system-config layer (sys_config.rs) reads/writes YAML.
-serde_yaml = "0.9"
+serde_yaml = "0.9.34"
 
 # Config / logging.
-dotenvy = "0.15"
-tracing = "0.1"
-tracing-actix-web = "0.7"
+dotenvy = "0.15.7"
+tracing = "0.1.44"
+tracing-actix-web = "0.7.25"
 
 # Errors.
-thiserror = "1"
-anyhow = "1"
+thiserror = "1.0.69"
+anyhow = "1.0.104"
 
 # Auth / crypto / encoding (JwtService + token hashing live here; the primitive
 # encryption/password services come from dunite-core).
 jsonwebtoken = "9"
-argon2 = "0.5"
-password-hash = "0.5"
-aes-gcm = "0.10"
-rand = "0.8"
-sha2 = "0.10"
+argon2 = "0.6.0"
+password-hash = "0.6.1"
+aes-gcm = "0.11.1"
+rand = "0.10.3"
+sha2 = "0.11.1"
 # Constant-time comparison of secret-derived material (BUNYIP-375 login-approval
 # code check). Same crate bunyip-oidc uses for PKCE verification.
-subtle = "2"
+subtle = "2.6.1"
 # BUNYIP-253: HIBP k-anonymity uses SHA-1 (it's the documented hash for
 # the Pwned Passwords range query). Not used for any other purpose.
-sha1 = "0.10"
-base64 = "0.21"
-ipnetwork = "0.20"
-hmac = "0.12"
-hex = "0.4"
-data-encoding = "2"
+sha1 = "0.11.0"
+base64 = "0.23.1"
+ipnetwork = "0.21.1"
+hmac = "0.13.0"
+hex = "0.4.3"
+data-encoding = "2.11.1"
 
 # Templating + static init (email templates).
-tera = "1"
-lazy_static = "1.4"
+tera = "1.20.1"
+lazy_static = "1.5.1"
 
 # HTTP client / IO.
 # (The Forgejo client, metadata/asset caches, and download limiter now come
 # from dunite-download; reqwest/url stay for the webhook + Stripe services.)
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-url = "2"
-urlencoding = "2"
-tokio = { version = "1", features = ["full", "signal"] }
-bytes = "1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls-tls"] }
+url = "2.5.8"
+urlencoding = "2.1.3"
+tokio = { version = "1.54.1", features = ["full", "signal"] }
+bytes = "1.12.1"
 
 # Database.
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-validator = { version = "0.18", features = ["derive"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
+validator = { version = "0.21.0", features = ["derive"] }
 
 # Billing / 2FA / email.
-async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
-totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
-lettre = { version = "0.11", features = ["tokio1-native-tls", "builder"] }
+async-stripe = { version = "0.41.0", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
+totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }
+lettre = { version = "0.11.23", features = ["tokio1-native-tls", "builder"] }
 
 [dev-dependencies]
-actix-rt = "2"
-wiremock = "0.6"
+actix-rt = "2.15.0"
+wiremock = "0.6.5"

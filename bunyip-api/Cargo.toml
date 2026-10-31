@@ -50,69 +50,69 @@ bunyip-oidc = { path = "../crates/bunyip-oidc" }
 
 # BUNYIP-356: the Mokosh backup adapter implements the async AppBackupAdapter
 # trait (defined in bunyip-domain with #[async_trait]).
-async-trait = "0.1"
+async-trait = "0.1.92"
 
 # Web framework.
-actix-web = "4"
-actix-cors = "0.7"
-actix-rt = "2"
-actix-multipart = "0.7"
-futures-util = "0.3"
+actix-web = "4.18.1"
+actix-cors = "0.7.2"
+actix-rt = "2.15.0"
+actix-multipart = "0.8.5"
+futures-util = "0.3.34"
 # BUNYIP-571: inbound support-mailbox ingestion (IMAP poll + MIME parse). TLS via
 # async-native-tls, reusing the native-tls already pulled in by lettre.
-async-imap = { version = "0.9", default-features = false, features = ["runtime-tokio"] }
-async-native-tls = { version = "0.5", default-features = false, features = ["runtime-tokio"] }
-mail-parser = "0.9"
+async-imap = { version = "0.12.0", default-features = false, features = ["runtime-tokio"] }
+async-native-tls = { version = "0.6.0", default-features = false, features = ["runtime-tokio"] }
+mail-parser = "0.11.9"
 # BUNYIP-145: SSE streaming uses BroadcastStream + IntervalStream wrappers
 # around `tokio::sync::broadcast::Receiver` and `tokio::time::Interval`.
-tokio-stream = { version = "0.1", features = ["sync"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
 
 # Serialization.
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 # Config / logging.
-dotenvy = "0.15"
-tracing = "0.1"
-tracing-actix-web = "0.7"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+dotenvy = "0.15.7"
+tracing = "0.1.44"
+tracing-actix-web = "0.7.25"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 
 # Errors.
-thiserror = "1"
-anyhow = "1"
+thiserror = "1.0.69"
+anyhow = "1.0.104"
 
 # Auth / crypto / encoding.
 jsonwebtoken = "9"
-base64 = "0.21"
-bytes = "1"
-ipnetwork = "0.20"
+base64 = "0.23.1"
+bytes = "1.12.1"
+ipnetwork = "0.21.1"
 # BUNYIP-714: the settings archive derives its own key from the operator's
 # passphrase (Argon2id over a random salt, inside an argon2_offload closure) and
 # refuses a passphrase zxcvbn can guess.
-argon2 = "0.5"
-rand = "0.8"
+argon2 = "0.6.0"
+rand = "0.10.3"
 zxcvbn = "3.1.1"
 
 # HTTP client / IO. rustls (not native-tls) so the static musl Alpine build
 # needs no OpenSSL at runtime.
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
-tempfile = "3"
-url = "2"
-urlencoding = "2"
-tokio = { version = "1", features = ["full", "signal"] }
-tokio-util = { version = "0.7", features = ["codec"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tempfile = "3.27.0"
+url = "2.5.8"
+urlencoding = "2.1.3"
+tokio = { version = "1.54.1", features = ["full", "signal"] }
+tokio-util = { version = "0.7.20", features = ["codec"] }
 
 # Update-check polling cache.
-parking_lot = "0.12"
+parking_lot = "0.13.0"
 
 # Database.
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
-chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1", features = ["v4", "serde"] }
-validator = { version = "0.18", features = ["derive"] }
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "postgres", "uuid", "chrono", "ipnetwork", "migrate"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+uuid = { version = "1.29.0", features = ["v4", "serde"] }
+validator = { version = "0.21.0", features = ["derive"] }
 
 # Billing.
-async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
+async-stripe = { version = "0.41.0", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
 
 # Attachment-upload security (BUNYIP-90). Both are tiny, zero-/few-dep
 # crates that read only the header bytes of a file - no decoder, no
@@ -123,42 +123,42 @@ async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout"
 # header-only dimension guard, the avatar policy) extracted from
 # handlers/avatar.rs in DEV-525 and shared with a8n-tools. Brings `infer` and
 # `imagesize` in transitively.
-dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
+dunite-image-upload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-526: bunyip-api consumes dunite-core directly for the Origin/Referer CSRF
 # guard (`dunite_core::middleware::OriginGuard`), wired in main.rs. Same rev as
 # the dunite-core graph in bunyip-domain/oci/oidc.
 # Wave 1 bump: moves with the dunite-core graph in bunyip-domain/oci/oidc so
 # every crate shares one AppError type after the bump.
-dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
+dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-530: the self-hosted update checker (polls Forgejo releases/latest, semver
 # compare, TTL cache), extracted from version.rs. Leaf crate, pins independently.
-dunite-update-check = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
+dunite-update-check = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # DEV-528: the actix SSE adapter (sse_response) consumed by handlers/events.rs.
-dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
+dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "a831b6a01fecf1ad0d5e1dde0f6eba1f04a60679" }
 # Still direct for the feedback-attachment path (BUNYIP-90), whose allowlist
 # admits non-images (text/plain) and so does not fit `ImagePolicy`. Folding that
 # surface into the shared crate is a separate decision, not a side effect of
 # DEV-531.
-infer = "0.16"
-imagesize = "0.13"
+infer = "0.22.0"
+imagesize = "0.15.0"
 # BUNYIP-560: derive the favicon set (five PNG sizes + apple-touch-icon +
 # favicon.ico) from the one image an admin uploads on the Branding page. Only
 # the four decoders `ImagePolicy::avatar()` admits plus the two encoders the set
 # needs; the default feature set pulls in a dozen formats nothing here accepts.
 # Pure Rust, so the musl-static build needs no system library.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "ico"] }
 
 [dev-dependencies]
-actix-rt = "2"
-wiremock = "0.6"
+actix-rt = "2.15.0"
+wiremock = "0.6.5"
 # BUNYIP-428: tests/totp_single_use.rs mints real TOTP codes for the step it
 # wants to submit.
-totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
-data-encoding = "2"
+totp-rs = { version = "5.7.2", features = ["gen_secret", "otpauth"] }
+data-encoding = "2.11.1"
 # tests/rate_limit_traffic.rs hashes rate-limit keys the same way
 # RateLimitTrafficRepository::record does so it can look up rows by key_hash.
-sha2 = "0.10"
+sha2 = "0.11.1"
 # tests/webhook.rs signs its Stripe event payloads the same way
 # dunite-stripe-core's verifier checks them.
-hmac = "0.12"
-hex = "0.4"
+hmac = "0.13.0"
+hex = "0.4.3"

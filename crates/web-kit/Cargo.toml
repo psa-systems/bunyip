@@ -8,13 +8,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-maud = "0.26"
-axum = { version = "0.7", features = ["macros"] }
-url = "2"
+maud = "0.27.0"
+axum = { version = "0.8.9", features = ["macros"] }
+url = "2.5.8"
 tracing = { workspace = true }
 # BUNYIP-589: the client-IP forwarding middleware.
-ipnetwork = "0.20"
-tower = { version = "0.5", features = ["util"] }
+ipnetwork = "0.21.1"
+tower = { version = "0.5.3", features = ["util"] }
 tokio = { workspace = true }
 
 # Mirrors bunyip-web: the toolkit exposes a wider surface than any single

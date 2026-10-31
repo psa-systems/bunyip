@@ -105,7 +105,7 @@ services:
   postgres:
     # Postgres 18, matching the deployed infra template
     # (template/bunyip-api/compose.yml pins postgres:18.2-alpine3.23). BUNYIP-350.
-    image: postgres:18.2-alpine3.23
+    image: postgres:18.6-alpine3.23
     container_name: bunyip-postgres
     restart: unless-stopped
     # The image's entrypoint starts as root to chown PGDATA then re-execs as

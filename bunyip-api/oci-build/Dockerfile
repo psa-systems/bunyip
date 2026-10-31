@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.28
 #
 # Production image for bunyip-api (actix-web backend).
 #
@@ -113,7 +113,7 @@ COPY --from=builder /build/target/release/bunyip-api /bunyip-api
 # ---- Stage 2: runtime -------------------------------------------------------
 # alpine 3.23 matches the `postgres:18.2-alpine3.23` pin in compose.yml, so the
 # repo validates one Alpine release rather than three (BUNYIP-426 F10).
-FROM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS runtime
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown

@@ -20,33 +20,33 @@ repository = "https://dev.a8n.run/psa-systems/bunyip"
 too_many_arguments = "allow"
 
 [workspace.dependencies]
-parking_lot = "0.12"
-serde_json = "1"
-tracing = "0.1"
-thiserror = "1"
-anyhow = "1"
-rand = "0.8"
-sha2 = "0.10"
+parking_lot = "0.13.0"
+serde_json = "1.0.154"
+tracing = "0.1.44"
+thiserror = "1.0.69"
+anyhow = "1.0.104"
+rand = "0.10.3"
+sha2 = "0.11.1"
 
 [workspace.dependencies.tokio]
-version = "1"
+version = "1.54.1"
 features = ["full"]
 
 [workspace.dependencies.serde]
-version = "1"
+version = "1.0.229"
 features = ["derive"]
 
 [workspace.dependencies.uuid]
-version = "1.11"
+version = "1.29.0"
 features = [
     "v4",
     "serde",
 ]
 
 [workspace.dependencies.chrono]
-version = "0.4"
+version = "0.4.45"
 features = ["serde"]
 
 [workspace.dependencies.tracing-subscriber]
-version = "0.3"
+version = "0.3.23"
 features = ["env-filter"]
