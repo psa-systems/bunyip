@@ -105,9 +105,10 @@ different point releases of the same dependency.
   process.
 - `SPEC-2.2.5` The primary server's middleware stack must wrap every request, outermost first, in this order:
   auto-ban, the rate-limit floor, CORS, the CSRF origin guard, the request-id tag, security headers, the access
-  logger, request tracing, then response compression innermost. The OCI server's stack is request tracing, the
-  access logger, security headers, the request-id tag, then the registry's `WWW-Authenticate` middleware; it
-  registers no CORS or CSRF layer because it carries no cookie-authenticated or browser-originated route.
+  logger, request tracing, then response compression innermost. The OCI server's stack is the registry's
+  `WWW-Authenticate` middleware, the request-id tag, security headers, the access logger, then request tracing
+  innermost; it registers no CORS or CSRF layer because it carries no cookie-authenticated or browser-originated
+  route.
   `APP_PORT` has no code default of `4401`: an unset `APP_PORT` resolves to `4000` in `Config::from_env`; the
   reference `compose.yml` deployment is what sets `APP_PORT=4401` in its environment. `OCI_REGISTRY_PORT`
   defaults to `18081` in code when unset.
