@@ -30,7 +30,7 @@ use sqlx::PgPool;
 use crate::errors::AppError;
 use bunyip_domain::config::{Config, GovernedSecret};
 use bunyip_domain::repositories::MokoshConfigRepository;
-use bunyip_domain::services::AppKeySet;
+use bunyip_domain::services::EncryptionKeySet;
 
 /// A secret this route can serve, by the key a caller asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +70,7 @@ impl HostSecret {
         self,
         pool: &PgPool,
         config: &Config,
-        key_set: &AppKeySet,
+        key_set: &EncryptionKeySet,
     ) -> Result<Option<String>, AppError> {
         match self {
             Self::MokoshGoogleOauthClient => {
