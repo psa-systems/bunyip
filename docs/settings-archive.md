@@ -8,7 +8,7 @@ A `pg_dump` does not replace this. A dump carries the users, the sessions, the a
 
 Both commands run as `docker compose exec api /app/bunyip-api <subcommand>` (or `docker compose run --rm api <subcommand>` when the api container is not up). Neither prints a setting value, a secret or a hash: the plan and the report name sections, columns, keys and counts only.
 
-The api service's `/tmp` is a `tmpfs` mount in `compose.yml`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
+The api service runs with `read_only: true` (BUNYIP-906, BUNYIP-981), so `/tmp` is the only writable path inside the container outside the `/etc` tmpfs the entrypoint needs; `compose.yml` mounts `/tmp` as `tmpfs`, which means its contents live in memory only and vanish when the container stops. `docker compose cp` cannot copy into or out of a tmpfs mount, so every transfer below streams through `docker compose exec -T` instead.
 
 ## The passphrase
 
@@ -146,7 +146,7 @@ Behind `--include-oauth-clients`:
 
 | Section | Notes |
 |---------|-------|
-| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` is archived too (BUNYIP-983): a restored deployment whose calling apps could read no host secret would need every allow-list set again by hand. |
+| `oauth_clients` | Keyed by `client_id`. `client_secret_hash` IS archived, so a restore keeps every calling app's existing credential working. The plaintext secret is not in the archive, because it is not in the database either. `allowed_secret_keys` and `allowed_config_keys` are archived too (BUNYIP-983, BUNYIP-1011): a restored deployment whose calling apps could read no host secret or host fact would need every allow-list set again by hand. |
 
 ## What is NOT archived
 

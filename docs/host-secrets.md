@@ -1,4 +1,4 @@
-# Host secrets (BUNYIP-983)
+# Host secrets and host configuration (BUNYIP-983, BUNYIP-1011)
 
 A suite product sometimes needs a secret bunyip already holds. `GET /v1/host/secrets/{KEY}` serves one, to a registered
 calling app, read-only, with a per-registration allow-list.
@@ -82,10 +82,39 @@ than one blob in the form.
 Every save writes an `audit_logs` row naming the admin, the client id, whether the secret changed, which provider it
 went to, and the SHA-256 of a changed secret so two saves can be told apart. Never the secret itself.
 
+## The configuration twin (BUNYIP-1011)
+
+Not every suite fact is a secret. `GET /v1/host/config/{KEY}` serves the non-secret ones, with the same
+authentication, the same order of checks and the same answers as the route above, and one difference that is the
+whole reason it is a second route: its entitlement is `oauth_clients.allowed_config_keys`, so a credential that may
+read a suite fact is not thereby allowed to read a secret. BUNYIP-855 D9 settled that, and it means a reading app
+registers twice if it wants both.
+
+```
+GET /v1/host/config/mokosh/abuse_contact_email
+Authorization: Basic base64(client_id:client_secret)
+```
+
+The first key is `mokosh/abuse_contact_email`, served from `SUPPORT_INBOX_EMAIL`: bunyip owns the monitored support
+mailbox, and Mokosh carries the same address for its abuse and legal surfaces, so changing mailbox used to mean
+editing every product's environment.
+
+```nu
+docker compose exec api bunyip-api machine-client register --name mokosh-host-config --config-key mokosh/abuse_contact_email
+```
+
+A secret's key named with `--config-key` (or the reverse) is a usage error at registration, because the two
+registries do not know each other's keys. The same holds at read time: a key on the wrong route is refused by that
+route's allow-list, and would be a 404 even if it were listed.
+
+Caps: `host_config_read` (30/minute per calling app) and `host_config_auth_failures` (10/minute per source IP,
+failures only), separate from the secrets route's so one product's reads cannot throttle another's.
+
 ## Adding a second key
 
-1. Add a variant to `HostSecret` in `bunyip-api/src/host_secrets.rs` with its key and how to resolve it. A key that is
-   not a variant is not servable, whatever an allow-list says, which is what stops a typo in a column from handing out
+1. Add a variant to `HostSecret` in `bunyip-api/src/host_secrets.rs` (or to `HostConfig` in
+   `bunyip-api/src/host_config.rs` for a non-secret fact) with its key and how to resolve it. A key that is not a
+   variant is not servable, whatever an allow-list says, which is what stops a typo in a column from handing out
    `STRIPE_SECRET_KEY`.
 2. If it is a new secret rather than a view over settings bunyip already holds, add it to `GovernedSecret` and give it a
    database home, an `ENV_INVENTORY` entry and a row in `configuration.md` (the `check-doc-surface` gate fails until

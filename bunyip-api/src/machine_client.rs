@@ -33,7 +33,7 @@ use uuid::Uuid;
 pub const USAGE: &str = "\
 usage: bunyip-api machine-client <verb>
 
-  register --name <name> [--grant <grant>]... [--secret-key <key>]...
+  register --name <name> [--grant <grant>]... [--secret-key <key>]... [--config-key <key>]...
                                                register a calling app; prints its credential once
   rotate --client-id <uuid>                    replace the secret; prints the new one once
   disable --client-id <uuid>                   revoke the credential (the relay then answers 401)
@@ -49,6 +49,10 @@ pub enum Command {
         /// BUNYIP-983: host-secret keys this registration may read. Empty is
         /// the normal case and means it can read none.
         secret_keys: Vec<String>,
+        /// BUNYIP-1011: host-config keys this registration may read. Separate
+        /// from the secrets list, so one registration reads facts and another
+        /// reads secrets (BUNYIP-855 D9).
+        config_keys: Vec<String>,
     },
     Rotate {
         client_id: Uuid,
@@ -102,6 +106,8 @@ pub struct Registration {
     /// against the servable set so a typo is a usage error here rather than a
     /// 404 the calling app reports weeks later.
     pub allowed_secret_keys: Vec<String>,
+    /// BUNYIP-1011: the host-config keys, same rule and its own list.
+    pub allowed_config_keys: Vec<String>,
     pub audience: String,
 }
 
@@ -110,6 +116,7 @@ impl Registration {
         name: &str,
         extra_grants: &[String],
         secret_keys: &[String],
+        config_keys: &[String],
         audience: &str,
     ) -> Self {
         let mut allowed_grant_types = vec![MACHINE_GRANT.to_string()];
@@ -118,12 +125,8 @@ impl Registration {
                 allowed_grant_types.push(grant.clone());
             }
         }
-        let mut allowed_secret_keys: Vec<String> = Vec::new();
-        for key in secret_keys {
-            if !allowed_secret_keys.iter().any(|k| k == key) {
-                allowed_secret_keys.push(key.clone());
-            }
-        }
+        let allowed_secret_keys = deduplicate(secret_keys);
+        let allowed_config_keys = deduplicate(config_keys);
         Self {
             client_id: Uuid::new_v4(),
             name: name.to_string(),
@@ -131,9 +134,22 @@ impl Registration {
             token_endpoint_auth_method: "client_secret_basic",
             allowed_grant_types,
             allowed_secret_keys,
+            allowed_config_keys,
             audience: audience.to_string(),
         }
     }
+}
+
+/// Keep the first spelling of each key and drop the repeats, so a flag typed
+/// twice is one entry rather than two.
+fn deduplicate(keys: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in keys {
+        if !out.iter().any(|existing| existing == key) {
+            out.push(key.clone());
+        }
+    }
+    out
 }
 
 /// Refuse a `--secret-key` this build cannot serve.
@@ -143,12 +159,28 @@ impl Registration {
 /// and fails in the calling app. Checked at registration, it is one line of
 /// usage output instead.
 fn validate_secret_keys(keys: &[String]) -> anyhow::Result<()> {
+    validate_keys(keys, crate::host_secrets::HOST_SECRET_KEYS, "host secret")
+}
+
+/// The same check for the configuration list (BUNYIP-1011). Separate call,
+/// separate servable set: a secret's key named with `--config-key` is a usage
+/// error here, which is the earliest place the two registries can be told
+/// apart.
+fn validate_config_keys(keys: &[String]) -> anyhow::Result<()> {
+    validate_keys(
+        keys,
+        crate::host_config::HOST_CONFIG_KEYS,
+        "host configuration value",
+    )
+}
+
+fn validate_keys(keys: &[String], servable: &[&str], what: &str) -> anyhow::Result<()> {
     for key in keys {
-        if !crate::host_secrets::HOST_SECRET_KEYS.contains(&key.as_str()) {
+        if !servable.contains(&key.as_str()) {
             bail!(
-                "machine-client register: {key:?} is not a host secret this deployment serves. \
+                "machine-client register: {key:?} is not a {what} this deployment serves. \
                  Known keys: {}\n\n{USAGE}",
-                crate::host_secrets::HOST_SECRET_KEYS.join(", ")
+                servable.join(", ")
             );
         }
     }
@@ -213,6 +245,11 @@ pub fn parse(args: &[String]) -> anyhow::Result<Command> {
                 .map(str::to_string)
                 .collect();
             validate_secret_keys(&secret_keys)?;
+            let config_keys: Vec<String> = flag_values(args, "--config-key")
+                .into_iter()
+                .map(str::to_string)
+                .collect();
+            validate_config_keys(&config_keys)?;
             Ok(Command::Register {
                 name: name.to_string(),
                 grants: flag_values(args, "--grant")
@@ -220,6 +257,7 @@ pub fn parse(args: &[String]) -> anyhow::Result<Command> {
                     .map(str::to_string)
                     .collect(),
                 secret_keys,
+                config_keys,
             })
         }
         "rotate" => Ok(Command::Rotate {
@@ -240,7 +278,8 @@ pub async fn run(pool: &PgPool, base_url: &str, args: &[String]) -> anyhow::Resu
             name,
             grants,
             secret_keys,
-        } => register(pool, &name, &grants, &secret_keys, base_url).await,
+            config_keys,
+        } => register(pool, &name, &grants, &secret_keys, &config_keys, base_url).await,
         Command::Rotate { client_id } => rotate(pool, client_id).await,
         Command::Disable { client_id } => disable(pool, client_id).await,
         Command::List => list(pool).await,
@@ -262,9 +301,16 @@ async fn register(
     name: &str,
     grants: &[String],
     secret_keys: &[String],
+    config_keys: &[String],
     base_url: &str,
 ) -> anyhow::Result<String> {
-    let registration = Registration::new(name, grants, secret_keys, &audience_for(base_url));
+    let registration = Registration::new(
+        name,
+        grants,
+        secret_keys,
+        config_keys,
+        &audience_for(base_url),
+    );
     let secret = Secret::generate();
     let hash = hash_client_secret(secret.expose()).await?;
 
@@ -274,12 +320,12 @@ async fn register(
             client_id, client_secret_hash, client_type, name,
             redirect_uris, post_logout_redirect_uris,
             allowed_scopes, allowed_grant_types, allowed_secret_keys,
-            token_endpoint_auth_method, require_pkce, audience
+            allowed_config_keys, token_endpoint_auth_method, require_pkce, audience
         ) VALUES (
             $1, $2, $3, $4,
             ARRAY[]::TEXT[], ARRAY[]::TEXT[],
-            ARRAY[]::TEXT[], $5, $6,
-            $7, TRUE, $8
+            ARRAY[]::TEXT[], $5, $6, $7,
+            $8, TRUE, $9
         )
         "#,
     )
@@ -289,6 +335,7 @@ async fn register(
     .bind(&registration.name)
     .bind(&registration.allowed_grant_types)
     .bind(&registration.allowed_secret_keys)
+    .bind(&registration.allowed_config_keys)
     .bind(registration.token_endpoint_auth_method)
     .bind(&registration.audience)
     .execute(pool)
@@ -419,6 +466,7 @@ mod tests {
                 name: "mokosh-server".to_string(),
                 grants: Vec::new(),
                 secret_keys: Vec::new(),
+                config_keys: Vec::new(),
             }
         );
     }
@@ -444,6 +492,7 @@ mod tests {
                     "refresh_token".to_string()
                 ],
                 secret_keys: Vec::new(),
+                config_keys: Vec::new(),
             }
         );
     }
@@ -511,6 +560,7 @@ mod tests {
                     "mokosh/google_oauth_client".to_string(),
                     "mokosh/google_oauth_client".to_string()
                 ],
+                config_keys: Vec::new(),
             },
             "the parse keeps what was typed; the registration de-duplicates"
         );
@@ -521,6 +571,7 @@ mod tests {
                 "mokosh/google_oauth_client".to_string(),
                 "mokosh/google_oauth_client".to_string(),
             ],
+            &[],
             "https://bunyip.test/v1",
         );
         assert_eq!(
@@ -529,11 +580,51 @@ mod tests {
             "one entry, however many times it was typed"
         );
         assert!(
-            Registration::new("app", &[], &[], "https://bunyip.test/v1")
+            Registration::new("app", &[], &[], &[], "https://bunyip.test/v1")
                 .allowed_secret_keys
                 .is_empty(),
             "default-deny: a registration that names no key can read none"
         );
+    }
+
+    /// BUNYIP-1011: the two lists are separate, and naming one registry's key
+    /// with the other's flag is a usage error here.
+    ///
+    /// That refusal is the earliest place the entitlement split can be
+    /// enforced: an operator who registers a configuration reader with
+    /// `--secret-key mokosh/abuse_contact_email` otherwise gets a credential
+    /// that reads nothing and a 404 to chase.
+    #[test]
+    fn the_secret_and_config_allow_lists_are_separate() {
+        let parsed = parse(&args(&[
+            "register",
+            "--name",
+            "mokosh-host-config",
+            "--config-key",
+            "mokosh/abuse_contact_email",
+        ]))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            Command::Register {
+                name: "mokosh-host-config".to_string(),
+                grants: Vec::new(),
+                secret_keys: Vec::new(),
+                config_keys: vec!["mokosh/abuse_contact_email".to_string()],
+            }
+        );
+
+        for (flag, key) in [
+            ("--secret-key", "mokosh/abuse_contact_email"),
+            ("--config-key", "mokosh/google_oauth_client"),
+        ] {
+            let err = parse(&args(&["register", "--name", "app", flag, key]))
+                .expect_err("one registry's key is not the other's");
+            assert!(
+                err.to_string().contains(key),
+                "the refusal names what was asked for: {err}"
+            );
+        }
     }
 
     /// A key this build cannot serve is a usage error at registration, not a
@@ -558,7 +649,7 @@ mod tests {
 
     #[test]
     fn a_registration_is_confidential_basic_and_lists_the_machine_grant() {
-        let reg = Registration::new("mokosh-server", &[], &[], "https://bunyip.test/v1");
+        let reg = Registration::new("mokosh-server", &[], &[], &[], "https://bunyip.test/v1");
         assert_eq!(reg.client_type, "confidential");
         assert_eq!(reg.token_endpoint_auth_method, "client_secret_basic");
         assert_eq!(reg.allowed_grant_types, vec![MACHINE_GRANT.to_string()]);
@@ -571,6 +662,7 @@ mod tests {
         let reg = Registration::new(
             "app",
             &["refresh_token".to_string(), MACHINE_GRANT.to_string()],
+            &[],
             &[],
             "https://bunyip.test/v1",
         );
