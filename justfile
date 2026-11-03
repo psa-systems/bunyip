@@ -46,6 +46,10 @@ test_args := "--workspace --all-targets"
 # Migrations live under bunyip-api, not the repo root common defaults to.
 migrations_dir := "bunyip-api/migrations"
 
+# bunyip stamps every migration with YYYYMMDDHHMMSS, so the shared
+# check-migration-versions recipe (PC-79) enforces uniform 14-digit prefixes.
+migration_version_width := "14"
+
 # Non-Rust files Rust tests read with `include_str!` so a commit that only
 # touches these runs the full cargo legs rather than skipping under GOV-55's
 # staged-path guard. The CSS token / asset guards in `bunyip-web/src/views/ui.rs`
@@ -71,12 +75,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
-
-# Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
-[group: 'checks']
-check-migrations:
-    ./scripts/check-migration-versions.nu
+check: check-justfile check-migration-versions check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']
