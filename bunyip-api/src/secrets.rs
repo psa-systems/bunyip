@@ -98,6 +98,21 @@ impl Survey {
     pub fn complete_in(&self, provider: SecretsProvider) -> bool {
         self.secrets.iter().all(|row| row.present_in(provider))
     }
+
+    /// Secrets held by some provider OTHER than `provider`, yet absent from
+    /// `provider`. These are the rows a purge against `provider` cannot touch
+    /// without leaving zero holders, so `secrets-purge` refuses on exactly
+    /// these. A secret absent everywhere (an unused integration) is not
+    /// misplaced and does not block the purge.
+    pub fn misplaced_in(&self, provider: SecretsProvider) -> Vec<GovernedSecret> {
+        self.secrets
+            .iter()
+            .filter(|row| {
+                !row.present_in(provider) && row.holders.iter().any(|holder| *holder != provider)
+            })
+            .map(|row| row.secret)
+            .collect()
+    }
 }
 
 /// What the boot enforcement decides for one governed secret.
@@ -1050,18 +1065,14 @@ pub async fn run_purge(
                 .to_string(),
         ));
     }
-    if !survey.complete_in(declared) {
-        let missing: Vec<&str> = survey
-            .secrets
-            .iter()
-            .filter(|row| !row.present_in(declared))
-            .map(|row| row.secret.name())
-            .collect();
+    let misplaced = survey.misplaced_in(declared);
+    if !misplaced.is_empty() {
+        let names: Vec<&str> = misplaced.iter().map(|secret| secret.name()).collect();
         return Err(AppError::BadRequest(format!(
-            "the declared {declared} provider is not complete ({} missing), so purging the \
-             other providers would leave no copy at all. Run `bunyip-api secrets-migrate --to \
-             {declared}` first.",
-            missing.join(", ")
+            "the declared {declared} provider is missing secrets that another provider still \
+             holds ({}), so purging those other providers would leave no copy at all. Run \
+             `bunyip-api secrets-migrate --to {declared}` first.",
+            names.join(", ")
         )));
     }
 
@@ -1216,6 +1227,38 @@ mod tests {
         assert!(enforce(&survey).is_empty());
         assert!(survey.complete_in(Database));
         assert!(!survey.complete_in(Infisical));
+    }
+
+    /// A secret unset in every provider does not count as misplaced: nothing is
+    /// held outside the declared provider, so there is no copy a purge could
+    /// strand. This is what unblocks `secrets-purge` on a deployment that does
+    /// not use every integration.
+    #[test]
+    fn misplaced_in_is_empty_when_a_secret_is_unset_everywhere() {
+        let survey = survey_of(
+            Database,
+            vec![vec![Database, Environment], vec![Database], vec![]],
+        );
+        assert!(survey.misplaced_in(Database).is_empty());
+    }
+
+    /// A secret held only outside the declared provider is misplaced; purge
+    /// must refuse. Boot already fails on this (`Enforcement::Misplaced`), so
+    /// the test guards against a regression that would let purge delete the
+    /// only remaining copy.
+    #[test]
+    fn misplaced_in_names_secrets_held_only_outside_the_declared_provider() {
+        let survey = survey_of(
+            Database,
+            vec![vec![Environment], vec![Database], vec![Infisical]],
+        );
+        assert_eq!(
+            survey.misplaced_in(Database),
+            vec![
+                GovernedSecret::SmtpPassword,
+                GovernedSecret::StripeWebhookSecret
+            ]
+        );
     }
 
     /// An unreachable Infisical is fatal in `infisical` mode: the operator
