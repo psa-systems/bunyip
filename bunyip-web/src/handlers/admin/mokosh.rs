@@ -25,7 +25,7 @@ use crate::api::types::MokoshConfigResponse;
 use crate::api::ApiError;
 use crate::handlers::admin::secret_field_note;
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
-use crate::views::layout::{admin_block, admin_block_grid};
+use crate::views::layout::admin_block;
 use crate::views::password::{password_field, PwField, PwRole};
 use crate::views::ui::{button_class, error_box, error_box_for, icon, warning_box};
 use crate::web::{redirect_cookies, AppState};
@@ -78,39 +78,37 @@ pub(super) fn mokosh_content(
                     form method="post" action=(PAGE) class="space-y-6" {
                         @if let Some(err) = error { (error_box(err)) }
                         @if let Some(warning) = confirm_change { (warning_box(warning)) }
-                        (admin_block_grid(vec![
-                            admin_block(
-                                "Google OAuth client",
-                                Some("From the Google Cloud project that owns the suite's OAuth consent screen."),
-                                html! {
-                                    div class="space-y-4" {
+                        (admin_block(
+                            "Google OAuth client",
+                            Some("From the Google Cloud project that owns the suite's OAuth consent screen."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label for="google_client_id" class="text-sm font-medium" { "Client id" }
+                                        input id="google_client_id" name="google_client_id" value=(values.google_client_id) placeholder="123456789012-abc123def456.apps.googleusercontent.com" autocomplete="off" class=(dashboard_input());
+                                        p class="text-xs text-muted-foreground" { "Public: it travels in every sign-in redirect, so it is shown here rather than masked." }
+                                    }
+                                    // Write-only, like the SMTP password and
+                                    // the Mirzam token (BUNYIP-432/542/997).
+                                    @if c.google_client_secret_editable {
+                                        (password_field("google_client_secret", "google_client_secret", "Client secret", PwRole::New, PwField {
+                                            autocomplete: Some("new-password"),
+                                            placeholder: Some(if c.has_google_client_secret { "••••••••" } else { "Not set" }),
+                                            ..Default::default()
+                                        }))
+                                    } @else {
                                         div class="space-y-2" {
-                                            label for="google_client_id" class="text-sm font-medium" { "Client id" }
-                                            input id="google_client_id" name="google_client_id" value=(values.google_client_id) placeholder="123456789012-abc123def456.apps.googleusercontent.com" autocomplete="off" class=(dashboard_input());
-                                            p class="text-xs text-muted-foreground" { "Public: it travels in every sign-in redirect, so it is shown here rather than masked." }
-                                        }
-                                        // Write-only, like the SMTP password and
-                                        // the Mirzam token (BUNYIP-432/542/997).
-                                        @if c.google_client_secret_editable {
-                                            (password_field("google_client_secret", "google_client_secret", "Client secret", PwRole::New, PwField {
-                                                autocomplete: Some("new-password"),
-                                                placeholder: Some(if c.has_google_client_secret { "••••••••" } else { "Not set" }),
-                                                ..Default::default()
-                                            }))
-                                        } @else {
-                                            div class="space-y-2" {
-                                                label for="google_client_secret" class="text-sm font-medium" { "Client secret" }
-                                                input id="google_client_secret" name="google_client_secret" type="password" autocomplete="new-password" readonly disabled placeholder=(if c.has_google_client_secret { "••••••••" } else { "Not set" }) class=(dashboard_input());
-                                            }
-                                        }
-                                        p class="text-xs text-muted-foreground" {
-                                            (secret_field_note(c.google_client_secret_editable, &c.secrets_storage, c.has_google_client_secret, "MOKOSH_GOOGLE_CLIENT_SECRET", "mokosh_google_client_secret"))
-                                            " Rotating the secret alone is safe: nobody has to reconnect."
+                                            label for="google_client_secret" class="text-sm font-medium" { "Client secret" }
+                                            input id="google_client_secret" name="google_client_secret" type="password" autocomplete="new-password" readonly disabled placeholder=(if c.has_google_client_secret { "••••••••" } else { "Not set" }) class=(dashboard_input());
                                         }
                                     }
-                                },
-                            ),
-                        ]))
+                                    p class="text-xs text-muted-foreground" {
+                                        (secret_field_note(c.google_client_secret_editable, &c.secrets_storage, c.has_google_client_secret, "MOKOSH_GOOGLE_CLIENT_SECRET", "mokosh_google_client_secret"))
+                                        " Rotating the secret alone is safe: nobody has to reconnect."
+                                    }
+                                }
+                            },
+                        ))
                         // Set only on the second attempt, so the admin confirms
                         // the value they can see rather than one held in a
                         // session.
