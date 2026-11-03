@@ -802,11 +802,6 @@ pub async fn magic_link_get(
                 };
                 redirect_cookies(&path, &cookies)
             }
-            Ok((LoginOutcome::ApprovalRequired { challenge_token }, mut cookies)) => {
-                let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
-                cookies.push(bunyip_approval_cookie_set(secure, &challenge_token));
-                redirect_cookies("/login/approval", &cookies)
-            }
             Err(e) => {
                 let card = auth_card(
                     "alert-circle",
