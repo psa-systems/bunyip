@@ -21,13 +21,13 @@ use crate::models::{
 };
 use crate::repositories::{AuditLogRepository, MirzamConfigRepository};
 use crate::responses::{get_request_id, success};
-use crate::services::AppKeySet;
+use crate::services::EncryptionKeySet;
 
 /// The token as the declared provider holds it, blank read as absent.
 async fn stored_token(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
 ) -> Result<Option<String>, AppError> {
     Ok(
         crate::secrets::read_secret(pool, config, key_set, GovernedSecret::MirzamApiToken)
@@ -42,7 +42,7 @@ pub async fn get_mirzam_config(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let row = MirzamConfigRepository::get(&pool).await?;
@@ -65,7 +65,7 @@ pub async fn update_mirzam_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     body: web::Json<UpdateMirzamConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -156,7 +156,7 @@ pub async fn check_mirzam_connection(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let row = MirzamConfigRepository::get(&pool).await?;

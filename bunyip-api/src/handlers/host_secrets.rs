@@ -31,7 +31,7 @@ use crate::host_secrets::HostSecret;
 use crate::models::RateLimitConfig;
 use crate::responses::{get_request_id, success};
 use bunyip_domain::config::Config;
-use bunyip_domain::services::AppKeySet;
+use bunyip_domain::services::EncryptionKeySet;
 
 use super::host_auth::{
     authenticate_machine_caller, refuse_unentitled, HostResult, HostRouteCaps, HostValueResponse,
@@ -49,7 +49,7 @@ pub async fn get_host_secret(
     req: HttpRequest,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     path: web::Path<String>,
 ) -> HostResult {
     let request_id = get_request_id(&req);
