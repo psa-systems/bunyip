@@ -43,8 +43,13 @@
   // (views/ui.rs), error the offline banner (server_status.rs), info the
   // popover surface - so the pills track dark and high-contrast like every
   // other surface instead of sitting at a fixed stock-Tailwind colour.
+  //
+  // BUNYIP-1015: every pill is OPAQUE. The success pill used the badge's 15%
+  // teal tint, which let the header show through, so its text ran into the
+  // avatar and theme icons. It is now the card surface with a solid teal edge
+  // (the badge's accent), still all theme tokens.
   var TOAST_PALETTE = {
-    success: 'bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/40',
+    success: 'bg-card text-card-foreground border border-border border-l-4 border-l-teal-500',
     error: 'bg-destructive text-destructive-foreground',
     info: 'bg-popover text-popover-foreground border border-border',
   };
@@ -80,7 +85,7 @@
     var palette = TOAST_PALETTE[kind || 'info'] || TOAST_PALETTE.info;
     var pill = document.createElement('div');
     pill.className =
-      'pointer-events-auto flex items-start gap-3 rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
+      'pointer-events-auto flex max-w-md items-start gap-3 rounded-md px-4 py-2 text-sm shadow-lg ' + palette;
     // BUNYIP-818: an error pill is at least as urgent as the app's other
     // client-injected error surfaces, which use role="alert" alone; success
     // and info stay role="status" since the container no longer carries its
@@ -90,6 +95,10 @@
     pill.style.opacity = '0';
     pill.style.transform = 'translateY(-8px)';
     var text = document.createElement('span');
+    // BUNYIP-1014: pre-line turns a "\n" in the message into a line break, so a
+    // multi-part result (one line per Mirzam list) reads as a list. The message
+    // is still set as text, never as HTML.
+    text.className = 'whitespace-pre-line';
     text.textContent = msg;
     pill.appendChild(text);
     // A real <button> so it is reachable by keyboard; the aria-label is what
@@ -675,4 +684,18 @@
       if (submitLabel) submitLabel.textContent = 'Sending…';
     });
   })();
+
+  // -------------------------------------------------- data-submit-on-change --
+  // BUNYIP-936 / BUNYIP-938 / BUNYIP-939 / BUNYIP-940: admin filter chips.
+  // A `<select data-submit-on-change>` submits its enclosing <form> on
+  // `change`, so picking a new option reloads the page with the filter in
+  // the query string. Delegated here (not an inline `onchange=`) so the
+  // CSP's `script-src 'self'` continues to forbid inline scripts and
+  // event handlers (BUNYIP-424).
+  document.addEventListener('change', function (e) {
+    var el = e.target;
+    if (!el || !el.matches || !el.matches('[data-submit-on-change]')) return;
+    var form = el.form || (el.closest ? el.closest('form') : null);
+    if (form && typeof form.submit === 'function') form.submit();
+  });
 })();

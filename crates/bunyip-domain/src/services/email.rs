@@ -104,6 +104,42 @@ pub struct SmtpTestError {
     pub message: String,
 }
 
+/// RFC 2606 / RFC 6761 reserved recipient check (BUNYIP-863).
+///
+/// `true` when the recipient's domain is, or ends in, `.test`, `.invalid`,
+/// `.example` or `.localhost`, or is exactly `example.com`, `example.net`,
+/// `example.org`. Match is case-insensitive on the part after the last `@`,
+/// after trimming one trailing dot.
+///
+/// `false` for a malformed address (no `@`, empty domain): malformed is a
+/// different failure mode, left for lettre to surface as a validation error
+/// on the parse step. This predicate narrowly answers "is the domain in the
+/// reserved-TLD set".
+///
+/// Called before every transport handoff in this crate so seed and E2E
+/// addresses (`ada.lovelace@demo.psa-systems.test`, `x@example.invalid`,
+/// `@example.*`) never reach SMTP: the reserved-TLD RFCs guarantee no DNS
+/// resolver returns MX records for them, so handing one to a relay produces
+/// a bounce every time.
+pub fn is_reserved_recipient(address: &str) -> bool {
+    let Some((_, domain)) = address.rsplit_once('@') else {
+        return false;
+    };
+    let normalised = domain.trim_end_matches('.').to_ascii_lowercase();
+    if normalised.is_empty() {
+        return false;
+    }
+    const RESERVED_TLDS: &[&str] = &[".test", ".invalid", ".example", ".localhost"];
+    if RESERVED_TLDS
+        .iter()
+        .any(|tld| normalised == tld[1..] || normalised.ends_with(tld))
+    {
+        return true;
+    }
+    const RESERVED_SLDS: &[&str] = &["example.com", "example.net", "example.org"];
+    RESERVED_SLDS.iter().any(|s| normalised == *s)
+}
+
 /// Email service for sending transactional emails
 pub struct EmailService {
     /// Reloadable SMTP transport + config, swapped on admin update (BUNYIP-351).
@@ -753,6 +789,19 @@ impl EmailService {
             ));
         };
 
+        // BUNYIP-863: a reserved-domain recipient cannot be delivered. Skip
+        // the transport and return the bare Message-ID the caller would have
+        // got on a real send, so the relay client (an E2E flow, say) treats
+        // the result as success rather than an error. Runs after the
+        // SMTP-config check so a wholly-unconfigured deployment still
+        // surfaces an upstream error (the admin needs to know).
+        if is_reserved_recipient(to) {
+            let domain = to.rsplit('@').next().unwrap_or("");
+            let (message_id_bare, _) = Self::new_message_id(&config);
+            tracing::info!(target: "mail", kind = "relay", %domain, %message_id_bare, "mailer relay skipped: reserved recipient");
+            return Ok(message_id_bare);
+        }
+
         let (message_id_bare, message_id) = Self::new_message_id(&config);
         let from = format!("{} <{}>", config.from_name, config.from_email);
         let builder = Message::builder()
@@ -883,6 +932,16 @@ impl EmailService {
             tracing::warn!(to = %to, subject = %subject, "Email skipped: recipient is suppressed");
             return Ok(());
         }
+        // BUNYIP-863: an RFC 2606 / RFC 6761 reserved recipient (`.test`,
+        // `.invalid`, `.example`, `.localhost`, `example.{com,net,org}`) has
+        // no MX record anywhere, so handing it to a relay is always a bounce.
+        // Logged by domain only (never the full address, to avoid printing
+        // live-looking PII from a seed row).
+        if is_reserved_recipient(to) {
+            let domain = to.rsplit('@').next().unwrap_or("");
+            tracing::info!(target: "mail", kind = "transactional", %domain, "Email skipped: reserved recipient");
+            return Ok(());
+        }
 
         let transport = self.transport();
         if let Some(transport) = transport {
@@ -940,6 +999,18 @@ impl EmailService {
             return Err(AppError::validation(
                 "to",
                 "This recipient is on the mailer suppression list and cannot be sent to.",
+            ));
+        }
+        // BUNYIP-863: refuse rather than silently skip. A support reply is
+        // typed by an admin; a reserved-domain recipient here is a misuse
+        // (the ticket's original sender address needs correcting), not a
+        // seed row to silently drop.
+        if is_reserved_recipient(to) {
+            let domain = to.rsplit('@').next().unwrap_or("");
+            tracing::info!(target: "mail", kind = "support_reply", %domain, "Support reply refused: reserved recipient");
+            return Err(AppError::validation(
+                "to",
+                "This recipient's domain is reserved for test or documentation use and cannot receive mail.",
             ));
         }
 
@@ -1545,6 +1616,46 @@ mod tests {
     use async_trait::async_trait;
     use dunite_mailer::SuppressionReason;
 
+    /// BUNYIP-863 predicate table: each row is `(address, expected_reserved,
+    /// why)`. Covers each reserved TLD (RFC 2606 / RFC 6761), each reserved
+    /// SLD (RFC 2606), the AC cases named on the ticket, and the shape
+    /// gotchas (trailing dot, mixed case, no `@`, empty domain).
+    #[test]
+    fn is_reserved_recipient_matches_the_rfc_2606_and_6761_set() {
+        for (addr, expected, why) in [
+            ("ada.lovelace@demo.psa-systems.test", true, "RFC 6761 .test"),
+            ("x@example.invalid", true, "RFC 6761 .invalid"),
+            ("a@sub.example", true, "RFC 2606 .example"),
+            ("root@localhost", true, "RFC 6761 .localhost"),
+            ("admin@mail.localhost", true, "RFC 6761 .localhost"),
+            ("alice@example.com", true, "RFC 2606 example.com"),
+            ("alice@example.net", true, "RFC 2606 example.net"),
+            ("alice@example.org", true, "RFC 2606 example.org"),
+            ("X@Example.COM.", true, "case + trailing dot"),
+            ("noreply@test", true, "bare reserved label"),
+            (
+                "not-an-address",
+                false,
+                "malformed, lettre surfaces the parse error",
+            ),
+            (
+                "missing@",
+                false,
+                "empty domain, lettre surfaces the parse error",
+            ),
+            (
+                "a@example.company.com",
+                false,
+                "real domain containing 'example'",
+            ),
+            ("a@test.io", false, "real domain, .io is public"),
+            ("staff@a8n.systems", false, "the real deployment domain"),
+            ("yousif@niceguyit.biz", false, "a real address"),
+        ] {
+            assert_eq!(is_reserved_recipient(addr), expected, "{addr}: {why}");
+        }
+    }
+
     /// Everything on the suppression list, mirroring `mailer_relay`'s own
     /// `SuppressAll` fake so both the relay's guard and `EmailService`'s guard
     /// are proven with the same shape of double.
@@ -1650,6 +1761,92 @@ mod tests {
         assert!(
             stub.messages().await.is_empty(),
             "no message may reach the transport when email is disabled"
+        );
+    }
+
+    /// BUNYIP-863: a seed row or an E2E address at a reserved domain never
+    /// reaches the transport. The template-send surface returns the usual
+    /// `Ok(())` so the caller behaves as if the mail went out; the relay
+    /// surface returns the bare Message-ID it would have minted. Both
+    /// variants proven here with a stub transport that records any
+    /// handoff.
+    #[tokio::test]
+    async fn send_email_skips_a_reserved_recipient_before_the_transport() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+
+        let result = service
+            .send_email(
+                &service.config(),
+                "ada.lovelace@demo.psa-systems.test",
+                "Welcome",
+                "<p>body</p>".to_string(),
+                "body".to_string(),
+            )
+            .await;
+
+        assert!(
+            result.is_ok(),
+            "a reserved recipient is skipped, not failed"
+        );
+        assert!(
+            stub.messages().await.is_empty(),
+            "a reserved recipient must never reach the transport"
+        );
+    }
+
+    /// BUNYIP-863: the relay surface returns a bare Message-ID even on the
+    /// skip, so the calling app (E2E or another suite member) treats the
+    /// result as a real delivery would and never records a failure.
+    #[tokio::test]
+    async fn send_relay_skips_a_reserved_recipient_before_the_transport() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+
+        let message_id = service
+            .send_relay("rel@example.invalid", "Subject", "text", None)
+            .await
+            .expect("reserved relay returns success");
+
+        assert!(
+            !message_id.is_empty(),
+            "a reserved relay returns a bare message-id so the caller behaves as on a real send"
+        );
+        assert!(
+            stub.messages().await.is_empty(),
+            "a reserved recipient must never reach the transport"
+        );
+    }
+
+    /// BUNYIP-863: a support reply typed by an admin to a reserved domain is
+    /// refused (not silently skipped). The admin needs to know the reply
+    /// did not go out so they can correct the ticket's sender address.
+    #[tokio::test]
+    async fn send_support_reply_refuses_a_reserved_recipient() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+
+        let err = service
+            .send_support_reply("x@example.invalid", "Re: ticket", "body", None, None)
+            .await
+            .expect_err("a reserved recipient must be refused for an admin reply");
+
+        assert!(
+            err.to_string().contains("reserved"),
+            "expected a reserved-recipient error, got: {err}"
+        );
+        assert!(
+            stub.messages().await.is_empty(),
+            "a reserved recipient must never reach the transport"
         );
     }
 
@@ -1873,6 +2070,7 @@ mod tests {
             tagline: String::new(),
             meta_description: String::new(),
             og_image_url: String::new(),
+            newsletter_url: String::new(),
             theme_css: String::new(),
             theme_color_light: String::new(),
             theme_color_dark: String::new(),
@@ -2369,10 +2567,14 @@ mod tests {
             .expect("EmailService lock poisoned")
             .transport = Some(MailTransport::Stub(AsyncStubTransport::new_error()));
 
+        // BUNYIP-863: pick a non-reserved recipient so this test exercises
+        // the transport-failure path, not the pre-transport reserved-skip
+        // one. `.io` is a public TLD and `a8n.systems` is this project's
+        // real deployment domain.
         let from_send_email = service
             .send_email(
                 &config,
-                "user@example.com",
+                "user@a8n.systems",
                 "Your magic link",
                 "<p>link</p>".to_string(),
                 "link".to_string(),
@@ -2380,7 +2582,7 @@ mod tests {
             .await
             .expect_err("the stub transport rejects every send");
         let from_support_reply = service
-            .send_support_reply("user@example.com", "Re: ticket", "body", None, None)
+            .send_support_reply("user@a8n.systems", "Re: ticket", "body", None, None)
             .await
             .expect_err("the stub transport rejects every send");
 

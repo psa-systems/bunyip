@@ -145,7 +145,7 @@ the two marked optional. Production has no mail sink, so there is deliberately n
 The email-driven specs (`password-reset`, `magic-link`, `change-email`) read
 token links over JMAP from a Stalwart mailbox. That mailbox must be a
 **dedicated** e2e account, not a personal one: a personal account ties CI to one
-person's password rotation and account lifecycle (BUNYIP-272; BUNYIP-150
+person's password rotation and account lifecycle (BUNYIP-245; BUNYIP-150
 originally pointed it at `nate@a8n.run`).
 
 The reader takes a single URL secret with the credentials embedded:

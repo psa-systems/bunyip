@@ -109,6 +109,7 @@ pub(super) struct BrandingValues {
     tagline: String,
     meta_description: String,
     og_image_url: String,
+    newsletter_url: String,
     theme_css: String,
     theme_color_light: String,
     theme_color_dark: String,
@@ -121,6 +122,7 @@ impl BrandingValues {
             tagline: b.tagline.clone(),
             meta_description: b.meta_description.clone(),
             og_image_url: b.og_image_url.clone(),
+            newsletter_url: b.newsletter_url.clone(),
             theme_css: b.theme_css.clone(),
             theme_color_light: b.theme_color_light.clone(),
             theme_color_dark: b.theme_color_dark.clone(),
@@ -133,6 +135,7 @@ impl BrandingValues {
             tagline: f.tagline.trim().to_string(),
             meta_description: f.meta_description.trim().to_string(),
             og_image_url: f.og_image_url.trim().to_string(),
+            newsletter_url: f.newsletter_url.trim().to_string(),
             theme_css: f.theme_css.trim().to_string(),
             theme_color_light: f.theme_color_light.trim().to_string(),
             theme_color_dark: f.theme_color_dark.trim().to_string(),
@@ -189,6 +192,20 @@ pub(super) fn branding_content(
                                         label for="og_image_url" class="text-sm font-medium" { "Share image URL" }
                                         input id="og_image_url" name="og_image_url" type="url" maxlength="2048" value=(values.og_image_url) placeholder="https://example.com/card.png" class=(dashboard_input());
                                         p class="text-xs text-muted-foreground" { "Absolute https:// URL. A card previews as a large image when this is set and a small one when it is blank." }
+                                    }
+                                }
+                            },
+                        ),
+                        // MIRZAM-217: the landing page's newsletter signup.
+                        admin_block(
+                            "Newsletter",
+                            Some("The signup form on the landing page. It posts straight to a Mirzam list, which sends the confirmation email."),
+                            html! {
+                                div class="space-y-4" {
+                                    div class="space-y-2" {
+                                        label for="newsletter_url" class="text-sm font-medium" { "Signup form URL" }
+                                        input id="newsletter_url" name="newsletter_url" type="url" maxlength="2048" value=(values.newsletter_url) placeholder="https://news.example.com/s/…" class=(dashboard_input());
+                                        p class="text-xs text-muted-foreground" { "The form address from the list's Embed on your site box in Mirzam. Add this site's address to the list's allowed origins there too. The signup is hidden when blank." }
                                     }
                                 }
                             },
@@ -259,6 +276,8 @@ pub struct BrandingForm {
     #[serde(default)]
     pub og_image_url: String,
     #[serde(default)]
+    pub newsletter_url: String,
+    #[serde(default)]
     pub theme_css: String,
     #[serde(default)]
     pub theme_color_light: String,
@@ -275,6 +294,7 @@ pub(super) fn branding_update_body(f: &BrandingForm) -> serde_json::Value {
         "tagline": f.tagline.trim(),
         "meta_description": f.meta_description.trim(),
         "og_image_url": f.og_image_url.trim(),
+        "newsletter_url": f.newsletter_url.trim(),
         "theme_css": f.theme_css.trim(),
         "theme_color_light": f.theme_color_light.trim(),
         "theme_color_dark": f.theme_color_dark.trim(),
@@ -494,6 +514,7 @@ mod tests {
             tagline: String::new(),
             meta_description: String::new(),
             og_image_url: String::new(),
+            newsletter_url: String::new(),
             theme_css: "  --skin-primary-500: #123456;  ".into(),
             theme_color_light: " #abcdef ".into(),
             theme_color_dark: String::new(),
@@ -536,6 +557,7 @@ mod tests {
             tagline: String::new(),
             meta_description: String::new(),
             og_image_url: String::new(),
+            newsletter_url: String::new(),
             theme_css: String::new(),
             theme_color_light: String::new(),
             theme_color_dark: String::new(),

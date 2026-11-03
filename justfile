@@ -71,7 +71,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -211,6 +211,28 @@ check-doc-surface:
     ./scripts/check-doc-surface.nu --self-test
     ./scripts/check-doc-surface.nu
 
+# Gate that docs/configuration.md's "Recently added" and "All variables"
+# sections match the per-variable facts in crates/bunyip-domain/config/variables.toml.
+[group: 'checks']
+check-config-docs:
+    nu scripts/config-docs.nu self-test
+    nu scripts/config-docs.nu check
+
+# Regenerate the two generated sections in docs/configuration.md.
+[group: 'checks']
+config-docs:
+    nu scripts/config-docs.nu generate
+
+# Report the configuration changes an operator running <version> faces today.
+[group: 'checks']
+config-since version:
+    nu scripts/config-docs.nu since {{ version }}
+
+# Emit the configuration-changes block for a release's notes.
+[group: 'checks']
+config-release-notes version:
+    nu scripts/config-docs.nu release-notes {{ version }}
+
 # Gate CLAUDE.md as an index: at most 20,000 bytes, no unfenced line over 400
 # characters, and every docs/ link and anchor resolves (BUNYIP-854).
 [group: 'checks']
@@ -319,6 +341,12 @@ export HOST_GID := `id -g`
 # resolve them against the committed .sqlx cache so local cargo commands need no
 # database.
 export SQLX_OFFLINE := "true"
+# BUNYIP-856: isolate `/app/target` per git worktree so two worktrees building
+# at once do not corrupt each other's incremental state. The main checkout
+# (`.git/` is a directory) keeps the plain volume name so its warm cache
+# survives; linked worktrees (`.git` is a file) get a `-<hash>` suffix derived
+# from the worktree's absolute path. Registry and git caches stay shared.
+export WORKTREE_SUFFIX := `if [ -d .git ]; then echo ""; else printf -- "-%s" "$(git rev-parse --show-toplevel | sha1sum | cut -c1-7)"; fi`
 
 compose := "docker compose -f compose.dev.yml "
 compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
@@ -658,15 +686,21 @@ dev-clean:
     #!/usr/bin/env nu
     {{ compose }}down --remove-orphans
     let suffix = $env.USER
-    let vols = [
+    # BUNYIP-856: match every per-worktree cargo-target volume for this user,
+    # not just the one for the current checkout, so a tear-down from any
+    # worktree (including the main one) prunes the full set.
+    let existing = docker volume ls --quiet | lines
+    let cargo_target_pattern = $"dev-bunyip-cargo-target-($suffix)"
+    let cargo_target_vols = $existing | where {|v|
+        $v == $cargo_target_pattern or ($v | str starts-with $"($cargo_target_pattern)-")
+    }
+    let vols = ([
         $"dev-bunyip-postgres-($suffix)"
-        $"dev-bunyip-cargo-target-($suffix)"
         $"dev-bunyip-web-node-modules-($suffix)"
         $"dev-bunyip-download-cache-($suffix)"
         $"dev-bunyip-oci-cache-($suffix)"
         "bunyip-check-target"
-    ]
-    let existing = docker volume ls --quiet | lines
+    ] | append $cargo_target_vols)
     for vol in $vols {
         if $vol in $existing {
             docker volume rm $vol

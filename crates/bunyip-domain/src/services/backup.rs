@@ -269,7 +269,14 @@ impl AccountBackupStore for PgAccountBackupStore {
         last_name: Option<&str>,
         phone: Option<&str>,
     ) -> Result<(), AppError> {
-        UserRepository::update_profile(&self.pool, user_id, first_name, last_name, phone).await?;
+        UserRepository::update_profile(
+            &self.pool,
+            user_id,
+            Some(first_name),
+            Some(last_name),
+            Some(phone),
+        )
+        .await?;
         Ok(())
     }
 

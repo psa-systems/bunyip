@@ -28,6 +28,7 @@ use crate::services::{
 };
 use crate::validation::validate_email;
 use bunyip_domain::device::device_label;
+use bunyip_domain::services::mirzam_sync::{AccountChange, MirzamSync};
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use uuid::Uuid;
 
@@ -343,12 +344,6 @@ pub async fn update_current_user_profile(
     let last_name = normalize_profile_field("last_name", &body.last_name)?;
     let phone = normalize_profile_field("phone", &body.phone)?;
 
-    let current = self_user(&req, &pool, user.0.sub).await?;
-
-    let next_first = first_name.unwrap_or(current.first_name.clone());
-    let next_last = last_name.unwrap_or(current.last_name.clone());
-    let next_phone = phone.unwrap_or(current.phone.clone());
-
     // BUNYIP-366: apply the login-location-alert opt-out first, and only when the
     // client actually sent it, so the profile UPDATE below returns the row with
     // the new value.
@@ -356,12 +351,18 @@ pub async fn update_current_user_profile(
         UserRepository::set_login_location_alerts(&pool, user.0.sub, enabled).await?;
     }
 
+    // BUNYIP-951: each field is passed through as the three-state
+    // absent/clear/set value `normalize_profile_field` produced; the
+    // "leave unchanged" case is resolved by the UPDATE statement itself
+    // (CASE WHEN inside `UserRepository::update_profile`), not by reading a
+    // snapshot here and writing it back, so a concurrent update touching the
+    // other field can never be clobbered with a stale value.
     let updated = UserRepository::update_profile(
         &pool,
         user.0.sub,
-        next_first.as_deref(),
-        next_last.as_deref(),
-        next_phone.as_deref(),
+        first_name.as_ref().map(|v| v.as_deref()),
+        last_name.as_ref().map(|v| v.as_deref()),
+        phone.as_ref().map(|v| v.as_deref()),
     )
     .await?;
 
@@ -897,6 +898,7 @@ pub async fn delete_account(
     webhook_service: web::Data<Arc<WebhookService>>,
     event_bus: web::Data<Arc<EventBus>>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     query: web::Query<DeleteAccountQuery>,
     body: web::Json<DeleteAccountRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -947,8 +949,17 @@ pub async fn delete_account(
     // customer, OIDC sessions, or connected apps, so this skips the downstream
     // cascade and just revokes tokens and clears cookies (writing the usual
     // post-delete audit row would FK-violate against the row we just removed).
+    // BUNYIP-998: either way the account leaves Mirzam's two lists, with the
+    // address read before the row changes.
+    let mirzam_change = AccountChange::Deleted {
+        user_id: user.0.sub,
+        email: db_user.email.clone(),
+        was_verified: db_user.email_verified,
+    };
+
     if query.wants_purge() && config.e2e_purge_enabled() {
         UserRepository::hard_delete(&pool, user.0.sub).await?;
+        crate::mirzam_sync::notify(&mirzam, mirzam_change);
         TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
         crate::handlers::auth::revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
@@ -989,6 +1000,7 @@ pub async fn delete_account(
 
     // Soft-delete the user
     UserRepository::soft_delete(&pool, user.0.sub).await?;
+    crate::mirzam_sync::notify(&mirzam, mirzam_change);
 
     // Revoke all refresh tokens
     TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;

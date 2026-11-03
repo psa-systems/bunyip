@@ -98,6 +98,9 @@ async fn main() {
     // One blocking fetch before the listener binds, so the first render already
     // carries the brand; a failure logs and serves unbranded while the refresh
     // task below keeps retrying. Nothing substitutes a compiled-in literal.
+    // SPEC-2.3.1: one blocking fetch before the listener binds; a failure
+    // falls back to the unbranded default instead of aborting startup, and
+    // the refresh task below retries on an interval.
     branding::load_at_startup(&api).await;
     branding::spawn_refresh(api.clone());
     // BUNYIP-493: the organizations and teams switch, read from bunyip-api's
@@ -356,6 +359,7 @@ async fn main() {
         // a8n.systems logs a 404 on every page load. BUNYIP-560: it follows the
         // branding record, falling back to the committed file.
         .route("/favicon.ico", get(branding::favicon_ico))
+        // SPEC-2.3.4: an unmatched route falls through to the branded 404.
         .fallback(public::not_found)
         // BUNYIP-686: hosts the edge proxy's catch-all forwards get the
         // unknown-host 404, not the site. Inside the CSRF and CSP layers.
@@ -390,6 +394,7 @@ async fn main() {
         .layer(CompressionLayer::new().compress_when(compression_predicate()))
         .with_state(state);
 
+    // SPEC-2.3.2: bunyip-web runs exactly one listener, bound here.
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .expect("bind");

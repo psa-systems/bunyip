@@ -42,6 +42,9 @@ path = "src/bin/gen_demo_seed.rs"
 # pulls from the dunite framework repo on Forgejo.
 [dependencies]
 bunyip-domain = { path = "../crates/bunyip-domain" }
+# BUNYIP-983: the audit row for a saved Mokosh client secret carries the
+# value's SHA-256, never the value.
+sha2 = { workspace = true }
 bunyip-oci = { path = "../crates/bunyip-oci" }
 bunyip-oidc = { path = "../crates/bunyip-oidc" }
 
@@ -155,3 +158,7 @@ data-encoding = "2"
 # tests/rate_limit_traffic.rs hashes rate-limit keys the same way
 # RateLimitTrafficRepository::record does so it can look up rows by key_hash.
 sha2 = "0.10"
+# tests/webhook.rs signs its Stripe event payloads the same way
+# dunite-stripe-core's verifier checks them.
+hmac = "0.12"
+hex = "0.4"

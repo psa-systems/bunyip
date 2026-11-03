@@ -53,7 +53,10 @@ impl NotificationRepository {
         page: i32,
         per_page: i32,
     ) -> Result<(Vec<AdminNotification>, i64), AppError> {
-        let offset = (page - 1) * per_page;
+        // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+        // BUNYIP-946 F14, so a page value large enough to overflow an i32
+        // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         let notifications = sqlx::query_as::<_, AdminNotification>(
             r#"

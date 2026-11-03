@@ -555,10 +555,12 @@ pub async fn application_edit(
         }
     };
     // Groups for the assignment selector. A failed fetch degrades to no groups
-    // (the selector still offers "Ungrouped") rather than blocking the edit.
-    let groups = admin_api::application_groups(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // and a disabled selector (BUNYIP-948: a degraded fetch must never let a
+    // "Save group" submission silently clear a real group assignment) rather
+    // than blocking the edit.
+    let groups_result = admin_api::application_groups(&st.api, c.forward.as_deref()).await;
+    let groups_fetch_failed = groups_result.is_err();
+    let groups = groups_result.unwrap_or_default();
     let content = match apps.iter().find(|a| a.id == id) {
         None => {
             html! { div class="space-y-6" { h1 class="text-3xl font-bold" { "Edit application" } p class="text-muted-foreground" { "Application not found." } } }
@@ -602,7 +604,7 @@ pub async fn application_edit(
                 // BUNYIP-460: match the Danger Zone's `mt-8` so the trailing
                 // full-width sections keep one consistent vertical rhythm below
                 // the form.
-                div class="mt-8" { (group_assignment_form(&id, app.group_id.as_deref(), &groups)) }
+                div class="mt-8" { (group_assignment_form(&id, app.group_id.as_deref(), &groups, groups_fetch_failed)) }
                 (app_danger_zone(&id, q.error.as_deref()))
             }
         }
@@ -1105,7 +1107,15 @@ pub async fn application_doc_create(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
+    let sort_order = match crate::handlers::validate::parse_i32(&f.sort_order, "Sort order") {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/applications/{id}/docs?error={}", urlenc(&msg)),
+                &c.set_cookies,
+            );
+        }
+    };
     let target = match admin_api::create_app_doc(
         &st.api,
         c.forward.as_deref(),
@@ -1140,7 +1150,15 @@ pub async fn application_doc_update(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let sort_order = crate::handlers::validate::parse_i32(&f.sort_order, "Sort order").unwrap_or(0);
+    let sort_order = match crate::handlers::validate::parse_i32(&f.sort_order, "Sort order") {
+        Ok(v) => v,
+        Err(msg) => {
+            return redirect_cookies(
+                &format!("/admin/applications/{id}/docs?error={}", urlenc(&msg)),
+                &c.set_cookies,
+            );
+        }
+    };
     let target = match admin_api::update_app_doc(
         &st.api,
         c.forward.as_deref(),
@@ -1235,6 +1253,34 @@ mod tests {
         assert!(
             !markup.contains(needle) && !markup.contains(other_needle),
             "applications.rs must not redirect through the client-only toast channel"
+        );
+    }
+
+    /// BUNYIP-948 (F18): `parse_i32`'s `Err` for a non-numeric/out-of-range
+    /// sort order must propagate as a validation error, not collapse to a
+    /// silently-substituted `0` (`.unwrap_or(0)`) that then reports success.
+    /// Scans the source rather than calling the handler directly, since
+    /// `application_doc_create`/`application_doc_update` need a live
+    /// `admin_guard` session to reach this far; mirrors the source-scanning
+    /// guard this file already uses for the toast-channel invariant above.
+    #[test]
+    fn doc_sort_order_errors_propagate_instead_of_defaulting() {
+        let src = include_str!("applications.rs");
+        let markup = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split yields a head");
+        assert!(
+            !markup.contains(r#"parse_i32(&f.sort_order, "Sort order").unwrap_or(0)"#),
+            "a non-numeric/out-of-range sort order must not be silently defaulted to 0"
+        );
+        let propagating_sites = markup
+            .matches(r#"match crate::handlers::validate::parse_i32(&f.sort_order, "Sort order")"#)
+            .count();
+        assert_eq!(
+            propagating_sites, 2,
+            "expected both application_doc_create and application_doc_update to propagate \
+             the sort-order validation error"
         );
     }
 

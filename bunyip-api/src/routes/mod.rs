@@ -12,6 +12,7 @@ pub mod download;
 pub mod events;
 pub mod feedback;
 pub mod health;
+pub mod host;
 pub mod mailer;
 pub mod membership;
 pub mod pricing;
@@ -27,6 +28,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/v1")
             .configure(health::configure)
+            .configure(host::configure)
             .configure(auth::configure)
             .configure(user::configure)
             .configure(account::configure)

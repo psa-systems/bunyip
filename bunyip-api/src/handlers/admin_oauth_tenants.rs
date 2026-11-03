@@ -104,7 +104,8 @@ pub async fn unassign_user_tenant(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let (client_id, assignment_id) = path.into_inner();
-    let removed = OAuthClientUserTenantRepository::unassign(pool.get_ref(), assignment_id).await?;
+    let removed =
+        OAuthClientUserTenantRepository::unassign(pool.get_ref(), client_id, assignment_id).await?;
 
     AuditLogRepository::create(
         pool.get_ref(),

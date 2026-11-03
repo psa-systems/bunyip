@@ -105,10 +105,18 @@ pub(super) fn group_form(
 /// A group `<select>` + save button for the application edit page. Posts to the
 /// dedicated set-group endpoint so it never collides with the distribution save
 /// (which COALESCEs and cannot clear group_id).
+///
+/// BUNYIP-948 (F8): `groups_fetch_failed` is `true` when the groups list came
+/// back from a degraded fetch (so `groups` is an empty placeholder, not the
+/// real state). In that case the app's current assignment may not be
+/// representable in the `<select>` at all, so submitting it would silently
+/// clear a real group assignment; render the control disabled with a notice
+/// instead of letting that submission happen.
 pub(super) fn group_assignment_form(
     app_id: &str,
     current: Option<&str>,
     groups: &[ApplicationGroup],
+    groups_fetch_failed: bool,
 ) -> Markup {
     // BUNYIP-460: same card treatment (title scale + subtitle) as the Details /
     // Distribution / Danger Zone sections so "Group" reads as a peer section, and
@@ -118,14 +126,18 @@ pub(super) fn group_assignment_form(
         "Group",
         Some("Assign this application to a group, or leave it ungrouped."),
         html! {
-            form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
-                select name="group_id" class=(dashboard_input()) {
-                    option value="" selected[current.is_none()] { "Ungrouped" }
-                    @for g in groups {
-                        option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
+            @if groups_fetch_failed {
+                (error_box("Could not load application groups, so the current assignment can't be shown here. Reload the page to change it."))
+            } @else {
+                form method="post" action=(format!("/admin/applications/{app_id}/group")) class="flex items-end gap-2 max-w-md" {
+                    select name="group_id" class=(dashboard_input()) {
+                        option value="" selected[current.is_none()] { "Ungrouped" }
+                        @for g in groups {
+                            option value=(g.id) selected[current == Some(g.id.as_str())] { (g.display_name) }
+                        }
                     }
+                    button type="submit" class=(button_class("default", "default", "")) { "Save group" }
                 }
-                button type="submit" class=(button_class("default", "default", "")) { "Save group" }
             }
         },
     )
@@ -376,4 +388,46 @@ pub async fn application_set_group(
         }
     };
     redirect_cookies(&target, &c.set_cookies)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::group_assignment_form;
+
+    /// BUNYIP-948 (F8): a degraded groups fetch must never let "Save group"
+    /// submit a value that silently clears a real group assignment. With
+    /// `groups=&[]` and `current=Some("g1")`, the "Ungrouped" option would be
+    /// the only selectable one (the invalid shape this guards against), so
+    /// assert the save control is gone instead of rendering that select.
+    #[test]
+    fn degraded_groups_fetch_disables_the_save_control() {
+        let html = group_assignment_form("app-1", Some("g1"), &[], true).into_string();
+        assert!(
+            !html.contains("Save group"),
+            "a degraded groups fetch must not offer a save control that could \
+             silently clear the real group assignment: {html}"
+        );
+        assert!(
+            !html.contains("name=\"group_id\""),
+            "a degraded groups fetch must not render a submittable group select: {html}"
+        );
+    }
+
+    /// Sanity check for the non-degraded path: the existing assignment is
+    /// still selected, and the form is still submittable.
+    #[test]
+    fn healthy_groups_fetch_renders_the_submittable_select() {
+        let groups = [crate::api::types::ApplicationGroup {
+            id: "g1".into(),
+            name: "g1".into(),
+            slug: "g1".into(),
+            display_name: "Group One".into(),
+            description: None,
+            icon_url: None,
+            sort_order: 0,
+        }];
+        let html = group_assignment_form("app-1", Some("g1"), &groups, false).into_string();
+        assert!(html.contains("Save group"));
+        assert!(html.contains(r#"value="g1" selected"#));
+    }
 }

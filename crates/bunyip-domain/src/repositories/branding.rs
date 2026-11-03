@@ -31,6 +31,7 @@ impl BrandingRepository {
         tagline: &str,
         meta_description: &str,
         og_image_url: &str,
+        newsletter_url: &str,
         theme_css: &str,
         theme_color_light: &str,
         theme_color_dark: &str,
@@ -46,8 +47,9 @@ impl BrandingRepository {
                 theme_css         = $5,
                 theme_color_light = $6,
                 theme_color_dark  = $7,
+                newsletter_url    = $8,
                 updated_at        = NOW(),
-                updated_by        = $8
+                updated_by        = $9
             WHERE id = 1
             RETURNING *
             "#,
@@ -59,6 +61,7 @@ impl BrandingRepository {
         .bind(theme_css)
         .bind(theme_color_light)
         .bind(theme_color_dark)
+        .bind(newsletter_url)
         .bind(updated_by)
         .fetch_one(pool)
         .await?;

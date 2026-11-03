@@ -6,13 +6,14 @@ use super::types::{
     AdminApplication, AdminApplicationList, AdminAuditLog, AdminFeatureToggle, AdminFeedbackDetail,
     AdminFeedbackSummary, AdminInvite, AdminIpBan, AdminRateLimit, AdminRateLimitConfig,
     AdminRateLimitHistory, AdminRateLimitOverviewEntry, AdminRateLimitWhitelistEntry,
-    AdminStatsResponse, AdminUser, AppDoc, ApplicationGroup, ApplicationGroupList,
+    AdminStatsResponse, AdminUser, ApiVersion, AppDoc, ApplicationGroup, ApplicationGroupList,
     ArchivedFeedback, AutoBanConfigResponse, EmailConfigResponse, ErrorLogsResponse,
     FeedbackStatus, ImportSummary, IntegrationStatus, IntegrationStatusResponse, IpEnrichment,
-    MailerSuppression, PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse,
-    RestoreReport, SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport,
-    StripePrice, StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse,
-    TestEmailResult, TierConfigResponse, UserEntitlement,
+    MailerSuppression, MirzamCheckResult, MirzamConfigResponse, MokoshConfigResponse,
+    PaginatedResponse, PricingStatus, ProviderStatusAggregateResponse, RestoreReport,
+    SeedTemplateInfo, SmtpTestResult, StripeConfigResponse, StripePermissionReport, StripePrice,
+    StripeProduct, StripeWebhookEndpoint, SystemHealth, SystemHealthResponse, TestEmailResult,
+    TierConfigResponse, UserEntitlement,
 };
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
@@ -28,6 +29,14 @@ pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse
 pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHealth, ApiError> {
     let resp: SystemHealthResponse = parse(api.get("/admin/health", cookie).await?)?;
     Ok(resp.health)
+}
+
+/// The running build the bunyip-api process serves: version, short revision,
+/// and the update-check status when configured. Fetched from the root-level
+/// `GET /version` (NOT `/v1/version`), the same endpoint an operator would
+/// `curl` by hand. A failed fetch is surfaced as "Unknown" by the caller.
+pub async fn api_version(api: &Api) -> Result<ApiVersion, ApiError> {
+    parse(api.get_root("/version").await?)
 }
 
 /// Per-integration status (BUNYIP-623): the Configured / Unconfigured / Failing
@@ -261,30 +270,39 @@ pub async fn admin_reset_password(
 }
 
 /// Grant lifetime membership. Creates a $0 Stripe subscription on the backend
-/// so invoices still flow.
+/// so invoices still flow. BUNYIP-943: gated on the acting admin's 2FA code,
+/// the same as `set_user_tier`; the API returns a validation error on a
+/// bad/absent code and makes no change.
 pub async fn grant_lifetime(
     api: &Api,
     cookie: Option<&str>,
     user_id: &str,
+    totp_code: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/users/{user_id}/lifetime"), cookie, None)
+        .post(
+            &format!("/admin/users/{user_id}/lifetime"),
+            cookie,
+            Some(json!({ "totp_code": totp_code })),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
 
 /// Revoke a previously-granted lifetime membership. Returns the user to the
-/// standard tier with no active subscription.
+/// standard tier with no active subscription. BUNYIP-943: gated on the acting
+/// admin's 2FA code, same as `grant_lifetime`.
 pub async fn revoke_lifetime(
     api: &Api,
     cookie: Option<&str>,
     user_id: &str,
+    totp_code: &str,
 ) -> Result<(), ApiError> {
     let r = api
         .post(
             &format!("/admin/users/{user_id}/lifetime/revoke"),
             cookie,
-            None,
+            Some(json!({ "totp_code": totp_code })),
         )
         .await?;
     ok_data(&r).map(|_| ())
@@ -534,23 +552,44 @@ pub async fn set_application_restricted(
 
 // --- audit logs -------------------------------------------------------------
 
+/// BUNYIP-936 / BUNYIP-937: filter parameters the admin audit page carries.
+/// Grouped into a struct so the helper signature does not grow a parameter
+/// per field as new filters land.
+#[derive(Debug, Default, Clone)]
+pub struct AuditFilters<'a> {
+    pub user_id: Option<&'a str>,
+    pub action: Option<&'a str>,
+    pub severity: Option<&'a str>,
+    pub since: Option<&'a str>,
+    pub q: Option<&'a str>,
+}
+
 pub async fn audit_logs(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
     admin_only: bool,
-    // BUNYIP-930: optional single-user filter. The API already accepts
-    // `user_id`; the admin audit page and the user-detail page both read
-    // through this one helper so a change to the filter surface stays local.
-    user_id: Option<&str>,
+    filters: AuditFilters<'_>,
 ) -> Result<PaginatedResponse<AdminAuditLog>, ApiError> {
     let mut path = format!("/admin/audit-logs?page={page}&per_page={page_size}");
     if admin_only {
         path.push_str("&admin_only=true");
     }
-    if let Some(uid) = user_id {
-        path.push_str(&format!("&user_id={uid}"));
+    if let Some(uid) = filters.user_id {
+        path.push_str(&format!("&user_id={}", urlenc(uid)));
+    }
+    if let Some(action) = filters.action {
+        path.push_str(&format!("&action={}", urlenc(action)));
+    }
+    if let Some(severity) = filters.severity {
+        path.push_str(&format!("&severity={}", urlenc(severity)));
+    }
+    if let Some(since) = filters.since {
+        path.push_str(&format!("&since={}", urlenc(since)));
+    }
+    if let Some(q) = filters.q {
+        path.push_str(&format!("&q={}", urlenc(q)));
     }
     parse(api.get(&path, cookie).await?)
 }
@@ -661,20 +700,29 @@ pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), A
 
 // --- admin invites (BUNYIP-760) ---------------------------------------------
 
+/// BUNYIP-939: filter parameters for the admin invites list.
+#[derive(Debug, Default, Clone)]
+pub struct InviteFilters<'a> {
+    pub status: Option<&'a str>,
+    pub email: Option<&'a str>,
+}
+
 /// List pending/past admin invites. Wraps `GET /v1/admin/invites`, paginated.
 pub async fn admin_invites(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     per_page: u32,
+    filters: InviteFilters<'_>,
 ) -> Result<PaginatedResponse<AdminInvite>, ApiError> {
-    parse(
-        api.get(
-            &format!("/admin/invites?page={page}&per_page={per_page}"),
-            cookie,
-        )
-        .await?,
-    )
+    let mut path = format!("/admin/invites?page={page}&per_page={per_page}");
+    if let Some(status) = filters.status {
+        path.push_str(&format!("&status={}", urlenc(status)));
+    }
+    if let Some(email) = filters.email {
+        path.push_str(&format!("&email={}", urlenc(email)));
+    }
+    parse(api.get(&path, cookie).await?)
 }
 
 /// Invite `email` as an admin. Wraps `POST /v1/admin/invites`, which emails the
@@ -956,24 +1004,45 @@ pub async fn delete_rate_limit_config(
 
 // --- feedback ---------------------------------------------------------------
 
+/// BUNYIP-938: filter parameters for the admin feedback list. Grouped so
+/// adding a filter does not reshape every call site.
+#[derive(Debug, Default, Clone)]
+pub struct FeedbackFilters<'a> {
+    pub tag: Option<&'a str>,
+    pub has_attachment: Option<bool>,
+    pub has_response: Option<bool>,
+    pub q: Option<&'a str>,
+}
+
 /// Feedback list bucketed by admin tab (BUNYIP-92). Bucket strings map
 /// 1:1 to the API's accepted set: `active` (default, excludes closed +
 /// spam), `closed` (closed and not spam), `spam` (is_spam=true, any
 /// status). The `archive` view has its own endpoint.
+///
+/// BUNYIP-938: additionally filters by tag / has_attachment /
+/// has_response / q (text search).
 pub async fn feedback(
     api: &Api,
     cookie: Option<&str>,
     page: u32,
     page_size: u32,
     bucket: &str,
+    filters: FeedbackFilters<'_>,
 ) -> Result<PaginatedResponse<AdminFeedbackSummary>, ApiError> {
-    parse(
-        api.get(
-            &format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}"),
-            cookie,
-        )
-        .await?,
-    )
+    let mut path = format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}");
+    if let Some(tag) = filters.tag {
+        path.push_str(&format!("&tag={}", urlenc(tag)));
+    }
+    if let Some(has_attachment) = filters.has_attachment {
+        path.push_str(&format!("&has_attachment={has_attachment}"));
+    }
+    if let Some(has_response) = filters.has_response {
+        path.push_str(&format!("&has_response={has_response}"));
+    }
+    if let Some(q) = filters.q {
+        path.push_str(&format!("&q={}", urlenc(q)));
+    }
+    parse(api.get(&path, cookie).await?)
 }
 
 pub async fn update_feedback_status(
@@ -1289,6 +1358,53 @@ pub async fn update_email_config(
 ) -> Result<(), ApiError> {
     let r = api.put("/admin/email", cookie, Some(body)).await?;
     ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-997: the Mirzam integration settings.
+pub async fn mirzam_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MirzamConfigResponse, ApiError> {
+    parse(api.get("/admin/mirzam", cookie).await?)
+}
+
+/// BUNYIP-997: replace the Mirzam settings; an empty `api_token` keeps the
+/// stored token.
+pub async fn update_mirzam_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/mirzam", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-983: the Mokosh host settings.
+pub async fn mokosh_config(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MokoshConfigResponse, ApiError> {
+    parse(api.get("/admin/mokosh", cookie).await?)
+}
+
+/// BUNYIP-983: replace the Mokosh client id; an empty `google_client_secret`
+/// keeps the stored secret, and a changed id needs `confirm_client_id_change`.
+pub async fn update_mokosh_config(
+    api: &Api,
+    cookie: Option<&str>,
+    body: Value,
+) -> Result<(), ApiError> {
+    let r = api.put("/admin/mokosh", cookie, Some(body)).await?;
+    ok_data(&r).map(|_| ())
+}
+
+/// BUNYIP-997: check both saved lists against Mirzam. A reached-but-failing
+/// Mirzam is a 200 with `ok: false`; missing settings are a 400 `ApiError`.
+pub async fn check_mirzam_connection(
+    api: &Api,
+    cookie: Option<&str>,
+) -> Result<MirzamCheckResult, ApiError> {
+    parse(api.post("/admin/mirzam/check", cookie, None).await?)
 }
 
 /// BUNYIP-580: read the system-config YAML values for the admin settings page.

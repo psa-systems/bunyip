@@ -326,6 +326,49 @@ jobs:
           ./scripts/check-publish-triggers.nu --self-test
           ./scripts/check-publish-triggers.nu
 
+      - name: Ensure cargo-binstall is on PATH
+        # check-dependency-audit.nu's `ensure-audit` uses cargo-binstall when
+        # it is available and falls back to `cargo install --locked cargo-audit`
+        # when it is not. The CI runner image ships no binstall, so the
+        # fallback compiled cargo-audit from source: aws-lc-sys wrote ~2 GB
+        # of scratch into /tmp and the runner's /tmp ran out of space partway
+        # through, failing with `No space left on device`. Install the pinned
+        # cargo-binstall release tarball directly into CARGO_HOME so the audit
+        # step takes the binary-download path. On a warm runner (either
+        # binstall or cargo-audit already in CARGO_HOME) this step is a no-op.
+        run: |
+          if (which cargo-binstall | is-empty) {
+              let ver = "1.14.3"
+              let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+              let tmp = (mktemp --tmpdir --suffix .tgz)
+              let bin_dir = $"($env.HOME)/.cargo/bin"
+              let bin = $"($bin_dir)/cargo-binstall"
+              http get $url | save --force $tmp
+              mkdir $bin_dir
+              ^tar -xzf $tmp -C $bin_dir cargo-binstall
+              ^chmod +x $bin
+              rm $tmp
+              # Prove the extracted binary works via direct invocation,
+              # so a silent fault (tar member mismatch, non-executable
+              # mode, mangled download) fails the step here instead of
+              # letting the next step compile cargo-audit from source
+              # and exhaust /tmp. Use `--help` rather than `--version`:
+              # cargo-binstall's `--version <VERSION>` is a flag that
+              # takes a target package version to install (not a
+              # print-version flag), so invoking it without a value is a
+              # clap parse error. `--help` is a plain clap default and
+              # exits 0 if the binary is callable.
+              ^$bin --help | ignore
+              # The cargo-subcommand form `cargo binstall ...` depends
+              # on $HOME/.cargo/bin being on PATH, which this image
+              # does not guarantee for the runner user, so append it to
+              # GITHUB_PATH too and let the cargo-subcommand lookup
+              # work in every subsequent step.
+              $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
+          } else {
+              print "cargo-binstall is already on PATH; skipping download"
+          }
+
       - name: Dependency audit
         # Cargo.lock against the RustSec advisory database: an uncovered
         # vulnerability fails, a warning is reported only, and the one
@@ -415,6 +458,18 @@ jobs:
       - name: Secrets scan
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/check-secrets@main
         with:
-          # Test fixtures and dev defaults only; Nosey Parker's list is .noseyparker-ignore.txt.
-          # History findings are reported by git object path, so they need the value regex.
-          kingfisher_skip_regex: '^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$'
+          # Test fixtures and dev defaults only; Nosey Parker's list is
+          # .noseyparker-ignore.txt. History findings are reported by git
+          # object path, so they need the value regex (`kingfisher_excludes`
+          # is a working-tree-only filter and does not reach a blob that
+          # ever appeared in history, per the check-secrets action doc).
+          # BUNYIP-864: the OIDC provider's test module carries a known
+          # synthetic Ed25519 keypair for the logout-token JWKS round-trip
+          # test, copied from dunite-oidc's own tests (DUNITE-29). The
+          # unique base64 blob `MC4CAQA...sNtVKR` is the whole private key
+          # material; matching it as a substring (unanchored, outside the
+          # anchored short-token group) suppresses the finding wherever it
+          # appears in history. Production code loads keys only through
+          # `OidcKeySet` from disk; `grep "BEGIN PRIVATE"` on the file
+          # returns the one test fixture and nothing else.
+          kingfisher_skip_regex: '(^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$|MC4CAQAwBQYDK2VwBCIEIJ5gHv/Vi3V0Lk0k3jHN10sqRZ68P8fkNuLnF\+sNtVKR)'

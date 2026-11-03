@@ -126,12 +126,17 @@ pub async fn set_application_restricted(
         .await?
         .ok_or_else(|| AppError::not_found("Application"))?;
 
-    ApplicationRepository::set_requires_entitlement(
-        pool.get_ref(),
-        app.id,
-        body.requires_entitlement,
-    )
-    .await?;
+    // BUNYIP-945 F7: flip the gate and backfill current members in one
+    // transaction. BUNYIP-39's invariant is that flipping a product to
+    // restricted must not retroactively lock out current members; the
+    // previous two-statement sequence left two failure modes against that
+    // invariant: a backfill DB error after the flip committed left the gate
+    // live with no grants, and a concurrent request landing in the gap
+    // between the two statements was denied even on success. One tx closes
+    // both.
+    let mut tx = pool.begin().await?;
+    ApplicationRepository::set_requires_entitlement(&mut *tx, app.id, body.requires_entitlement)
+        .await?;
 
     // Preserve current access (BUNYIP-39): flipping an open product to
     // restricted grants it to every member who can access it right now, so
@@ -140,9 +145,9 @@ pub async fn set_application_restricted(
     // everyone current at flip time.)
     let mut backfilled = 0u64;
     if body.requires_entitlement && !app.requires_entitlement {
-        backfilled =
-            EntitlementRepository::backfill_for_application(pool.get_ref(), app.id).await?;
+        backfilled = EntitlementRepository::backfill_for_application(&mut *tx, app.id).await?;
     }
+    tx.commit().await?;
 
     let log = CreateAuditLog::new(AuditAction::AdminApplicationRestrictionChanged)
         .with_actor(admin.0.sub, &admin.0.email, &admin.0.role)
