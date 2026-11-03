@@ -45,8 +45,8 @@ use bunyip_domain::models::branding::{validate_branding, UpdateBrandingRequest};
 use bunyip_domain::models::mirzam::validate_mirzam_settings;
 use bunyip_domain::repositories::FeatureToggleRepository;
 use bunyip_domain::services::argon2_offload;
-use bunyip_domain::services::encryption::{decrypt_with_key, EncryptionKeySet};
-use bunyip_domain::services::AppKeySet;
+use bunyip_domain::services::encryption::decrypt_with_key;
+use bunyip_domain::services::EncryptionKeySet;
 use bunyip_domain::sys_config::SystemSettings;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -799,7 +799,7 @@ pub async fn require_matching_schema(pool: &PgPool) -> Result<i64, AppError> {
 pub async fn export(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     options: ExportOptions,
 ) -> Result<SettingsSnapshot, AppError> {
     let schema_version = require_matching_schema(pool).await?;
@@ -930,7 +930,7 @@ async fn read_feature_toggles(pool: &PgPool) -> Result<Vec<FeatureToggleRow>, Ap
 async fn read_governed_secrets(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
 ) -> Result<BTreeMap<String, Option<String>>, AppError> {
     let mut out = BTreeMap::new();
     for secret in GovernedSecret::ALL {
@@ -1448,7 +1448,7 @@ fn keyed<T: Serialize, F: Fn(&T) -> String>(rows: &[T], key: F) -> BTreeMap<Stri
 pub async fn plan(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     snapshot: &SettingsSnapshot,
 ) -> Result<ImportPlan, AppError> {
     let schema_version = require_matching_schema(pool).await?;
@@ -1774,7 +1774,7 @@ impl ImportReport {
 pub async fn apply(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     snapshot: &SettingsSnapshot,
     updated_by: Option<Uuid>,
 ) -> Result<ImportReport, AppError> {
@@ -1846,7 +1846,7 @@ pub async fn apply(
 async fn verify(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     snapshot: &SettingsSnapshot,
 ) -> Result<(), AppError> {
     let fresh = export(
@@ -2394,7 +2394,7 @@ async fn write_oauth_clients(
 async fn write_governed_secrets(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     snapshot: &SettingsSnapshot,
     plan: &ImportPlan,
 ) -> Result<(), AppError> {
