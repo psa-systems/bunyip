@@ -18,7 +18,7 @@
 //! ```
 
 use bunyip_api::repositories::TotpRepository;
-use bunyip_api::services::{AppKeySet, TotpService};
+use bunyip_api::services::{EncryptionKeySet, TotpService};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -28,8 +28,8 @@ use uuid::Uuid;
 /// 20 bytes of base32, clearing totp_rs's 128-bit minimum.
 const SECRET_BASE32: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 
-fn key_set() -> AppKeySet {
-    AppKeySet {
+fn key_set() -> EncryptionKeySet {
+    EncryptionKeySet {
         current: [0x42u8; 32],
         current_version: 1,
         previous: Vec::new(),
