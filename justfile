@@ -71,7 +71,7 @@ default:
 
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # Gate migration version numbers: unique + strictly increasing (BUNYIP-79).
 [group: 'checks']
@@ -210,6 +210,28 @@ check-theme-colors:
 check-doc-surface:
     ./scripts/check-doc-surface.nu --self-test
     ./scripts/check-doc-surface.nu
+
+# Gate that docs/configuration.md's "Recently added" and "All variables"
+# sections match the per-variable facts in crates/bunyip-domain/config/variables.toml.
+[group: 'checks']
+check-config-docs:
+    nu scripts/config-docs.nu self-test
+    nu scripts/config-docs.nu check
+
+# Regenerate the two generated sections in docs/configuration.md.
+[group: 'checks']
+config-docs:
+    nu scripts/config-docs.nu generate
+
+# Report the configuration changes an operator running <version> faces today.
+[group: 'checks']
+config-since version:
+    nu scripts/config-docs.nu since {{ version }}
+
+# Emit the configuration-changes block for a release's notes.
+[group: 'checks']
+config-release-notes version:
+    nu scripts/config-docs.nu release-notes {{ version }}
 
 # Gate CLAUDE.md as an index: at most 20,000 bytes, no unfenced line over 400
 # characters, and every docs/ link and anchor resolves (BUNYIP-854).

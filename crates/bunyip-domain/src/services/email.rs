@@ -2070,6 +2070,7 @@ mod tests {
             tagline: String::new(),
             meta_description: String::new(),
             og_image_url: String::new(),
+            newsletter_url: String::new(),
             theme_css: String::new(),
             theme_color_light: String::new(),
             theme_color_dark: String::new(),
