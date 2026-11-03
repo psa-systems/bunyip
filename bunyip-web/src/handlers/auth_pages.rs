@@ -796,7 +796,11 @@ pub async fn magic_link_get(
             Ok((LoginOutcome::ApprovalRequired { challenge_token }, mut cookies)) => {
                 let secure = st.cfg.cookies_secure(Some(peer.ip()), &headers);
                 cookies.push(bunyip_approval_cookie_set(secure, &challenge_token));
-                redirect_cookies("/login/approval", &cookies)
+                let path = match q.redirect.as_deref().filter(|s| !s.is_empty()) {
+                    Some(r) => format!("/login/approval?redirect={}", urlencoding::encode(r)),
+                    None => "/login/approval".to_string(),
+                };
+                redirect_cookies(&path, &cookies)
             }
             Err(e) => {
                 let card = auth_card(
@@ -1593,6 +1597,29 @@ mod magic_link_redirect_tests {
         format!("http://{addr}")
     }
 
+    /// Answers `/v1/auth/magic-link/verify` with `requires_approval: true`,
+    /// so the handler takes the `ApprovalRequired` arm.
+    async fn mock_api_requires_approval() -> String {
+        let router = Router::new().route(
+            "/v1/auth/magic-link/verify",
+            axum::routing::post(|| async {
+                axum::Json(
+                    json!({ "data": { "requires_approval": true, "challenge_token": "chal" } }),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener.local_addr().expect("the mock API has an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
     fn request(uri: &str) -> Request<Body> {
         let mut req = Request::builder()
             .method("GET")
@@ -1641,6 +1668,26 @@ mod magic_link_redirect_tests {
             .to_str()
             .unwrap();
         assert_eq!(location, "/dashboard");
+    }
+
+    /// BUNYIP-996: the `ApprovalRequired` arm must carry `?redirect=`
+    /// forward the same way the sibling `TwoFactorRequired` arm does.
+    #[tokio::test]
+    async fn approval_required_carries_redirect_target() {
+        let api_url = mock_api_requires_approval().await;
+        let response = app(&api_url)
+            .oneshot(request("/magic-link?token=abc&redirect=/billing"))
+            .await
+            .expect("the router serves the request");
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .expect("the approval gate redirects")
+            .to_str()
+            .unwrap();
+        assert_eq!(location, "/login/approval?redirect=%2Fbilling");
     }
 }
 
