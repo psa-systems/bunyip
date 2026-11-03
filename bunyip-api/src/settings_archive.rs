@@ -2,8 +2,8 @@
 //! database setting (BUNYIP-714).
 //!
 //! bunyip keeps its configuration in the database on purpose: branding, the
-//! palette and the brand assets, the tier and pricing flags, the email and
-//! Stripe rows, the rate-limit overrides, the application catalogue and the
+//! palette and the brand assets, the tier and pricing flags, the email,
+//! Stripe and Mirzam rows, the rate-limit overrides, the application catalogue and the
 //! OAuth client registrations are all edited from the admin pages rather than
 //! compiled in or set in compose. That is what makes a rebrand or a cap change
 //! reversible with no deploy, and it is also what makes a wiped volume lose
@@ -42,6 +42,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::branding::{validate_branding, UpdateBrandingRequest};
+use bunyip_domain::models::mirzam::validate_mirzam_settings;
 use bunyip_domain::repositories::FeatureToggleRepository;
 use bunyip_domain::services::argon2_offload;
 use bunyip_domain::services::encryption::{decrypt_with_key, EncryptionKeySet};
@@ -153,6 +154,7 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "tagline",
             "meta_description",
             "og_image_url",
+            "newsletter_url",
             "theme_css",
             "theme_color_light",
             "theme_color_dark",
@@ -236,6 +238,34 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
         ],
     },
     ArchivedTable {
+        table: "mirzam_config",
+        archived: &["enabled", "base_url", "updates_list", "notices_list"],
+        excluded: &[
+            "id",
+            "updated_at",
+            "updated_by",
+            "key_version",
+            "api_token",
+            "api_token_nonce",
+            // BUNYIP-998: the last failed sync call is runtime state, not a
+            // setting.
+            "last_error",
+            "last_error_at",
+        ],
+    },
+    ArchivedTable {
+        table: "mokosh_config",
+        archived: &["google_client_id"],
+        excluded: &[
+            "id",
+            "updated_at",
+            "updated_by",
+            "key_version",
+            "google_client_secret",
+            "google_client_secret_nonce",
+        ],
+    },
+    ArchivedTable {
         table: "rate_limit_configs",
         archived: &["action", "max_requests", "window_seconds"],
         excluded: &["updated_at", "updated_by"],
@@ -312,6 +342,8 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
             "backchannel_logout_uri",
             "lifecycle_event_uri",
             "allowed_scopes",
+            "allowed_secret_keys",
+            "allowed_config_keys",
             "allowed_grant_types",
             "token_endpoint_auth_method",
             "require_pkce",
@@ -393,6 +425,14 @@ pub struct Sections {
     pub auto_ban_config: AutoBanConfigSection,
     pub email_config: EmailConfigSection,
     pub stripe_config: StripeConfigSection,
+    /// BUNYIP-997. Defaulted so an archive written before the table existed
+    /// still reads.
+    #[serde(default)]
+    pub mirzam_config: MirzamConfigSection,
+    /// BUNYIP-983. Defaulted so an archive written before the table existed
+    /// still reads.
+    #[serde(default)]
+    pub mokosh_config: MokoshConfigSection,
     pub rate_limit_configs: Vec<RateLimitConfigRow>,
     /// BUNYIP-840: every stored feature toggle, by key.
     pub feature_toggles: Vec<FeatureToggleRow>,
@@ -413,6 +453,10 @@ pub struct BrandingSection {
     pub tagline: String,
     pub meta_description: String,
     pub og_image_url: String,
+    /// MIRZAM-217. Defaulted so an archive written before the column existed
+    /// still reads.
+    #[serde(default)]
+    pub newsletter_url: String,
     pub theme_css: String,
     pub theme_color_light: String,
     pub theme_color_dark: String,
@@ -488,6 +532,26 @@ pub struct StripeConfigSection {
     pub success_url: Option<String>,
     pub cancel_url: Option<String>,
     pub trial_period_days: Option<i32>,
+}
+
+/// BUNYIP-997: the Mirzam integration's non-secret settings. The API token
+/// travels under `governed_secrets` as `MIRZAM_API_TOKEN`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+pub struct MirzamConfigSection {
+    pub enabled: bool,
+    pub base_url: String,
+    pub updates_list: String,
+    pub notices_list: String,
+}
+
+/// BUNYIP-983: the Mokosh host settings' non-secret half. The client secret
+/// travels under `governed_secrets` as `MOKOSH_GOOGLE_CLIENT_SECRET`, and the
+/// client id is public, so the pair survives a rebuilt volume together.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(deny_unknown_fields)]
+pub struct MokoshConfigSection {
+    pub google_client_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
@@ -624,6 +688,18 @@ pub struct OauthClientRow {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
+    /// BUNYIP-983: the host-secret keys this registration may read. Carried
+    /// because it is an admin-managed entitlement: a restored deployment whose
+    /// calling apps could read nothing would need every allow-list set again
+    /// by hand. Defaulted so an archive written before the column existed
+    /// restores as default-deny.
+    #[serde(default)]
+    pub allowed_secret_keys: Vec<String>,
+    /// BUNYIP-1011: the host-CONFIG keys, archived for the same reason and
+    /// defaulted for the same one: an archive written before the column
+    /// existed restores as default-deny.
+    #[serde(default)]
+    pub allowed_config_keys: Vec<String>,
     pub allowed_grant_types: Vec<String>,
     pub token_endpoint_auth_method: String,
     pub require_pkce: bool,
@@ -735,6 +811,8 @@ pub async fn export(
         auto_ban_config: read_auto_ban_config(pool).await?,
         email_config: read_email_config(pool).await?,
         stripe_config: read_stripe_config(pool).await?,
+        mirzam_config: read_mirzam_config(pool).await?,
+        mokosh_config: read_mokosh_config(pool).await?,
         rate_limit_configs: read_rate_limit_configs(pool).await?,
         feature_toggles: read_feature_toggles(pool).await?,
         system_settings: SystemSettings::current().into(),
@@ -761,7 +839,7 @@ pub async fn export(
 
 async fn read_branding(pool: &PgPool) -> Result<BrandingSection, AppError> {
     Ok(sqlx::query_as::<_, BrandingSection>(
-        "SELECT brand_name, tagline, meta_description, og_image_url, theme_css, \
+        "SELECT brand_name, tagline, meta_description, og_image_url, newsletter_url, theme_css, \
          theme_color_light, theme_color_dark, mark_updated_at, favicon_updated_at, \
          mascot_updated_at FROM branding WHERE id = 1",
     )
@@ -812,6 +890,22 @@ async fn read_stripe_config(pool: &PgPool) -> Result<StripeConfigSection, AppErr
     Ok(sqlx::query_as::<_, StripeConfigSection>(
         "SELECT app_tag, success_url, cancel_url, trial_period_days \
          FROM stripe_config WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn read_mokosh_config(pool: &PgPool) -> Result<MokoshConfigSection, AppError> {
+    Ok(sqlx::query_as::<_, MokoshConfigSection>(
+        "SELECT google_client_id FROM mokosh_config WHERE id = 1",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn read_mirzam_config(pool: &PgPool) -> Result<MirzamConfigSection, AppError> {
+    Ok(sqlx::query_as::<_, MirzamConfigSection>(
+        "SELECT enabled, base_url, updates_list, notices_list FROM mirzam_config WHERE id = 1",
     )
     .fetch_one(pool)
     .await?)
@@ -895,7 +989,8 @@ async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppErr
     Ok(sqlx::query_as::<_, OauthClientRow>(
         "SELECT client_id, client_secret_hash, client_type, name, redirect_uris, \
          post_logout_redirect_uris, backchannel_logout_uri, lifecycle_event_uri, \
-         allowed_scopes, allowed_grant_types, token_endpoint_auth_method, require_pkce, \
+         allowed_scopes, allowed_secret_keys, allowed_config_keys, allowed_grant_types, \
+         token_endpoint_auth_method, require_pkce, \
          access_token_ttl_seconds, refresh_token_ttl_seconds, refresh_idle_ttl_seconds, \
          audience, dpop_bound, disabled_at, tenant_claim_name, first_party, logo_uri \
          FROM oauth_clients ORDER BY client_id",
@@ -1400,6 +1495,7 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
         tagline: branding.tagline.clone(),
         meta_description: branding.meta_description.clone(),
         og_image_url: branding.og_image_url.clone(),
+        newsletter_url: branding.newsletter_url.clone(),
         theme_css: branding.theme_css.clone(),
         theme_color_light: branding.theme_color_light.clone(),
         theme_color_dark: branding.theme_color_dark.clone(),
@@ -1441,6 +1537,19 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
         config.is_production(),
         snapshot.sections.email_config.enabled.unwrap_or(false),
     )?;
+
+    let mirzam = &snapshot.sections.mirzam_config;
+    validate_mirzam_settings(
+        mirzam.enabled,
+        &mirzam.base_url,
+        &mirzam.updates_list,
+        &mirzam.notices_list,
+    )
+    .map_err(|e| AppError::validation(format!("mirzam_config.{}", e.field), e.message))?;
+    bunyip_domain::models::mokosh::validate_google_client_id(
+        &snapshot.sections.mokosh_config.google_client_id,
+    )
+    .map_err(|e| AppError::validation(format!("mokosh_config.{}", e.field), e.message))?;
 
     if let Some(catalog) = &snapshot.sections.catalog {
         let groups: BTreeSet<&str> = catalog
@@ -1512,6 +1621,16 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
             "stripe_config",
             &target.stripe_config,
             &archive.stripe_config,
+        ),
+        plan_singleton(
+            "mirzam_config",
+            &target.mirzam_config,
+            &archive.mirzam_config,
+        ),
+        plan_singleton(
+            "mokosh_config",
+            &target.mokosh_config,
+            &archive.mokosh_config,
         ),
     ];
     singletons.push(plan_singleton(
@@ -1805,7 +1924,7 @@ async fn write_database_sections(
         "UPDATE branding SET brand_name = $1, tagline = $2, meta_description = $3, \
          og_image_url = $4, theme_css = $5, theme_color_light = $6, theme_color_dark = $7, \
          mark_updated_at = $8, favicon_updated_at = $9, mascot_updated_at = $10, \
-         updated_at = NOW(), updated_by = $11 WHERE id = 1",
+         newsletter_url = $11, updated_at = NOW(), updated_by = $12 WHERE id = 1",
     )
     .bind(&b.brand_name)
     .bind(&b.tagline)
@@ -1817,6 +1936,7 @@ async fn write_database_sections(
     .bind(b.mark_updated_at)
     .bind(b.favicon_updated_at)
     .bind(b.mascot_updated_at)
+    .bind(&b.newsletter_url)
     .bind(updated_by)
     .execute(&mut *tx)
     .await?;
@@ -1924,6 +2044,30 @@ async fn write_database_sections(
     .bind(&s.success_url)
     .bind(&s.cancel_url)
     .bind(s.trial_period_days)
+    .bind(updated_by)
+    .execute(&mut *tx)
+    .await?;
+
+    // --- mokosh_config -------------------------------------------------------
+    sqlx::query(
+        "UPDATE mokosh_config SET google_client_id = $1, updated_at = NOW(), \
+         updated_by = $2 WHERE id = 1",
+    )
+    .bind(&sections.mokosh_config.google_client_id)
+    .bind(updated_by)
+    .execute(&mut *tx)
+    .await?;
+
+    // --- mirzam_config -------------------------------------------------------
+    let m = &sections.mirzam_config;
+    sqlx::query(
+        "UPDATE mirzam_config SET enabled = $1, base_url = $2, updates_list = $3, \
+         notices_list = $4, updated_at = NOW(), updated_by = $5 WHERE id = 1",
+    )
+    .bind(m.enabled)
+    .bind(&m.base_url)
+    .bind(&m.updates_list)
+    .bind(&m.notices_list)
     .bind(updated_by)
     .execute(&mut *tx)
     .await?;
@@ -2181,12 +2325,13 @@ async fn write_oauth_clients(
         sqlx::query(
             "INSERT INTO oauth_clients (client_id, client_secret_hash, client_type, name, \
              redirect_uris, post_logout_redirect_uris, backchannel_logout_uri, \
-             lifecycle_event_uri, allowed_scopes, allowed_grant_types, \
+             lifecycle_event_uri, allowed_scopes, allowed_secret_keys, allowed_config_keys, \
+             allowed_grant_types, \
              token_endpoint_auth_method, require_pkce, access_token_ttl_seconds, \
              refresh_token_ttl_seconds, refresh_idle_ttl_seconds, audience, dpop_bound, \
              disabled_at, tenant_claim_name, first_party, logo_uri, created_at, created_by) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, \
-             $18, $19, $20, $21, NOW(), $22) \
+             $18, $19, $20, $21, $22, $23, NOW(), $24) \
              ON CONFLICT (client_id) DO UPDATE SET \
              client_secret_hash = EXCLUDED.client_secret_hash, \
              client_type = EXCLUDED.client_type, name = EXCLUDED.name, \
@@ -2195,6 +2340,8 @@ async fn write_oauth_clients(
              backchannel_logout_uri = EXCLUDED.backchannel_logout_uri, \
              lifecycle_event_uri = EXCLUDED.lifecycle_event_uri, \
              allowed_scopes = EXCLUDED.allowed_scopes, \
+             allowed_secret_keys = EXCLUDED.allowed_secret_keys, \
+             allowed_config_keys = EXCLUDED.allowed_config_keys, \
              allowed_grant_types = EXCLUDED.allowed_grant_types, \
              token_endpoint_auth_method = EXCLUDED.token_endpoint_auth_method, \
              require_pkce = EXCLUDED.require_pkce, \
@@ -2215,6 +2362,8 @@ async fn write_oauth_clients(
         .bind(&client.backchannel_logout_uri)
         .bind(&client.lifecycle_event_uri)
         .bind(&client.allowed_scopes)
+        .bind(&client.allowed_secret_keys)
+        .bind(&client.allowed_config_keys)
         .bind(&client.allowed_grant_types)
         .bind(&client.token_endpoint_auth_method)
         .bind(client.require_pkce)
@@ -2537,6 +2686,16 @@ mod tests {
                 auto_ban_config: AutoBanConfigSection::default(),
                 email_config: EmailConfigSection::default(),
                 stripe_config: StripeConfigSection::default(),
+                mirzam_config: MirzamConfigSection {
+                    enabled: true,
+                    base_url: "https://news.example.com".to_string(),
+                    updates_list: "product-updates".to_string(),
+                    notices_list: "notices".to_string(),
+                },
+                mokosh_config: MokoshConfigSection {
+                    google_client_id: "123456789012-abc123def456.apps.googleusercontent.com"
+                        .to_string(),
+                },
                 rate_limit_configs: vec![RateLimitConfigRow {
                     action: "login".to_string(),
                     max_requests: 5,

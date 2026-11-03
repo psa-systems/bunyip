@@ -40,7 +40,10 @@ pub async fn list_support_tickets(
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
-    let offset = i64::from((page - 1) * per_page);
+    // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+    // BUNYIP-946 F14, so a page value large enough to overflow an i32
+    // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+    let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
     let tickets = SupportRepository::list_tickets(&pool, i64::from(per_page), offset).await?;
     let total = SupportRepository::count_tickets(&pool).await?;

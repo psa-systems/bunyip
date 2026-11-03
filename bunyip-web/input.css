@@ -553,6 +553,13 @@
   transform: translateY(0);
   transition-delay: 0.5s;
 }
+/* BUNYIP-992: every child past the sixth, or it stays at opacity 0 and its row
+   is a blank band (the landing page lists every application). */
+.scroll-fade-up-child.in-view > *:nth-child(n + 7) {
+  opacity: 1;
+  transform: translateY(0);
+  transition-delay: 0.5s;
+}
 
 /* Password UX glyph states (BUNYIP-554). The show/hide eye and the three
    per-requirement indicators used to be Font Awesome `<i>` elements whose class

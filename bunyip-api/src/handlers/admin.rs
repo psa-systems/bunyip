@@ -25,8 +25,8 @@ use crate::models::{
 };
 use crate::repositories::{
     ApplicationGroupRepository, ApplicationRepository, AuditLogRepository, EmailConfigRepository,
-    InviteRepository, NotificationRepository, StripeConfigRepository, TierConfigRepository,
-    TokenRepository, TotpRepository, UserRepository,
+    InviteRepository, MirzamConfigRepository, MokoshConfigRepository, NotificationRepository,
+    StripeConfigRepository, TierConfigRepository, TokenRepository, TotpRepository, UserRepository,
 };
 use crate::responses::{created, get_request_id, paginated, success, success_no_data};
 use crate::services::{
@@ -34,6 +34,7 @@ use crate::services::{
     ReleaseCache, StripeService, TotpService, WebhookService,
 };
 use crate::validation;
+use bunyip_domain::services::mirzam_sync::{AccountChange, MirzamSync};
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
 
@@ -197,6 +198,7 @@ pub async fn update_user_status(
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
     bus: web::Data<Arc<EventBus>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserStatusRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -211,6 +213,13 @@ pub async fn update_user_status(
         if !restored {
             return Err(AppError::not_found("Deleted user"));
         }
+
+        // BUNYIP-998: deactivating removed the account from both Mirzam lists.
+        // A reactivated account with a verified address rejoins them as on
+        // verification: notices always (only bunyip ever removes anyone from
+        // it), product updates only if the person had not left it themselves.
+        // The sync reads the account and skips it when it is unverified.
+        crate::mirzam_sync::notify(&mirzam, AccountChange::Verified { user_id });
 
         // BUNYIP-144: revoke any lingering refresh-token families. A soft-
         // deleted user shouldn't have live tokens (auth middleware drops them
@@ -234,6 +243,18 @@ pub async fn update_user_status(
             .ok_or(AppError::not_found("User"))?;
 
         UserRepository::soft_delete(&pool, user_id).await?;
+
+        // BUNYIP-998: a deactivated account is a deleted one (the same soft
+        // delete), so it leaves both Mirzam lists. Reactivating rejoins them
+        // (see the branch above).
+        crate::mirzam_sync::notify(
+            &mirzam,
+            AccountChange::Deleted {
+                user_id,
+                email: target_user.email.clone(),
+                was_verified: target_user.email_verified,
+            },
+        );
 
         // BUNYIP-144: a deactivation must take effect immediately. Without
         // this, an already-signed-in user keeps an admin-claim access token
@@ -274,6 +295,7 @@ pub async fn delete_user(
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
     oidc_provider: web::Data<Option<Arc<bunyip_oidc::services::oidc_provider::OidcProvider>>>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -298,6 +320,16 @@ pub async fn delete_user(
     }
 
     UserRepository::soft_delete(&pool, user_id).await?;
+
+    // BUNYIP-998: leave Mirzam's two lists, with the address read above.
+    crate::mirzam_sync::notify(
+        &mirzam,
+        AccountChange::Deleted {
+            user_id,
+            email: target_user.email.clone(),
+            was_verified: target_user.email_verified,
+        },
+    );
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -423,6 +455,7 @@ pub async fn update_user_email(
     req: HttpRequest,
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
     body: web::Json<UpdateUserEmailRequest>,
 ) -> Result<HttpResponse, AppError> {
@@ -449,6 +482,19 @@ pub async fn update_user_email(
     }
 
     UserRepository::update_email(pool.get_ref(), user_id, &new_email, body.verified).await?;
+
+    // BUNYIP-998: move, add or remove the address on Mirzam's lists according
+    // to the verified state either side of the edit.
+    crate::mirzam_sync::notify(
+        &mirzam,
+        AccountChange::EmailChanged {
+            user_id,
+            old_email: old_email.clone(),
+            was_verified: target_user.email_verified,
+            new_email: new_email.clone(),
+            now_verified: body.verified,
+        },
+    );
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -480,6 +526,7 @@ pub async fn verify_user_email(
     req: HttpRequest,
     admin: VerifiedAdminUser,
     pool: web::Data<PgPool>,
+    mirzam: Option<web::Data<MirzamSync>>,
     path: web::Path<uuid::Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -489,7 +536,10 @@ pub async fn verify_user_email(
         .await?
         .ok_or(AppError::not_found("User"))?;
 
-    UserRepository::set_email_verified(&pool, user_id).await?;
+    if UserRepository::set_email_verified(&pool, user_id).await? {
+        // BUNYIP-998: newly verified, so the account joins Mirzam's lists.
+        crate::mirzam_sync::notify(&mirzam, AccountChange::Verified { user_id });
+    }
 
     tracing::info!(
         admin_id = %admin.0.sub,
@@ -727,7 +777,10 @@ pub async fn list_memberships(
 
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).min(100);
-    let offset = (page - 1) * per_page;
+    // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+    // BUNYIP-946 F14, so a page value large enough to overflow an i32
+    // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+    let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
     let (memberships, total) = if let Some(ref tier) = query.tier {
         // BUNYIP-291 AC4: members-by-tier view. All (non-deleted) holders of
@@ -2204,6 +2257,7 @@ pub async fn get_integration_status(
         .is_some_and(|app| app.webhook_url.is_some_and(|url| !url.trim().is_empty()));
     let mokosh_backup_url_set =
         std::env::var("MOKOSH_BACKUP_API_URL").is_ok_and(|v| !v.trim().is_empty());
+    let mirzam = MirzamConfigRepository::get(&pool).await?;
 
     let signals = IntegrationSignals {
         secrets_provider: config.secrets_provider,
@@ -2244,6 +2298,10 @@ pub async fn get_integration_status(
         update_check_failing: update_status.error.is_some(),
         mokosh_webhook_configured,
         mokosh_backup_url_set,
+        mirzam_enabled: mirzam.enabled,
+        mirzam_settings_complete: mirzam.settings_complete(),
+        mirzam_token_present: present(GovernedSecret::MirzamApiToken),
+        mirzam_last_error: mirzam.last_error.clone(),
     };
 
     let response = serde_json::json!({ "integrations": integration_statuses(&signals) });
@@ -4257,6 +4315,35 @@ async fn check_email_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthChe
     ]))
 }
 
+/// BUNYIP-997: the Mirzam API token's `database`-provider ciphertext.
+async fn check_mirzam_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+    let row = MirzamConfigRepository::get(pool).await?;
+    Ok(combine_key_health(vec![(
+        "api_token".to_string(),
+        evaluate_key_health(
+            keys,
+            row.api_token.as_deref(),
+            row.api_token_nonce.as_deref(),
+            Some(row.key_version),
+        ),
+    )]))
+}
+
+/// BUNYIP-983: the Mokosh Google client secret's `database`-provider
+/// ciphertext.
+async fn check_mokosh_key(pool: &PgPool, keys: &AppKeySet) -> Result<KeyHealthCheck, AppError> {
+    let row = MokoshConfigRepository::get(pool).await?;
+    Ok(combine_key_health(vec![(
+        "google_client_secret".to_string(),
+        evaluate_key_health(
+            keys,
+            row.google_client_secret.as_deref(),
+            row.google_client_secret_nonce.as_deref(),
+            Some(row.key_version),
+        ),
+    )]))
+}
+
 /// Dispatch a key health check by key_id. Every id now checks the SAME
 /// application key (BUNYIP-483); they differ in which stored secret they read.
 async fn run_key_check(
@@ -4268,12 +4355,14 @@ async fn run_key_check(
         "stripe" => check_stripe_key(pool, keys).await,
         "totp" => check_totp_key(pool, keys).await,
         "email" => check_email_key(pool, keys).await,
+        "mirzam" => check_mirzam_key(pool, keys).await,
+        "mokosh" => check_mokosh_key(pool, keys).await,
         _ => Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     }
 }
 
 /// All registered key IDs. Update this when a new store is encrypted at rest.
-const KEY_IDS: &[&str] = &["stripe", "totp", "email"];
+const KEY_IDS: &[&str] = &["stripe", "totp", "email", "mirzam", "mokosh"];
 
 /// GET /v1/admin/key-health
 /// Aggregated health check for all encryption keys.
@@ -4430,6 +4519,32 @@ pub async fn key_rotation_status(
                 request_id,
             ))
         }
+        "mirzam" => {
+            let row = MirzamConfigRepository::get(&pool).await?;
+            let (has_secrets, on_current) =
+                match (row.api_token.as_deref(), row.api_token_nonce.as_deref()) {
+                    (Some(ct), Some(n)) => (true, app_key_set.is_current(ct, n, row.key_version)),
+                    _ => (false, true),
+                };
+            Ok(success(
+                singleton_rotation_status("mirzam", current_version, has_secrets, on_current),
+                request_id,
+            ))
+        }
+        "mokosh" => {
+            let row = MokoshConfigRepository::get(&pool).await?;
+            let (has_secrets, on_current) = match (
+                row.google_client_secret.as_deref(),
+                row.google_client_secret_nonce.as_deref(),
+            ) {
+                (Some(ct), Some(n)) => (true, app_key_set.is_current(ct, n, row.key_version)),
+                _ => (false, true),
+            };
+            Ok(success(
+                singleton_rotation_status("mokosh", current_version, has_secrets, on_current),
+                request_id,
+            ))
+        }
         _ => Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     }
 }
@@ -4471,6 +4586,8 @@ pub async fn reencrypt_key(
         "totp" => crate::reencrypt::reencrypt_totp(&pool, &app_key_set).await?,
         "stripe" => crate::reencrypt::reencrypt_stripe(&pool, &app_key_set).await?,
         "email" => crate::reencrypt::reencrypt_email(&pool, &app_key_set).await?,
+        "mirzam" => crate::reencrypt::reencrypt_mirzam(&pool, &app_key_set).await?,
+        "mokosh" => crate::reencrypt::reencrypt_mokosh(&pool, &app_key_set).await?,
         _ => return Err(AppError::not_found(format!("Unknown key: {key_id}"))),
     };
 
@@ -5330,6 +5447,7 @@ mod key_health_tests {
         assert!(KEY_IDS.contains(&"stripe"));
         assert!(KEY_IDS.contains(&"totp"));
         assert!(KEY_IDS.contains(&"email"));
+        assert!(KEY_IDS.contains(&"mirzam"));
     }
 
     // ---- KeyHealthCheck serialization ----
