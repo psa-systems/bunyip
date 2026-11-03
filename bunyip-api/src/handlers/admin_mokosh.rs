@@ -28,7 +28,7 @@ use crate::models::{
 };
 use crate::repositories::{AuditLogRepository, MokoshConfigRepository};
 use crate::responses::{get_request_id, success};
-use crate::services::AppKeySet;
+use crate::services::EncryptionKeySet;
 
 /// What an admin is warned about before a changed client id is accepted. The
 /// text is the consequence, not the mechanism: the reader decides whether to
@@ -42,7 +42,7 @@ pub const CLIENT_ID_CHANGE_WARNING: &str =
 async fn stored_secret(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
 ) -> Result<Option<String>, AppError> {
     Ok(crate::secrets::read_secret(
         pool,
@@ -69,7 +69,7 @@ pub async fn get_mokosh_config(
     _admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let row = MokoshConfigRepository::get(&pool).await?;
@@ -91,7 +91,7 @@ pub async fn update_mokosh_config(
     admin: AdminUser,
     pool: web::Data<PgPool>,
     config: web::Data<Config>,
-    app_key_set: web::Data<AppKeySet>,
+    app_key_set: web::Data<EncryptionKeySet>,
     body: web::Json<UpdateMokoshConfigRequest>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);

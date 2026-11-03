@@ -16,7 +16,7 @@ use bunyip_domain::services::mirzam_backfill::{self, BackfillReport};
 use bunyip_domain::services::mirzam_sync::{
     active_lists, MirzamClient, MirzamSync, MirzamTokenSource,
 };
-use bunyip_domain::services::AppKeySet;
+use bunyip_domain::services::EncryptionKeySet;
 use sqlx::PgPool;
 
 /// `MIRZAM_API_TOKEN` from the ONE provider `SECRETS_STORAGE` declares, read
@@ -24,7 +24,7 @@ use sqlx::PgPool;
 struct GovernedMirzamToken {
     pool: PgPool,
     config: Config,
-    key_set: AppKeySet,
+    key_set: EncryptionKeySet,
 }
 
 #[async_trait]
@@ -42,7 +42,7 @@ impl MirzamTokenSource for GovernedMirzamToken {
 }
 
 /// The sync handle, reading its token through the governed-secret providers.
-pub fn mirzam_sync(pool: PgPool, config: Config, key_set: AppKeySet) -> MirzamSync {
+pub fn mirzam_sync(pool: PgPool, config: Config, key_set: EncryptionKeySet) -> MirzamSync {
     MirzamSync::new(
         pool.clone(),
         Arc::new(GovernedMirzamToken {
@@ -72,7 +72,7 @@ pub fn notify(
 pub async fn backfill(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     delays: &[std::time::Duration],
     pace: std::time::Duration,
 ) -> anyhow::Result<BackfillReport> {
