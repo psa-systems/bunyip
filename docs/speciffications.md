@@ -15,6 +15,7 @@ Bunyip is the PSA Systems SaaS platform. It provides:
 - an OpenID Connect / OAuth 2.1 provider for first-party products
 - an authenticated OCI registry front for application images
 - application downloads and a catalog of hosted applications
+- a mailer relay and a host-secret/host-config read API for registered machine clients
 
 Out of scope: the products that consume the OIDC provider, and the shared `dunite-*` crates (consumed as git
 dependencies and not described here beyond how Bunyip uses them).
@@ -278,6 +279,9 @@ and unban by an admin; create is super-admin), auto-ban config, rate-limit overv
 (config writes are super-admin), audit logs, mailer suppressions, support tickets, and account backup and restore
 (`/v1/account/backup`, `/restore`, 8 MiB limit, admin only).
 
+Mirzam newsletter integration: API-token settings page and connection check (see `docs/configuration.md`'s Mirzam
+section). Mokosh Google OAuth client: host-secret registration and rotation (see `docs/host-secrets.md`).
+
 ## 7. Billing
 
 ### 7.1 Model
@@ -449,7 +453,9 @@ A separate listener (enabled by `OCI_REGISTRY_ENABLED` plus a configured Forgejo
 
 Suppression: `mailer_suppressions(address PK, reason, detail, ...)`, with `reason` of `bounce` or `complaint`, fed by
 the signed provider webhook and checked on every send. A suppressed relay send returns status `suppressed` with no
-message id.
+message id. A reserved-domain recipient (BUNYIP-863) never reaches SMTP either, but the relay returns `status:
+"sent"` with a generated message id anyway, indistinguishable from a real send; see `docs/mailer-relay.md` for the
+trigger list.
 
 ## 12. Feedback
 
@@ -525,8 +531,8 @@ then build, clippy, fmt and the docker builder stage. Toolchain-less machines us
 ### 14.3 CI workflows (`.forgejo/workflows/`)
 
 `check` (push and PR), `audit` (weekly dependency audit), `build-api` and `build-web` (image builds),
-`create-release` (on merge of a release PR, via `pull_request_target`), `release-images` (dispatch the tagged image
-builds), `e2e` and `e2e-pr` (Playwright), `renovate` (scheduled). Every workflow job runs under Nushell.
+`create-release` (on merge of a release PR, via `pull_request_target`), `e2e` and `e2e-pr` (Playwright), `renovate`
+(scheduled). Every workflow job runs under Nushell.
 
 ### 14.4 Releases
 

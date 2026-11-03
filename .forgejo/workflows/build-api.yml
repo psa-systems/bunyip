@@ -19,15 +19,6 @@ on:
         description: "Version like v9.9.9 to exercise the release publish path; empty exercises latest"
         type: string
         default: ""
-      # Set by release-images.yml, which the create-release workflow
-      # dispatches (BUNYIP-994): a release made through the Forgejo API raises
-      # no tag-push event, so the release dispatches this build with the new
-      # tag instead. A dispatch with a `v*` ref is a real release build of that
-      # tag, never a dry-run.
-      ref:
-        description: "Release tag to build and publish (e.g. v0.1.0); set by release-images.yml"
-        type: string
-        default: ""
   push:
     branches:
       - "main"
@@ -80,8 +71,6 @@ jobs:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
         with:
-          # A release dispatch builds the tag it names, not main.
-          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
 
       - name: Take build parallelism from the runner
@@ -137,18 +126,9 @@ jobs:
           # same :latest tag (governance GOV-13).
           let event = "${{ github.event_name }}"
           let ref_type = "${{ github.ref_type }}"
-          let release_ref = "${{ inputs.ref }}"
+          let ref_name = "${{ github.ref_name }}"
           let simulate_tag = "${{ inputs.simulate_tag }}"
-          # A dispatch carrying a release tag (from release-images.yml,
-          # BUNYIP-994) publishes that version; any other manual run is a dry-run.
-          let release_dispatch = ($event == "workflow_dispatch" and ($release_ref | str starts-with "v"))
-          if $event == "workflow_dispatch" and ($release_ref | is-not-empty) and not $release_dispatch {
-            error make { msg: $"ref input must be a v* release tag, got ($release_ref)" }
-          }
-          let ref_name = if $release_dispatch { $release_ref } else { "${{ github.ref_name }}" }
-          let mode = if $release_dispatch {
-            "release"
-          } else if $event == "workflow_dispatch" {
+          let mode = if $event == "workflow_dispatch" {
             "dry-run"
           } else if $ref_type == "tag" {
             "release"
@@ -156,9 +136,8 @@ jobs:
             "latest"
           }
           # A manual run only mutates the registry if dry_run is explicitly false;
-          # the input defaults to true, and push events and release dispatches
-          # always publish for real.
-          let dry_run = ($event == "workflow_dispatch" and not $release_dispatch and "${{ inputs.dry_run }}" != "false")
+          # the input defaults to true, and push events always publish for real.
+          let dry_run = ($event == "workflow_dispatch" and "${{ inputs.dry_run }}" != "false")
           let r = (^nu oci-build/get-tags.nu --mode $mode --ref-name $ref_name --simulate-tag $simulate_tag --json | from json)
           $"mode=($r.mode)\n" | save --append $env.GITHUB_OUTPUT
           $"train=($r.train)\n" | save --append $env.GITHUB_OUTPUT
