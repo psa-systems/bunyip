@@ -46,7 +46,7 @@ impl MirzamConfigRow {
     /// `EmailConfig::db_imap_password`. A ciphertext no key decrypts is
     /// reported at `error` and treated as no token, so a stale row never blocks
     /// boot.
-    pub fn db_api_token(&self, key_set: &crate::services::AppKeySet) -> Option<String> {
+    pub fn db_api_token(&self, key_set: &crate::services::EncryptionKeySet) -> Option<String> {
         let (ciphertext, nonce) = match (&self.api_token, &self.api_token_nonce) {
             (Some(ct), Some(nonce)) => (ct, nonce),
             _ => return None,
