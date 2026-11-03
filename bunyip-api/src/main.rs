@@ -102,6 +102,8 @@ async fn main() -> anyhow::Result<()> {
     // Load configuration. A missing or malformed required variable is reported
     // as one error! line per variable (all of them, in this one run) and exits
     // non-zero: an operator message, not a panic and a backtrace (BUNYIP-537).
+    // SPEC-2.2.1: configuration loads before any listener binds or database
+    // connection opens.
     let mut config = match Config::from_env() {
         Ok(config) => config,
         Err(e) => {
@@ -156,6 +158,8 @@ async fn main() -> anyhow::Result<()> {
     // the `secrets-*` pre-flight family. Migrations stay owned by the server
     // path below, so a subcommand runs against the schema a running deployment
     // already has.
+    // SPEC-2.2.2: a first positional argument is dispatched as a maintenance
+    // subcommand and the process exits without binding either listener below.
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(subcommand) = args.first() {
         return run_subcommand(subcommand, &args[1..], &pool, &config).await;
@@ -195,6 +199,9 @@ async fn main() -> anyhow::Result<()> {
         })?;
 
     // Run database migrations
+    // SPEC-2.2.3: migrations run before the RLS role is fully provisioned and
+    // before either listener in SPEC-2.2.4 binds; a failure here aborts
+    // startup non-zero.
     info!("Running database migrations...");
     sqlx::migrate!("./migrations")
         .run(&pool)
@@ -326,6 +333,7 @@ async fn main() -> anyhow::Result<()> {
         "MOKOSH_APPS_REDIRECT_URIS",
         "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
         "MOKOSH_APPS_AUDIENCE",
+        "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
     upsert_spa_oidc_client(
@@ -335,6 +343,7 @@ async fn main() -> anyhow::Result<()> {
         "DRILLMARK_REDIRECT_URIS",
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "DRILLMARK_AUDIENCE",
+        "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
     )
     .await?;
 
@@ -1311,6 +1320,8 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("failed to build backchannel logout HTTP client: {e}"))?;
 
+    // SPEC-2.2.4 / SPEC-2.2.5: the primary server always starts; its
+    // middleware order below is the one SPEC-2.2.5 fixes.
     let primary = HttpServer::new(move || {
         // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
         // back with credentials; everything else gets no
@@ -1498,6 +1509,9 @@ async fn main() -> anyhow::Result<()> {
 
         info!(address = %oci_addr, "Starting OCI registry server");
 
+        // SPEC-2.2.4: the OCI server starts only when OCI is enabled and a
+        // Forgejo registry client is configured; it is awaited alongside the
+        // primary server below.
         let oci = HttpServer::new(move || {
             App::new()
                 // Same external-client-IP attribution in the root span as the
@@ -1834,6 +1848,8 @@ async fn run_reencrypt_subcommand(
             }
             Ok(())
         }
+        // SPEC-2.2.2: an unrecognized subcommand is an error naming every
+        // known one, not a silently-ignored argument or a server start.
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
@@ -1865,6 +1881,7 @@ async fn upsert_spa_oidc_client(
     redirect_uris_var: &str,
     post_logout_var: &str,
     audience_var: &str,
+    backchannel_logout_var: &str,
 ) -> anyhow::Result<()> {
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
@@ -1875,6 +1892,10 @@ async fn upsert_spa_oidc_client(
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
     let post_logout = secret_env(post_logout_var).unwrap_or_default();
+    // BUNYIP-858: an unset back-channel logout URI writes NULL so a wrongly
+    // configured environment sends nothing rather than inheriting whatever
+    // the migration seeded. The non-empty case is upserted as the string.
+    let backchannel_logout = secret_env(backchannel_logout_var).filter(|v| !v.is_empty());
 
     let split_csv = |s: &str| -> Vec<String> {
         s.split(',')
@@ -1893,19 +1914,22 @@ async fn upsert_spa_oidc_client(
             redirect_uris, post_logout_redirect_uris,
             allowed_scopes, allowed_grant_types,
             token_endpoint_auth_method, require_pkce,
-            audience, access_token_ttl_seconds
+            audience, access_token_ttl_seconds,
+            backchannel_logout_uri
         ) VALUES (
             $1::uuid, 'public', $2,
             $3, $4,
             ARRAY['openid', 'email', 'offline_access'],
             ARRAY['authorization_code', 'refresh_token'],
             'none', TRUE,
-            $5, 600
+            $5, 600,
+            $6
         )
         ON CONFLICT (client_id) DO UPDATE SET
             redirect_uris = EXCLUDED.redirect_uris,
             post_logout_redirect_uris = EXCLUDED.post_logout_redirect_uris,
-            audience = EXCLUDED.audience
+            audience = EXCLUDED.audience,
+            backchannel_logout_uri = EXCLUDED.backchannel_logout_uri
         "#,
     )
     .bind(client_id)
@@ -1913,6 +1937,7 @@ async fn upsert_spa_oidc_client(
     .bind(&redirect_list)
     .bind(&post_logout_list)
     .bind(&audience)
+    .bind(backchannel_logout.as_deref())
     .execute(pool)
     .await?;
 
@@ -1920,6 +1945,7 @@ async fn upsert_spa_oidc_client(
         client = name,
         redirect_uris = ?redirect_list,
         audience = %audience,
+        backchannel_logout_uri = ?backchannel_logout,
         "SPA OIDC client registered from environment"
     );
 

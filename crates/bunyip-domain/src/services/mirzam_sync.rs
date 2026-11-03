@@ -121,11 +121,6 @@ pub enum AddOutcome {
 /// left an unsubscribed address alone; "already on" keeps code `conflict`.
 const LEFT_ALONE_CODE: &str = "unsubscribed";
 
-/// The phrase that ends the "unsubscribed from that list" message: the only
-/// marker before Mirzam v0.38.0, where both `409`s carried code `conflict`.
-/// TODO(BUNYIP-1001): drop once production runs Mirzam v0.38.0 or later.
-const LEFT_ALONE_MARKER: &str = "left as it is";
-
 /// `PATCH /api/v1/subscribers/{old}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveOutcome {
@@ -271,10 +266,7 @@ impl MirzamClient {
             .json(&body);
         match self.send(request, &[email]).await? {
             (status, _) if (200..300).contains(&status) => Ok(AddOutcome::Added),
-            (409, body)
-                if error_code(&body).as_deref() == Some(LEFT_ALONE_CODE)
-                    || summarize_answer(&body).contains(LEFT_ALONE_MARKER) =>
-            {
+            (409, body) if error_code(&body).as_deref() == Some(LEFT_ALONE_CODE) => {
                 Ok(AddOutcome::LeftAlone)
             }
             (409, _) => Ok(AddOutcome::AlreadyOn),
@@ -926,8 +918,8 @@ mod tests {
         assert_eq!(lists_sent, ["\"product-updates\"", "\"notices\""]);
     }
 
-    /// Mirzam's two `409` answers to an add, told apart by the code, and by
-    /// the message from a Mirzam before v0.38.0 that has no separate code.
+    /// Mirzam's two `409` answers to an add, told apart by the code alone:
+    /// the message never decides.
     #[tokio::test]
     async fn an_add_tells_already_on_from_left_alone() {
         for (code, message, expected) in [
@@ -940,7 +932,7 @@ mod tests {
             (
                 "conflict",
                 "This address unsubscribed from that list (unsubscribed); left as it is.",
-                AddOutcome::LeftAlone,
+                AddOutcome::AlreadyOn,
             ),
         ] {
             let server = MockServer::start().await;

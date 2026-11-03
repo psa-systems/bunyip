@@ -34,6 +34,9 @@ use crate::web::{redirect_cookies, AppState};
 /// (BUNYIP-551).
 const PAGE: &str = "/admin/mokosh";
 const TITLE: &str = "Mokosh";
+/// Where a successful save lands: the page, with the confirmation toast the
+/// other admin pages show (BUNYIP-1014).
+pub(super) const SAVED: &str = "/admin/mokosh?toast_ok=Mokosh%20settings%20saved";
 
 /// Form values kept as typed, so a failed save echoes back what the admin
 /// entered rather than the stored record (BUNYIP-731). The secret is the
@@ -207,7 +210,7 @@ pub async fn mokosh_save(
     )
     .await
     {
-        Ok(()) => return redirect_cookies(PAGE, &c.set_cookies),
+        Ok(()) => return redirect_cookies(SAVED, &c.set_cookies),
         Err(e) if is_client_id_warning(&e) => (None, Some(warning_text(&e))),
         Err(e) => (Some(e.user_message()), None),
     };

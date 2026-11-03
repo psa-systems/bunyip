@@ -180,6 +180,8 @@ pub mod download;
 pub mod events;
 pub mod feedback;
 pub mod feedback_classifier;
+pub mod host_auth;
+pub mod host_config;
 pub mod host_secrets;
 pub mod mailer;
 pub mod membership;
