@@ -1038,7 +1038,10 @@ pub async fn user_revoke_lifetime(
     )
     .await
     {
-        Ok(_) => format!("/admin/users/{id}"),
+        Ok(_) => format!(
+            "/admin/users/{id}?toast_ok={}",
+            urlenc("Lifetime membership revoked")
+        ),
         Err(e) => {
             tracing::warn!(user_id = %id, error = ?e, "admin revoke lifetime membership failed");
             format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message()))
