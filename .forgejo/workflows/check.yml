@@ -6,9 +6,17 @@
 # resolves them against the committed .sqlx cache, so no database is needed. The
 # generic dunite-core kernel is an anonymously-readable Forgejo git dependency
 # (network only, no credentials).
-
-# Validate code on every push and pull request by running 'just check'
-# Mirrors the local `just check` + `just test` recipes (which use ./dev/cargo).
+#
+# Split into two parallel jobs. `cargo` on BASE_HEAVY (dev image, C toolchain)
+# runs fmt / clippy / check / unit / docker-builder / audit. `guards` on
+# BASE_MEDIUM runs every nu-script + justfile guard (migration, workflow,
+# source-literal, doc, tailwind, publish-trigger). `secrets` keeps its own
+# base-medium job unchanged.
+#
+# check-runner-labels.nu greps for the HEAVY label somewhere in this file
+# (the cargo job carries it) and for an annotation above every `runs-on:`
+# (both new jobs carry one).  check-workflow-shell.nu iterates every job
+# and requires `defaults.run.shell: nu {0}`; both new jobs declare it.
 name: Check
 
 on:
@@ -32,10 +40,34 @@ on:
   pull_request:
     branches:
       - main
+    # Mirror the push trigger's narrow-doc filter: a PR touching only
+    # these files cannot affect any guard, compile, or audit step. The
+    # push trigger above uses an INCLUDE-list (`paths:`), which already
+    # keeps doc-only pushes from firing on main; this mirrors the
+    # ignore side so a doc-only PR has the same cost as a doc-only
+    # push (zero). Pure-doc PRs that touch `docs/**` or `**.md`
+    # elsewhere STILL trigger, because the doc-link / doc-surface /
+    # CLAUDE.md guards run on them.
+    paths-ignore:
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+      - "renovate.json"
+      - "CHANGELOG.md"
+
+# Supersede obsolete runs. `github.ref` differs between the pull_request
+# ref (refs/pull/<N>/merge) and the main push (refs/heads/main), so PRs
+# never share a group with each other or with the main push that primes
+# the runner's local cargo cache for them. A back-to-back main push does
+# share the group, and that is the one case where cancel-in-progress
+# matters here: two concurrent main runs are a wasted compile.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
-    name: fmt + clippy + build + tests
+  cargo:
+    name: fmt + clippy + check + tests + docker + audit
     # HEAVY: native cargo build/test plus a docker build; the dev image carries the
     # C toolchain and OpenSSL headers crate build scripts need (BUNYIP-444, DEV-769).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
@@ -65,17 +97,197 @@ jobs:
       - name: Clone the repository
         uses: https://code.forgejo.org/actions/checkout@v5
         with:
-          # Full history so the migration-immutability gate can diff against the
-          # merge-base with origin/main (BUNYIP-293).
-          fetch-depth: 0
+          # Shallow is fine for cargo: no step here walks git log. The
+          # migration-immutability guard moved to the `guards` job below,
+          # which checks out deep on purpose.
           # The root justfile opens with `import 'common/common.just'`, so an
-          # absent submodule is a parse error and every `just` step below fails.
+          # absent submodule is a parse error and the `just check-tree-ownership`
+          # step at the end of this job would fail.
           submodules: true
 
       - name: Take build parallelism from the runner
         # Exports CARGO_BUILD_JOBS / NEXTEST_TEST_THREADS / CI_JOBS; warns and
         # falls back to a low CPU-derived value when the runner did not set them (DEV-769).
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/build-parallelism@main
+
+      - name: Start job metrics sampler
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
+
+      - name: Cache cargo-binstall binary
+        # Version-keyed cache of the installed binary. A hit restores
+        # ~/.cargo/bin/cargo-binstall, and the install step below sees
+        # `which cargo-binstall` return a path and no-ops. The runner's
+        # local persistent cache (header comment) keeps WARM runs fast
+        # on one runner; this one keeps COLD runs on a different runner
+        # fast too. Bump this key literal in step with the version
+        # literal in the next step.
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-binstall
+          key: cargo-binstall-1.14.3-linux-musl
+
+      - name: Ensure cargo-binstall is on PATH
+        # check-dependency-audit.nu's `ensure-audit` uses cargo-binstall when
+        # it is available and falls back to `cargo install --locked cargo-audit`
+        # when it is not. The CI runner image ships no binstall, so the
+        # fallback compiled cargo-audit from source: aws-lc-sys wrote ~2 GB
+        # of scratch into /tmp and the runner's /tmp ran out of space partway
+        # through, failing with `No space left on device`. Install the pinned
+        # cargo-binstall release tarball directly into $HOME/.cargo/bin so
+        # the audit step takes the binary-download path. On a warm runner
+        # (binary already present, including one restored from the
+        # actions/cache step above) this step skips the download.
+        #
+        # Detection by FILE EXISTENCE, not `which`: rust-builder-glibc
+        # puts CARGO_HOME=/usr/local/cargo on PATH, NOT $HOME/.cargo/bin,
+        # so an earlier cache-restored binary is invisible to `which` and
+        # the install step would re-download it. The GITHUB_PATH append
+        # below also runs in BOTH branches, because the current step's
+        # PATH is frozen at step start and the next step (`cargo binstall
+        # ...` via the audit step) only sees GITHUB_PATH additions from
+        # earlier steps.
+        run: |
+          let bin_dir = $"($env.HOME)/.cargo/bin"
+          let bin = $"($bin_dir)/cargo-binstall"
+          if ($bin | path exists) {
+              print "cargo-binstall already present; skipping download"
+          } else {
+              let ver = "1.14.3"
+              let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
+              let tmp = (mktemp --tmpdir --suffix .tgz)
+              http get $url | save --force $tmp
+              mkdir $bin_dir
+              ^tar -xzf $tmp -C $bin_dir cargo-binstall
+              ^chmod +x $bin
+              rm $tmp
+              # Prove the extracted binary works via direct invocation,
+              # so a silent fault (tar member mismatch, non-executable
+              # mode, mangled download) fails the step here instead of
+              # letting the next step compile cargo-audit from source
+              # and exhaust /tmp. Use `--help` rather than `--version`:
+              # cargo-binstall's `--version <VERSION>` is a flag that
+              # takes a target package version to install (not a
+              # print-version flag), so invoking it without a value is a
+              # clap parse error. `--help` is a plain clap default and
+              # exits 0 if the binary is callable.
+              ^$bin --help | ignore
+          }
+          # Always append bin_dir to GITHUB_PATH. The cargo-subcommand
+          # form `cargo binstall ...` depends on $HOME/.cargo/bin being
+          # on PATH, which this image does not guarantee for the runner
+          # user, and neither the download branch nor the cache-hit
+          # branch sees PATH mutations until the NEXT step. Keeping the
+          # append outside the if/else makes the step idempotent across
+          # cache-hit and cache-miss.
+          $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
+
+      - name: Dependency audit
+        # Cargo.lock against the RustSec advisory database: an uncovered
+        # vulnerability fails, a warning is reported only, and the one
+        # pre-populated EXCEPTIONS row (rsa via sqlx-mysql, never compiled in)
+        # suppresses that advisory until its dated review (BUNYIP-905). Runs on
+        # the runner host like the rest of this job, so the cargo-audit install
+        # is reused from the host's persisted cargo cache rather than paid for
+        # on every push. --self-test first, so a gate that stopped detecting
+        # anything fails the build instead of passing vacuously.
+        run: |
+          ./scripts/check-dependency-audit.nu --self-test
+          ./scripts/check-dependency-audit.nu
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Verify Cargo.lock is in sync
+        # --locked errors if the lockfile would need updating, catching a
+        # manifest bump (e.g. a release) that forgot to sync Cargo.lock
+        # (BUNYIP-59). `cargo check` walks the full resolution graph and
+        # fingerprints every workspace member the same way `cargo build`
+        # would; the preceding clippy step above already compiled every
+        # target (`cargo clippy --workspace --all-targets`) and `--locked`
+        # is the only thing THIS step proves, so swap `build` for the
+        # cheaper `check` and save the 30-90s cold-cache compile.
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Unit tests
+        # --all-targets (not --lib) so binary-crate tests run too: bunyip-web
+        # is a bin-only crate, and `--lib` silently skips its entire test suite
+        # (BUNYIP-271). The registration-form field-error guards live there.
+        run: cargo test --workspace --all-targets
+
+      - name: Docker builder stage
+        # Build the api image's builder stage only - catches Docker-build drift
+        # cheaply, mirroring `just check-docker`. The runner reuses its image
+        # store between jobs, and buildkit's exporter refuses to overwrite an
+        # existing tag ("image ... already exists", BUNYIP-231). Drop any
+        # builder image a prior run left behind so the rebuild can re-tag;
+        # piping through `complete` captures the exit code and stderr instead
+        # of raising, so the first run (tag absent) stays green, matching the
+        # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
+        #
+        # BUNYIP-241: buildkit's default-on provenance / SBOM attestation makes
+        # the exporter emit BOTH an image manifest AND an attestation manifest
+        # list and name both under the requested tag, which collides inside a
+        # single run ("image already exists" after `naming to ... done`). The
+        # check step does not consume the resulting image (it only validates
+        # that the build succeeds), so `--provenance=false` collapses the
+        # export to one manifest with no observable downside.
+        #
+        # Nushell has no backslash line continuation, so the build stays on one
+        # line.
+        run: |
+          ^docker image rm bunyip-api-builder:check | complete | ignore
+          ^docker build --provenance=false --build-arg $"CARGO_BUILD_JOBS=($env.CARGO_BUILD_JOBS)" --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
+
+      - name: Check the working tree is fully owned by the runner user
+        # Last, so it sees the tree every container above left behind: the
+        # api builder-stage build. A containerised step that runs as root leaves
+        # files only sudo can remove (DEV-371), and `just pre-commit` cannot
+        # be relied on to catch it because the compose dispatcher exits early
+        # when no Rust or Cargo path is staged - which is exactly the file
+        # set (justfile, compose.dev.yml, scripts/) that reintroduces one
+        # (BUNYIP-647).
+        run: just check-tree-ownership
+
+      - name: Report job metrics
+        # Last and always(), so a failing job still reports (composite actions have no post hook).
+        if: always()
+        uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-report@main
+
+  guards:
+    name: justfile + migration + workflow + source + doc + tailwind guards
+    # Base-medium label: every step is a nu-script grep, a `just` recipe,
+    # or a tailwind rebuild that falls through to the rust-builder-glibc
+    # docker image; no cargo native compile, no docker builder-stage
+    # build. check-runner-labels.nu greps check.yml for the HEAVY string
+    # (the cargo job above carries it) and audits the no-run-time-install
+    # rule, both of which this split preserves.
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+
+    # Every run: step in this repo executes under Nushell (BUNYIP-489).
+    # Declared once per job so a new step cannot silently inherit Bash;
+    # scripts/check-workflow-shell.nu gates it.
+    defaults:
+      run:
+        shell: nu {0}
+
+    # Backstop, not a target. The guard set is ~25 nu/just invocations
+    # that each take seconds; the full job runs in under a minute on a
+    # warm runner.
+    timeout-minutes: 15
+
+    steps:
+      - name: Clone the repository
+        uses: https://code.forgejo.org/actions/checkout@v5
+        with:
+          # Full history so the migration-immutability gate can diff against the
+          # merge-base with origin/main (BUNYIP-293).
+          fetch-depth: 0
+          # The root justfile opens with `import 'common/common.just'`, so an
+          # absent submodule is a parse error and every `just` step below fails.
+          submodules: true
 
       - name: Start job metrics sampler
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
@@ -325,114 +537,6 @@ jobs:
         run: |
           ./scripts/check-publish-triggers.nu --self-test
           ./scripts/check-publish-triggers.nu
-
-      - name: Ensure cargo-binstall is on PATH
-        # check-dependency-audit.nu's `ensure-audit` uses cargo-binstall when
-        # it is available and falls back to `cargo install --locked cargo-audit`
-        # when it is not. The CI runner image ships no binstall, so the
-        # fallback compiled cargo-audit from source: aws-lc-sys wrote ~2 GB
-        # of scratch into /tmp and the runner's /tmp ran out of space partway
-        # through, failing with `No space left on device`. Install the pinned
-        # cargo-binstall release tarball directly into CARGO_HOME so the audit
-        # step takes the binary-download path. On a warm runner (either
-        # binstall or cargo-audit already in CARGO_HOME) this step is a no-op.
-        run: |
-          if (which cargo-binstall | is-empty) {
-              let ver = "1.14.3"
-              let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
-              let tmp = (mktemp --tmpdir --suffix .tgz)
-              let bin_dir = $"($env.HOME)/.cargo/bin"
-              let bin = $"($bin_dir)/cargo-binstall"
-              http get $url | save --force $tmp
-              mkdir $bin_dir
-              ^tar -xzf $tmp -C $bin_dir cargo-binstall
-              ^chmod +x $bin
-              rm $tmp
-              # Prove the extracted binary works via direct invocation,
-              # so a silent fault (tar member mismatch, non-executable
-              # mode, mangled download) fails the step here instead of
-              # letting the next step compile cargo-audit from source
-              # and exhaust /tmp. Use `--help` rather than `--version`:
-              # cargo-binstall's `--version <VERSION>` is a flag that
-              # takes a target package version to install (not a
-              # print-version flag), so invoking it without a value is a
-              # clap parse error. `--help` is a plain clap default and
-              # exits 0 if the binary is callable.
-              ^$bin --help | ignore
-              # The cargo-subcommand form `cargo binstall ...` depends
-              # on $HOME/.cargo/bin being on PATH, which this image
-              # does not guarantee for the runner user, so append it to
-              # GITHUB_PATH too and let the cargo-subcommand lookup
-              # work in every subsequent step.
-              $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
-          } else {
-              print "cargo-binstall is already on PATH; skipping download"
-          }
-
-      - name: Dependency audit
-        # Cargo.lock against the RustSec advisory database: an uncovered
-        # vulnerability fails, a warning is reported only, and the one
-        # pre-populated EXCEPTIONS row (rsa via sqlx-mysql, never compiled in)
-        # suppresses that advisory until its dated review (BUNYIP-905). Runs on
-        # the runner host like the rest of this job, so the cargo-audit install
-        # is reused from the host's persisted cargo cache rather than paid for
-        # on every push. --self-test first, so a gate that stopped detecting
-        # anything fails the build instead of passing vacuously.
-        run: |
-          ./scripts/check-dependency-audit.nu --self-test
-          ./scripts/check-dependency-audit.nu
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Verify Cargo.lock is in sync
-        # --locked errors if the lockfile would need updating, catching a
-        # manifest bump (e.g. a release) that forgot to sync Cargo.lock
-        # (BUNYIP-59).
-        run: cargo build --workspace --all-targets --locked
-
-      - name: Unit tests
-        # --all-targets (not --lib) so binary-crate tests run too: bunyip-web
-        # is a bin-only crate, and `--lib` silently skips its entire test suite
-        # (BUNYIP-271). The registration-form field-error guards live there.
-        run: cargo test --workspace --all-targets
-
-      - name: Docker builder stage
-        # Build the api image's builder stage only - catches Docker-build drift
-        # cheaply, mirroring `just check-docker`. The runner reuses its image
-        # store between jobs, and buildkit's exporter refuses to overwrite an
-        # existing tag ("image ... already exists", BUNYIP-231). Drop any
-        # builder image a prior run left behind so the rebuild can re-tag;
-        # piping through `complete` captures the exit code and stderr instead
-        # of raising, so the first run (tag absent) stays green, matching the
-        # `docker image rm` cleanup in the justfile's `dev-clean-all` recipe.
-        #
-        # BUNYIP-241: buildkit's default-on provenance / SBOM attestation makes
-        # the exporter emit BOTH an image manifest AND an attestation manifest
-        # list and name both under the requested tag, which collides inside a
-        # single run ("image already exists" after `naming to ... done`). The
-        # check step does not consume the resulting image (it only validates
-        # that the build succeeds), so `--provenance=false` collapses the
-        # export to one manifest with no observable downside.
-        #
-        # Nushell has no backslash line continuation, so the build stays on one
-        # line.
-        run: |
-          ^docker image rm bunyip-api-builder:check | complete | ignore
-          ^docker build --provenance=false --build-arg $"CARGO_BUILD_JOBS=($env.CARGO_BUILD_JOBS)" --file bunyip-api/oci-build/Dockerfile --target builder --tag bunyip-api-builder:check .
-
-      - name: Check the working tree is fully owned by the runner user
-        # Last, so it sees the tree every container above left behind: the
-        # Tailwind guard's rust-builder-glibc run and the api builder-stage
-        # build. A containerised step that runs as root leaves files only sudo
-        # can remove (DEV-371), and `just pre-commit` cannot be relied on to
-        # catch it because the compose dispatcher exits early when no Rust or
-        # Cargo path is staged - which is exactly the file set (justfile,
-        # compose.dev.yml, scripts/) that reintroduces one (BUNYIP-647).
-        run: just check-tree-ownership
 
       - name: Report job metrics
         # Last and always(), so a failing job still reports (composite actions have no post hook).

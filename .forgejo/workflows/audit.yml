@@ -33,9 +33,17 @@ jobs:
 
       - name: Cache Rust build
         # For CARGO_HOME, so the cargo-audit install is paid for once rather than
-        # on every scheduled run.
+        # on every scheduled run. `shared-key: audit` names the cache so
+        # successive weekly runs restore each other's state instead of
+        # falling back to rust-cache's per-ref isolation (which on a
+        # schedule trigger with no ref, varies across runs). check.yml
+        # does not use rust-cache (its cargo job relies on the runner's
+        # local persistent cargo home per the header comment there), so
+        # there is nothing on main to share with; this key is scoped to
+        # this workflow's own history.
         uses: https://github.com/Swatinem/rust-cache@v2
         with:
+          shared-key: audit
           cache-on-failure: true
 
       - name: Dependency audit
