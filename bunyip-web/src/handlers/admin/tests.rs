@@ -3647,6 +3647,18 @@ mod mokosh_tests {
         );
     }
 
+    /// BUNYIP-1035: the lone settings block is not wrapped in
+    /// `admin_block_grid`'s two-column grid, so it spans full width at `lg:`
+    /// and above, matching `applications.rs`'s standalone-block pattern.
+    #[test]
+    fn the_settings_block_is_not_wrapped_in_the_two_column_grid() {
+        let html = render(&cfg(true, true), None);
+        assert!(
+            !html.contains("lg:grid-cols-2"),
+            "the lone block must not sit in the two-column grid: {html}"
+        );
+    }
+
     /// BUNYIP-855 D10: the first save of a changed id comes back as a warning,
     /// and the page then offers the same change with the confirmation set. The
     /// hidden field appears only on that second pass, so an admin cannot
