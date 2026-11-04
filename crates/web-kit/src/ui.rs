@@ -147,6 +147,10 @@ fn inner(name: &str) -> &'static str {
         "globe" => {
             r#"<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>"#
         }
+        // BUNYIP-1014: the admin sidebar's Mokosh entry (the PSA/MSP app).
+        "briefcase" => {
+            r#"<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><rect width="20" height="14" x="2" y="6" rx="2"/>"#
+        }
         "help-circle" => {
             r#"<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>"#
         }
@@ -402,6 +406,25 @@ pub fn success_box(msg: &str) -> Markup {
     html! {
         div class="rounded-lg border p-3 text-sm flex items-center gap-2" {
             (icon("check", "h-4 w-4 text-teal-600 dark:text-teal-400"))
+            (clamp_msg(msg))
+        }
+    }
+}
+
+/// Warning banner: something will happen that the reader may not want, and
+/// they are about to decide. The amber counterpart to [`error_box`], which says
+/// something already went wrong.
+///
+/// The amber pair is the one BUNYIP-548 measured for the `warning` badge: step
+/// 800 on light, 300 on dark, over the same 15 percent amber-500 wash. So this
+/// adds a surface rather than a colour, and the steps are named here without
+/// their utility spelling, because the contrast scan reads one source line as
+/// one element and a comment naming both steps with no wash on the line is an
+/// amber use it cannot clear.
+pub fn warning_box(msg: &str) -> Markup {
+    html! {
+        div class="rounded-lg border border-transparent bg-amber-500/15 p-3 text-sm text-amber-800 dark:text-amber-300 flex items-center gap-2" {
+            (icon("alert-triangle", "h-4 w-4"))
             (clamp_msg(msg))
         }
     }

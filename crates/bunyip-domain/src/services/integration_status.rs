@@ -50,7 +50,7 @@ pub struct IntegrationStatus {
 /// The runtime facts the classifier needs, gathered by the caller from `Config`
 /// and the governed-secrets survey. Plain data so the rules below are unit-tested
 /// without a database or an environment.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct IntegrationSignals {
     /// The declared governed-secret provider, named in the SMTP / IMAP failure
     /// text.
@@ -100,6 +100,15 @@ pub struct IntegrationSignals {
     /// `MOKOSH_BACKUP_API_URL` is set, so account backup/restore uses the
     /// real Mokosh adapter instead of the pending stub (BUNYIP-356).
     pub mokosh_backup_url_set: bool,
+    /// The Mirzam integration's on/off switch is on (BUNYIP-997).
+    pub mirzam_enabled: bool,
+    /// The Mirzam address and both list slugs are set.
+    pub mirzam_settings_complete: bool,
+    /// The Mirzam API token is present and non-empty in the declared provider.
+    pub mirzam_token_present: bool,
+    /// The last sync call to Mirzam that ran out of attempts, if no later call
+    /// has succeeded (BUNYIP-998).
+    pub mirzam_last_error: Option<String>,
 }
 
 /// The `feature` text an inventory variable carries: what stops working when it
@@ -429,6 +438,62 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         "MOKOSH_BACKUP_API_URL",
     ));
 
+    // Mirzam newsletter lists (BUNYIP-997): an admin-page switch plus the
+    // governed MIRZAM_API_TOKEN. Switched on with a setting or the token
+    // missing is the broken half-configured state.
+    out.push(if !sig.mirzam_enabled {
+        status(
+            "mirzam",
+            "Mirzam newsletter lists",
+            IntegrationState::Unconfigured,
+            "The Mirzam integration is off: account holders are not kept on the product-updates \
+             and notices lists."
+                .to_string(),
+            "Set the Mirzam address, both list slugs and the API token on the admin Mirzam page, \
+             then switch it on."
+                .to_string(),
+        )
+    } else if !sig.mirzam_settings_complete {
+        status(
+            "mirzam",
+            "Mirzam newsletter lists",
+            IntegrationState::Failing,
+            "The Mirzam integration is on, but its address or a list slug is missing.".to_string(),
+            "Set the Mirzam address and both list slugs on the admin Mirzam page.".to_string(),
+        )
+    } else if !sig.mirzam_token_present {
+        status(
+            "mirzam",
+            "Mirzam newsletter lists",
+            IntegrationState::Failing,
+            format!(
+                "MIRZAM_API_TOKEN is unset in the {provider} provider: {}.",
+                GovernedSecret::MirzamApiToken.feature()
+            ),
+            format!("Set the Mirzam API token in the {provider} provider (admin Mirzam page)."),
+        )
+    } else if let Some(error) = &sig.mirzam_last_error {
+        // BUNYIP-998: configured, but the last call to Mirzam failed. The next
+        // call that succeeds clears it.
+        status(
+            "mirzam",
+            "Mirzam newsletter lists",
+            IntegrationState::Failing,
+            format!("The last call to Mirzam failed: {error}"),
+            "Check the connection on the admin Mirzam page. The next call that succeeds clears \
+             this."
+                .to_string(),
+        )
+    } else {
+        status(
+            "mirzam",
+            "Mirzam newsletter lists",
+            IntegrationState::Configured,
+            "The Mirzam address, both list slugs and the API token are configured.".to_string(),
+            String::new(),
+        )
+    });
+
     out
 }
 
@@ -490,6 +555,10 @@ mod tests {
             update_check_failing: false,
             mokosh_webhook_configured: false,
             mokosh_backup_url_set: false,
+            mirzam_enabled: false,
+            mirzam_settings_complete: false,
+            mirzam_token_present: false,
+            mirzam_last_error: None,
         }
     }
 
@@ -499,12 +568,12 @@ mod tests {
             .unwrap_or_else(|| panic!("no integration keyed {key}"))
     }
 
-    /// The Status page lists all 12 gated third-party capabilities, not just
-    /// the original 8 (BUNYIP-763).
+    /// The Status page lists all 13 gated third-party capabilities, not just
+    /// the original 8 (BUNYIP-763), Mirzam included (BUNYIP-997).
     #[test]
-    fn lists_all_twelve_gated_capabilities() {
+    fn lists_all_thirteen_gated_capabilities() {
         let list = integration_statuses(&nothing_configured());
-        assert_eq!(list.len(), 12, "{list:#?}");
+        assert_eq!(list.len(), 13, "{list:#?}");
         for key in [
             "email",
             "stripe",
@@ -518,6 +587,7 @@ mod tests {
             "update_checker",
             "mokosh_webhook",
             "mokosh_backup",
+            "mirzam",
         ] {
             find(&list, key);
         }
@@ -613,6 +683,49 @@ mod tests {
         assert_eq!(
             find(&integration_statuses(&sig), "infisical").state,
             IntegrationState::Configured
+        );
+    }
+
+    /// Mirzam: off is Unconfigured, on with a gap is Failing and names the
+    /// gap, on and complete is Configured.
+    #[test]
+    fn mirzam_reflects_the_switch_the_settings_and_the_token() {
+        let mut sig = nothing_configured();
+        assert_eq!(
+            find(&integration_statuses(&sig), "mirzam").state,
+            IntegrationState::Unconfigured
+        );
+
+        sig.mirzam_enabled = true;
+        assert_eq!(
+            find(&integration_statuses(&sig), "mirzam").state,
+            IntegrationState::Failing
+        );
+
+        sig.mirzam_settings_complete = true;
+        let mirzam = find(&integration_statuses(&sig), "mirzam").clone();
+        assert_eq!(mirzam.state, IntegrationState::Failing);
+        assert!(
+            mirzam.detail.contains("MIRZAM_API_TOKEN"),
+            "{}",
+            mirzam.detail
+        );
+
+        sig.mirzam_token_present = true;
+        let mirzam = find(&integration_statuses(&sig), "mirzam").clone();
+        assert_eq!(mirzam.state, IntegrationState::Configured);
+        assert!(mirzam.remedy.is_empty());
+
+        // BUNYIP-998: a recorded sync failure turns a complete integration
+        // Failing and names the failure.
+        sig.mirzam_last_error =
+            Some("Adding user 1 to list notices failed: Mirzam answered 500.".to_string());
+        let mirzam = find(&integration_statuses(&sig), "mirzam").clone();
+        assert_eq!(mirzam.state, IntegrationState::Failing);
+        assert!(
+            mirzam.detail.contains("Mirzam answered 500"),
+            "{}",
+            mirzam.detail
         );
     }
 

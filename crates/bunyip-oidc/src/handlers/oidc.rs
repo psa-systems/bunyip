@@ -1462,21 +1462,32 @@ pub async fn logout(
                     for (client_id, uri, sid) in targets {
                         match provider_arc.mint_logout_token(user_id, &sid, client_id) {
                             Ok(token) => {
-                                if let Err(e) = http
+                                match http
                                     .post(&uri)
                                     .form(&[("logout_token", &token)])
                                     .send()
                                     .await
                                 {
-                                    tracing::warn!(
-                                        %uri, %client_id, error = %e,
-                                        "Backchannel logout delivery failed"
-                                    );
-                                } else {
-                                    tracing::info!(
-                                        %uri, %client_id,
-                                        "Backchannel logout delivered"
-                                    );
+                                    Ok(resp) => {
+                                        let status = resp.status();
+                                        if status.is_success() {
+                                            tracing::info!(
+                                                %uri, %client_id, %status,
+                                                "Backchannel logout delivered"
+                                            );
+                                        } else {
+                                            tracing::warn!(
+                                                %uri, %client_id, %status,
+                                                "Backchannel logout refused by RP"
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            %uri, %client_id, error = %e,
+                                            "Backchannel logout delivery failed"
+                                        );
+                                    }
                                 }
                             }
                             Err(e) => {

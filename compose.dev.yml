@@ -201,7 +201,10 @@ volumes:
   postgres-data:
     name: dev-bunyip-postgres-${USER}
   cargo-target:
-    name: dev-bunyip-cargo-target-${USER}
+    # BUNYIP-856: WORKTREE_SUFFIX is empty on the main checkout and "-<hash>"
+    # on a linked worktree, so two worktrees building at once do not share
+    # one `/app/target` and corrupt each other's incremental state.
+    name: dev-bunyip-cargo-target-${USER}${WORKTREE_SUFFIX:-}
   web-node-modules:
     name: dev-bunyip-web-node-modules-${USER}
   download-cache:

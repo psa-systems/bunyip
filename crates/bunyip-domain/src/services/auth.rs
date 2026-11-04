@@ -22,6 +22,7 @@ use crate::repositories::{
     AuditLogRepository, InviteRepository, TokenRepository, TotpRepository, TrustedDeviceRepository,
     UserRepository,
 };
+use crate::services::mirzam_sync::{AccountChange, MirzamSync};
 use crate::services::{argon2_offload, EmailService, GeoIpService, JwtService, PasswordService};
 use dunite_geoip::{is_non_public_ip, login_location_decision, LoginLocationDecision};
 use dunite_oidc_op::check_op_session_alive;
@@ -268,6 +269,9 @@ pub struct AuthService {
     /// refused before any credential work. Empty lists disable the gate.
     country_allow: Vec<String>,
     country_deny: Vec<String>,
+    /// BUNYIP-998: keeps account holders on Mirzam's lists. `None` (the
+    /// default) sends nothing; bunyip-api sets it with `with_mirzam_sync`.
+    mirzam: Option<MirzamSync>,
 }
 
 /// BUNYIP-581: whether a resolved country is refused sign-in. A country in
@@ -358,6 +362,21 @@ impl AuthService {
             login_approval_enabled,
             country_allow,
             country_deny,
+            mirzam: None,
+        }
+    }
+
+    /// BUNYIP-998: mirror verifications and email changes onto Mirzam.
+    pub fn with_mirzam_sync(mut self, mirzam: MirzamSync) -> Self {
+        self.mirzam = Some(mirzam);
+        self
+    }
+
+    /// Hand an account change to the Mirzam sync, which runs it off the
+    /// request path. A no-op without one.
+    fn notify_mirzam(&self, change: AccountChange) {
+        if let Some(mirzam) = &self.mirzam {
+            mirzam.notify(change);
         }
     }
 
@@ -1423,7 +1442,9 @@ impl AuthService {
             match UserRepository::find_by_email(&self.pool, &magic_token.email).await? {
                 Some(user) => {
                     // Set email as verified
-                    UserRepository::set_email_verified(&self.pool, user.id).await?;
+                    if UserRepository::set_email_verified(&self.pool, user.id).await? {
+                        self.notify_mirzam(AccountChange::Verified { user_id: user.id });
+                    }
                     let user = UserRepository::find_by_id(&self.pool, user.id)
                         .await?
                         .ok_or(AppError::not_found("User"))?;
@@ -1450,7 +1471,9 @@ impl AuthService {
                     )
                     .await?;
                     // Set email as verified since they proved ownership via magic link
-                    UserRepository::set_email_verified(&self.pool, user.id).await?;
+                    if UserRepository::set_email_verified(&self.pool, user.id).await? {
+                        self.notify_mirzam(AccountChange::Verified { user_id: user.id });
+                    }
                     let user = UserRepository::find_by_id(&self.pool, user.id)
                         .await?
                         .ok_or(AppError::not_found("User"))?;
@@ -2050,6 +2073,15 @@ impl AuthService {
 
         tx.commit().await?;
 
+        // BUNYIP-998: the new address is verified by this confirmation.
+        self.notify_mirzam(AccountChange::EmailChanged {
+            user_id: user.id,
+            old_email: old_email.clone(),
+            was_verified: user.email_verified,
+            new_email: new_email.clone(),
+            now_verified: true,
+        });
+
         // Audit log (outside transaction, non-critical)
         AuditLogRepository::create(
             &self.pool,
@@ -2184,12 +2216,13 @@ impl AuthService {
             return Err(AppError::InvalidCredentials);
         }
 
-        sqlx::query("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = $1")
-            .bind(user.id)
-            .execute(&mut *tx)
-            .await?;
+        let newly_verified = UserRepository::set_email_verified_in(&mut *tx, user.id).await?;
 
         tx.commit().await?;
+
+        if newly_verified {
+            self.notify_mirzam(AccountChange::Verified { user_id: user.id });
+        }
 
         // Audit the verify itself. Tier metadata (when applicable) is logged
         // separately by `maybe_grant_initial_tier` via `InitialTierGranted` so
@@ -2418,7 +2451,9 @@ impl AuthService {
                 InviteRepository::mark_accepted(&self.pool, invite.id).await?;
                 let updated_user =
                     UserRepository::update_role(&self.pool, user.id, "admin").await?;
-                UserRepository::set_email_verified(&self.pool, user.id).await?;
+                if UserRepository::set_email_verified(&self.pool, user.id).await? {
+                    self.notify_mirzam(AccountChange::Verified { user_id: user.id });
+                }
 
                 // Create auth tokens
                 let tokens = self
@@ -2498,7 +2533,9 @@ impl AuthService {
                     },
                 )
                 .await?;
-                UserRepository::set_email_verified(&self.pool, user.id).await?;
+                if UserRepository::set_email_verified(&self.pool, user.id).await? {
+                    self.notify_mirzam(AccountChange::Verified { user_id: user.id });
+                }
 
                 // Mark invite accepted
                 InviteRepository::mark_accepted(&self.pool, invite.id).await?;

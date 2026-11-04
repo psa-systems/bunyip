@@ -319,6 +319,50 @@ impl RateLimitConfig {
         key_kind: KeyKind::Ip,
     };
 
+    /// BUNYIP-983: the host-secrets route, ALL requests, 30 per minute per
+    /// CALLING APP. A reader fetches at boot and on a token refresh, so this
+    /// is generous for the real pattern and still bounds a loop; per app for
+    /// [`Self::MAILER_SEND`]'s reason, that the suite's apps share egress.
+    pub const HOST_SECRET_READ: Self = Self {
+        action: "host_secret_read",
+        max_requests: 30,
+        window_seconds: 60,
+        key_kind: KeyKind::ClientId,
+    };
+
+    /// BUNYIP-983: host-secrets route, FAILED client authentications per
+    /// source IP, 10 per minute. Same shape and same reason as
+    /// [`Self::MAILER_AUTH_FAILURES`]: an Argon2 verification runs before the
+    /// endpoint knows which app is calling, so an unauthenticated flood cannot
+    /// be charged to a per-app cap, and counting only failures leaves a working
+    /// app untouched by it.
+    pub const HOST_SECRET_AUTH_FAILURES: Self = Self {
+        action: "host_secret_auth_failures",
+        max_requests: 10,
+        window_seconds: 60,
+        key_kind: KeyKind::Ip,
+    };
+
+    /// BUNYIP-1011: the host-config route, ALL requests, 30 per minute per
+    /// CALLING APP. Its own budget rather than the secrets route's, so one
+    /// product's configuration reads cannot throttle another's secret read.
+    pub const HOST_CONFIG_READ: Self = Self {
+        action: "host_config_read",
+        max_requests: 30,
+        window_seconds: 60,
+        key_kind: KeyKind::ClientId,
+    };
+
+    /// BUNYIP-1011: host-config route, FAILED client authentications per
+    /// source IP, 10 per minute. Same shape and reason as
+    /// [`Self::HOST_SECRET_AUTH_FAILURES`].
+    pub const HOST_CONFIG_AUTH_FAILURES: Self = Self {
+        action: "host_config_auth_failures",
+        max_requests: 10,
+        window_seconds: 60,
+        key_kind: KeyKind::Ip,
+    };
+
     /// Admin diagnostics (the past-throttles history and traffic-rollup
     /// read endpoints): 60 per minute per admin user. The generic
     /// authenticated floor (`API_AUTH`, 100/min) already covers these
@@ -355,6 +399,10 @@ impl RateLimitConfig {
         Self::SMTP_TEST,
         Self::MAILER_SEND,
         Self::MAILER_AUTH_FAILURES,
+        Self::HOST_SECRET_READ,
+        Self::HOST_SECRET_AUTH_FAILURES,
+        Self::HOST_CONFIG_READ,
+        Self::HOST_CONFIG_AUTH_FAILURES,
         Self::ADMIN_DIAGNOSTICS,
     ];
 

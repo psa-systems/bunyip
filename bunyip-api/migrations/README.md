@@ -24,7 +24,7 @@ trailing index is left as-is; renumbering already-applied files would diverge
 rewriting history.
 
 When adding a migration, use a fresh `YYYYMMDDHHMMSS` stamp greater than every
-existing one. Run `just check-migrations` (or the script directly) to verify.
+existing one. Run `just check-migration-versions` to verify.
 
 ## Known sequence gap: position 8
 

@@ -45,6 +45,12 @@ A 200 with `"status": "suppressed"` means the message was deliberately NOT deliv
 suppression list (see below). Branch on `status`, not on the HTTP code alone, so a caller can mark that contact
 undeliverable in its own data instead of retrying.
 
+A recipient on a reserved domain (RFC 2606/6761: `.test`, `.invalid`, `.example`, `.localhost`,
+`example.com`/`.net`/`.org`) never reaches SMTP (BUNYIP-863). The relay returns `200 {"status": "sent", "message_id":
+"<generated>"}` as if delivery succeeded, so an E2E suite or integration test can safely target these domains without a
+real mailbox or a bounce. This is indistinguishable from a real send at the API level: there is no third `status`
+value and no other signal in the response that marks the skip.
+
 ## Suppression list and the feedback webhook (BUNYIP-603)
 
 Because every app in the suite relays through one shared sending domain, a single misbehaving recipient (a dead address

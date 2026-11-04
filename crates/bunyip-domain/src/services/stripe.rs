@@ -21,7 +21,7 @@ use dunite_stripe::{SECRET_KEY_PLACEHOLDER, WEBHOOK_SECRET_PLACEHOLDER};
 
 use crate::errors::AppError;
 use crate::models::stripe::decrypt_secret;
-use crate::services::AppKeySet;
+use crate::services::EncryptionKeySet;
 
 /// BUNYIP-516: a Stripe restricted-key permission, spelled the way Stripe's own
 /// key editor spells it. The variants are the complete set bunyip's Stripe calls
@@ -315,14 +315,14 @@ pub fn stripe_settings_from_db_model(db: &crate::models::stripe::StripeConfig) -
 /// Build a runtime [`StripeConfig`] from the DB model, decrypting secrets and
 /// falling back to the derived defaults for any field that is NULL (was
 /// `StripeConfig::from_db_model`). Bunyip-side because it decrypts with bunyip's
-/// [`AppKeySet`].
+/// [`EncryptionKeySet`].
 ///
 /// This is the `SECRETS_STORAGE=database` form of the secret resolution; the
 /// other two modes overlay their own values onto
 /// [`stripe_settings_from_db_model`].
 pub fn stripe_config_from_db_model(
     db: &crate::models::stripe::StripeConfig,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
 ) -> Result<StripeConfig, AppError> {
     let defaults = unconfigured_stripe_config();
 
@@ -392,8 +392,8 @@ mod tests {
         }
     }
 
-    fn test_key_set() -> AppKeySet {
-        AppKeySet {
+    fn test_key_set() -> EncryptionKeySet {
+        EncryptionKeySet {
             current: [0u8; 32],
             current_version: 1,
             previous: Vec::new(),
