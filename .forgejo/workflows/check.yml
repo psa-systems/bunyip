@@ -133,17 +133,28 @@ jobs:
         # fallback compiled cargo-audit from source: aws-lc-sys wrote ~2 GB
         # of scratch into /tmp and the runner's /tmp ran out of space partway
         # through, failing with `No space left on device`. Install the pinned
-        # cargo-binstall release tarball directly into CARGO_HOME so the audit
-        # step takes the binary-download path. On a warm runner (either
-        # binstall or cargo-audit already in CARGO_HOME, including one
-        # restored from the actions/cache step above) this step is a no-op.
+        # cargo-binstall release tarball directly into $HOME/.cargo/bin so
+        # the audit step takes the binary-download path. On a warm runner
+        # (binary already present, including one restored from the
+        # actions/cache step above) this step skips the download.
+        #
+        # Detection by FILE EXISTENCE, not `which`: rust-builder-glibc
+        # puts CARGO_HOME=/usr/local/cargo on PATH, NOT $HOME/.cargo/bin,
+        # so an earlier cache-restored binary is invisible to `which` and
+        # the install step would re-download it. The GITHUB_PATH append
+        # below also runs in BOTH branches, because the current step's
+        # PATH is frozen at step start and the next step (`cargo binstall
+        # ...` via the audit step) only sees GITHUB_PATH additions from
+        # earlier steps.
         run: |
-          if (which cargo-binstall | is-empty) {
+          let bin_dir = $"($env.HOME)/.cargo/bin"
+          let bin = $"($bin_dir)/cargo-binstall"
+          if ($bin | path exists) {
+              print "cargo-binstall already present; skipping download"
+          } else {
               let ver = "1.14.3"
               let url = $"https://github.com/cargo-bins/cargo-binstall/releases/download/v($ver)/cargo-binstall-x86_64-unknown-linux-musl.tgz"
               let tmp = (mktemp --tmpdir --suffix .tgz)
-              let bin_dir = $"($env.HOME)/.cargo/bin"
-              let bin = $"($bin_dir)/cargo-binstall"
               http get $url | save --force $tmp
               mkdir $bin_dir
               ^tar -xzf $tmp -C $bin_dir cargo-binstall
@@ -160,15 +171,15 @@ jobs:
               # clap parse error. `--help` is a plain clap default and
               # exits 0 if the binary is callable.
               ^$bin --help | ignore
-              # The cargo-subcommand form `cargo binstall ...` depends
-              # on $HOME/.cargo/bin being on PATH, which this image
-              # does not guarantee for the runner user, so append it to
-              # GITHUB_PATH too and let the cargo-subcommand lookup
-              # work in every subsequent step.
-              $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
-          } else {
-              print "cargo-binstall is already on PATH; skipping download"
           }
+          # Always append bin_dir to GITHUB_PATH. The cargo-subcommand
+          # form `cargo binstall ...` depends on $HOME/.cargo/bin being
+          # on PATH, which this image does not guarantee for the runner
+          # user, and neither the download branch nor the cache-hit
+          # branch sees PATH mutations until the NEXT step. Keeping the
+          # append outside the if/else makes the step idempotent across
+          # cache-hit and cache-miss.
+          $"($bin_dir)\n" | save --append --raw $env.GITHUB_PATH
 
       - name: Dependency audit
         # Cargo.lock against the RustSec advisory database: an uncovered
