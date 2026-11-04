@@ -40,6 +40,20 @@ on:
   pull_request:
     branches:
       - main
+    # Mirror the push trigger's narrow-doc filter: a PR touching only
+    # these files cannot affect any guard, compile, or audit step. The
+    # push trigger above uses an INCLUDE-list (`paths:`), which already
+    # keeps doc-only pushes from firing on main; this mirrors the
+    # ignore side so a doc-only PR has the same cost as a doc-only
+    # push (zero). Pure-doc PRs that touch `docs/**` or `**.md`
+    # elsewhere STILL trigger, because the doc-link / doc-surface /
+    # CLAUDE.md guards run on them.
+    paths-ignore:
+      - "LICENSE"
+      - ".gitignore"
+      - ".editorconfig"
+      - "renovate.json"
+      - "CHANGELOG.md"
 
 # Supersede obsolete runs. `github.ref` differs between the pull_request
 # ref (refs/pull/<N>/merge) and the main push (refs/heads/main), so PRs
@@ -99,6 +113,19 @@ jobs:
       - name: Start job metrics sampler
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/job-metrics-start@main
 
+      - name: Cache cargo-binstall binary
+        # Version-keyed cache of the installed binary. A hit restores
+        # ~/.cargo/bin/cargo-binstall, and the install step below sees
+        # `which cargo-binstall` return a path and no-ops. The runner's
+        # local persistent cache (header comment) keeps WARM runs fast
+        # on one runner; this one keeps COLD runs on a different runner
+        # fast too. Bump this key literal in step with the version
+        # literal in the next step.
+        uses: https://github.com/actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-binstall
+          key: cargo-binstall-1.14.3-linux-musl
+
       - name: Ensure cargo-binstall is on PATH
         # check-dependency-audit.nu's `ensure-audit` uses cargo-binstall when
         # it is available and falls back to `cargo install --locked cargo-audit`
@@ -108,7 +135,8 @@ jobs:
         # through, failing with `No space left on device`. Install the pinned
         # cargo-binstall release tarball directly into CARGO_HOME so the audit
         # step takes the binary-download path. On a warm runner (either
-        # binstall or cargo-audit already in CARGO_HOME) this step is a no-op.
+        # binstall or cargo-audit already in CARGO_HOME, including one
+        # restored from the actions/cache step above) this step is a no-op.
         run: |
           if (which cargo-binstall | is-empty) {
               let ver = "1.14.3"
