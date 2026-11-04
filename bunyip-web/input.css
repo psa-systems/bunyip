@@ -383,6 +383,17 @@
 
   html {
     scroll-behavior: smooth;
+    /* BUNYIP-867: the scrollbar track is intentionally transparent, so without a
+       background on <html> the track reveals the browser canvas as a pale strip
+       next to the themed body. Paint <html> from the same token the body uses so
+       the strip disappears in every theme, light and dark. `color-scheme` also
+       asks the UA to pick scrollbar form controls that match. */
+    background-color: hsl(var(--background));
+    color-scheme: light;
+  }
+
+  .dark {
+    color-scheme: dark;
   }
 
   *:focus-visible {
