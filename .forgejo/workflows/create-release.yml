@@ -6,20 +6,20 @@
 # Everything the release does - deriving the version from the merged
 # `release/v*` branch, building the changelog, and posting to the releases API -
 # lives in psa-systems/common/.forgejo/workflows/create-release.yml. The caller
-# keeps only what Forgejo cannot read from the called workflow: the trigger, the
-# merged/`release/v` gate, `runs-on`, `secrets: inherit` and which workflow to
-# dispatch once the release exists.
+# keeps only what Forgejo cannot read from the called workflow: the trigger,
+# the merged/`release/v` gate, `runs-on` and `secrets: inherit`.
 #
 # Paired with `just create-release <major|minor|hotfix>` in common/common.just,
 # which pushes `release/v<version>` and opens the PR. MERGING that PR fires this
 # workflow; the reusable workflow creates the `vX.Y.Z` tag and release through
-# the API, which raises no tag-push event, so it then dispatches
-# release-images.yml, which dispatches build-api.yml and build-web.yml with the
-# tag to publish the version-tagged OCI images (BUNYIP-994). A `v*` tag pushed
-# by hand still builds both through their `tags: ['v*']` triggers. There is no
-# `just publish-release` step: bunyip releases on merge like every other
-# consumer (PC-86, which removed the tag-push manual step BUNYIP-721 / PC-68 had
-# introduced).
+# the API, with `target_commitish: "main"`, which DOES raise a push event for
+# the new tag, so build-api.yml and build-web.yml publish the version-tagged
+# OCI images on their own `tags: ['v*']` triggers (BUNYIP-1018 removed the
+# redundant release-images.yml dispatch that BUNYIP-994 had added for a case
+# that never applied). A `v*` tag pushed by hand builds both the same way.
+# There is no `just publish-release` step: bunyip releases on merge like every
+# other consumer (PC-86, which removed the tag-push manual step BUNYIP-721 /
+# PC-68 had introduced).
 #
 # `pull_request_target`, NOT `pull_request` (BUNYIP-721 / PC-86): both fire when
 # the release PR closes, but `pull_request_target` runs THIS file from `main`,
@@ -45,7 +45,7 @@ jobs:
   # beside `uses` (Forgejo 16 rejects it, BUNYIP-838), but it must repeat
   # `runs-on`: this Forgejo does not schedule a cross-repo reusable `uses:`
   # unless the label resolves in the caller's context, and without it the job
-  # stays `waiting` forever (BUNYIP-994; Mirzam's caller does the same).
+  # stays `waiting` forever (BUNYIP-994; renovate.yml's caller does the same).
   # The `if:` gate is the one every pull_request consumer uses: release only a MERGED PR whose head branch
   # is `release/v*`, so a closed-without-merge PR, or a merged non-release PR,
   # releases nothing. Under `pull_request_target` the gate is evaluated from
@@ -59,8 +59,4 @@ jobs:
     uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     # MEDIUM: git and API calls, nothing compiles (see governance CI.md "Runner labels").
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
-    secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases and dispatch APIs; this caller job runs no step and reads no secret itself
-    # The API-made tag raises no tag-push event, so the release dispatches
-    # release-images.yml, which dispatches both image builds with the tag.
-    with:
-      dispatch_workflow: release-images.yml
+    secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases endpoint; this caller job runs no step and reads no secret itself

@@ -6,7 +6,7 @@
 //! to a database this test may migrate; unset skips the test.
 
 use bunyip_api::repositories::EmailConfigRepository;
-use bunyip_api::services::AppKeySet;
+use bunyip_api::services::EncryptionKeySet;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::Row;
 
@@ -51,7 +51,7 @@ async fn reencrypt_email_rewrites_both_passwords_under_the_new_key() {
     let key_a: [u8; 32] = [0xA1; 32];
     let key_b: [u8; 32] = [0xB2; 32];
 
-    let write_set = AppKeySet {
+    let write_set = EncryptionKeySet {
         current: key_a,
         current_version: 1,
         previous: Vec::new(),
@@ -73,7 +73,7 @@ async fn reencrypt_email_rewrites_both_passwords_under_the_new_key() {
     .await
     .expect("write test ciphertext under key A");
 
-    let rotate_set = AppKeySet {
+    let rotate_set = EncryptionKeySet {
         current: key_b,
         current_version: 2,
         previous: vec![key_a],
@@ -91,7 +91,7 @@ async fn reencrypt_email_rewrites_both_passwords_under_the_new_key() {
         .await
         .expect("read email_config row after reencrypt");
 
-    let read_only_b = AppKeySet {
+    let read_only_b = EncryptionKeySet {
         current: key_b,
         current_version: 2,
         previous: Vec::new(),

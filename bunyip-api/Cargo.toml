@@ -42,6 +42,9 @@ path = "src/bin/gen_demo_seed.rs"
 # pulls from the dunite framework repo on Forgejo.
 [dependencies]
 bunyip-domain = { path = "../crates/bunyip-domain" }
+# BUNYIP-983: the audit row for a saved Mokosh client secret carries the
+# value's SHA-256, never the value.
+sha2 = { workspace = true }
 bunyip-oci = { path = "../crates/bunyip-oci" }
 bunyip-oidc = { path = "../crates/bunyip-oidc" }
 
