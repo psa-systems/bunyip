@@ -11,6 +11,20 @@
 
 pub use web_kit::ui::*;
 
+/// A `<select>` chip bound to one query key; a change submits the enclosing
+/// form. Shared by every admin list page that filters by one of a small set of
+/// values (audit, feedback, invites, ip-bans). Keeps the markup in one place so
+/// a token change does not drift across four handlers.
+pub fn filter_chip_select(name: &str, current: &str, options: &[(&str, &str)]) -> maud::Markup {
+    maud::html! {
+        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
+            @for (value, label) in options {
+                option value=(value) selected[current == *value] { (label) }
+            }
+        }
+    }
+}
+
 /// BUNYIP-844: an [`error_box_detailed`] populated from a load failure's
 /// `ApiError`, so every "could not load X" surface tells the admin the actual
 /// cause and request id instead of the bare headline `error_box` gives.

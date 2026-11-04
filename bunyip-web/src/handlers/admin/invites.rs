@@ -17,7 +17,9 @@ use crate::api::admin as admin_api;
 use crate::api::types::AdminInvite;
 use crate::handlers::{admin_guard, admin_response, dashboard_input, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon, pager};
+use crate::views::ui::{
+    badge, button_class, empty_state, error_box_for, filter_chip_select, icon, pager,
+};
 use crate::web::{redirect_cookies, AppState};
 
 /// The invite's current state, derived the same way the API model does
@@ -111,16 +113,6 @@ const INVITE_STATUS_OPTIONS: &[(&str, &str)] = &[
     ("expired", "Expired"),
 ];
 
-fn invite_filter_select(name: &str, current: &str, options: &[(&str, &str)]) -> Markup {
-    html! {
-        select name=(name) class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
-            @for (value, label) in options {
-                option value=(value) selected[current == *value] { (label) }
-            }
-        }
-    }
-}
-
 fn invites_pager_base(q: &InvitesQuery) -> String {
     let mut params: Vec<String> = Vec::new();
     if let Some(s) = q.status.as_deref().filter(|s| !s.is_empty()) {
@@ -174,7 +166,7 @@ pub async fn invites(
                     // BUNYIP-939: filter chips. Status is a dropdown chip;
                     // email is a text input bounded at 128 server-side.
                     form method="get" action="/admin/invites" class="mt-4 flex flex-wrap items-center gap-2" {
-                        (invite_filter_select("status", q.status.as_deref().unwrap_or(""), INVITE_STATUS_OPTIONS))
+                        (filter_chip_select("status", q.status.as_deref().unwrap_or(""), INVITE_STATUS_OPTIONS))
                         input type="text" name="email" value=(email_value) placeholder="Filter by email…" maxlength="128" class="h-9 flex-1 min-w-[16rem] rounded-md border border-input bg-background px-3 text-sm";
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if any_filter_active {
