@@ -14,9 +14,10 @@
 //! `MxLookupOutcome` to decide whether to flip `is_spam`.
 
 use async_trait::async_trait;
-use hickory_resolver::config::{ResolverConfig, ResolverOpts};
-use hickory_resolver::error::{ResolveError, ResolveErrorKind};
-use hickory_resolver::TokioAsyncResolver;
+use hickory_resolver::config::{ResolverConfig, GOOGLE};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
+use hickory_resolver::net::{DnsError, NetError};
+use hickory_resolver::TokioResolver;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -69,16 +70,20 @@ pub fn domain_of(email: &str) -> Option<String> {
 /// to Google's public resolver only if parsing the system config fails,
 /// which keeps a misconfigured container from silently disabling the gate.
 pub struct HickoryMxResolver {
-    inner: TokioAsyncResolver,
+    inner: TokioResolver,
     cache: Arc<RwLock<HashMap<String, (Instant, MxLookupOutcome)>>>,
 }
 
 impl HickoryMxResolver {
     pub fn new() -> Self {
-        let inner = match hickory_resolver::system_conf::read_system_conf() {
-            Ok((config, opts)) => TokioAsyncResolver::tokio(config, opts),
-            Err(_) => TokioAsyncResolver::tokio(ResolverConfig::google(), ResolverOpts::default()),
+        let (config, opts) = match hickory_resolver::system_conf::read_system_conf() {
+            Ok(parts) => parts,
+            Err(_) => (ResolverConfig::udp_and_tcp(&GOOGLE), Default::default()),
         };
+        let inner = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .with_options(opts)
+            .build()
+            .expect("hickory resolver build");
         Self {
             inner,
             cache: Arc::new(RwLock::new(HashMap::new())),
@@ -116,16 +121,13 @@ impl MxResolver for HickoryMxResolver {
         let outcome =
             match tokio::time::timeout(MX_LOOKUP_TIMEOUT, self.inner.mx_lookup(domain)).await {
                 Ok(Ok(lookup)) => {
-                    if lookup.iter().next().is_some() {
+                    if !lookup.answers().is_empty() {
                         MxLookupOutcome::HasMx
                     } else {
                         MxLookupOutcome::NoMx
                     }
                 }
-                Ok(Err(e)) => match e.kind() {
-                    ResolveErrorKind::NoRecordsFound { .. } => MxLookupOutcome::NoMx,
-                    _ => resolver_error_to_outcome(&e),
-                },
+                Ok(Err(e)) => resolver_error_to_outcome(&e),
                 Err(_) => MxLookupOutcome::Unknown,
             };
         self.cache_put(domain.to_string(), outcome);
@@ -136,9 +138,9 @@ impl MxResolver for HickoryMxResolver {
 /// Map a hickory resolver error to an outcome. NXDOMAIN counts as `NoMx`;
 /// everything else (timeout, upstream SERVFAIL, I/O error) is `Unknown` so
 /// we fail open.
-fn resolver_error_to_outcome(e: &ResolveError) -> MxLookupOutcome {
-    match e.kind() {
-        ResolveErrorKind::NoRecordsFound { .. } => MxLookupOutcome::NoMx,
+fn resolver_error_to_outcome(e: &NetError) -> MxLookupOutcome {
+    match e {
+        NetError::Dns(DnsError::NoRecordsFound(_)) => MxLookupOutcome::NoMx,
         _ => MxLookupOutcome::Unknown,
     }
 }

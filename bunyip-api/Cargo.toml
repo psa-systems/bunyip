@@ -98,9 +98,10 @@ zxcvbn = "3.1.1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # BUNYIP-925: feedback-intake spam signal that rejects an email whose domain
-# has no MX records. tokio-runtime + rustls so the musl-static image needs no
-# system DNS library, matching the reqwest/sqlx TLS choice.
-hickory-resolver = { version = "0.24", default-features = false, features = ["tokio-runtime", "dns-over-rustls", "system-config"] }
+# has no MX records. Plain UDP/TCP DNS against the system resolver (or Google
+# over UDP/TCP as the fallback) is enough: no DoT/DoH, so the TLS feature
+# families stay off and the musl-static image needs no system DNS library.
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
 tempfile = "3"
 url = "2"
 urlencoding = "2"
