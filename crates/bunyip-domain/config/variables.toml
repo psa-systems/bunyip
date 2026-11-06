@@ -1,0 +1,669 @@
+# Per-variable release facts the Rust `ENV_INVENTORY` cannot carry.
+# `just config-docs` renders them into docs/configuration.md.
+# `since` is the first release that shipped this variable; `required` means boot
+# refuses when it is absent in production (either Required or RequiredInProduction).
+#
+# A variable the server no longer reads moves to [[removed]] with its original
+# `since` and the release that dropped it; a Breaking change later than `since`
+# is a [[change]] record naming the operator action and the originating issue.
+
+[[variable]]
+name = "ADMIN_NOTIFICATION_EMAILS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "APP_DATABASE_URL"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "APP_ENCRYPTION_KEY"
+since = "v0.12.0"
+required = true
+
+[[variable]]
+name = "APP_ENCRYPTION_KEY_PREV"
+since = "v0.12.0"
+required = false
+
+[[variable]]
+name = "APP_KEY_VERSION"
+since = "v0.12.0"
+required = false
+
+[[variable]]
+name = "APP_NAME"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "APP_PORT"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "APP_URL"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "AUTO_BAN_DURATION_SECS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "AUTO_BAN_ENABLED"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "AUTO_BAN_THRESHOLD"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "AUTO_BAN_WINDOW_SECS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "BOOTSTRAP_ADMIN_EMAIL"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_API_PUBLIC_ORIGIN"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_API_URL"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_APP_DOMAIN"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_APP_PASSWORD"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_BILLING_TRIAL_PERIOD_DAYS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_BIND_ADDR"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_COMMUNITY_URL"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_CONFIG_DIR"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_CONFIG_FILE"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_COOKIE_SHARED_DOMAIN"
+since = "v0.5.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_E2E_BOOTSTRAP_ALLOW"
+since = "v0.5.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_E2E_TOTP_SECRET"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_OIDC_ISSUER"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_SEED_ALLOW"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_UPDATE_CHECK_TOKEN"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_UPDATE_CHECK_URL"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "BUNYIP_WEBHOOK_SIGNING_SECRET"
+since = "v0.15.0"
+required = true
+
+[[variable]]
+name = "BUNYIP_WEB_ORIGIN"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "COOKIE_DOMAIN"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "CORS_ORIGIN"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "COUNTRY_ALLOW"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "COUNTRY_DENY"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "CSP_CONNECT_SRC"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "CSP_FORM_ACTION"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "DATABASE_URL"
+since = "v0.2.1"
+required = true
+
+[[variable]]
+name = "DB_POOL_METRICS_INTERVAL_SECS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "DOWNLOAD_CACHE_DIR"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "DOWNLOAD_CACHE_MAX_BYTES"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "DOWNLOAD_CONCURRENCY_PER_USER"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "DOWNLOAD_DAILY_LIMIT_PER_USER"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "DRILLMARK_AUDIENCE"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "DRILLMARK_BACKCHANNEL_LOGOUT_URI"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "DRILLMARK_POST_LOGOUT_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "DRILLMARK_PROVIDER_STATUS_URL"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "DRILLMARK_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "DUNITE_ARGON2_MAX_CONCURRENT"
+since = "v0.19.0"
+required = false
+
+[[variable]]
+name = "DUNITE_ARGON2_PERMIT_TIMEOUT_SECS"
+since = "v0.19.0"
+required = false
+
+[[variable]]
+name = "EMAIL_ENABLED"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "EMAIL_LOG_TOKENS"
+since = "v0.5.0"
+required = false
+
+[[variable]]
+name = "ENVIRONMENT"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "FORGEJO_API_TOKEN"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "FORGEJO_BASE_URL"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "FORGEJO_RELEASE_CACHE_TTL_SECS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "HOST_IP"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "INFISICAL_ADDRESS"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_CLIENT_ID"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_CLIENT_SECRET"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_ENABLED"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_ENVIRONMENT"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_PROJECT_ID"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "INFISICAL_SECRET_PATH"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "IP2LOCATION_DB_PATH"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "IP2PROXY_DB_PATH"
+since = "v0.12.0"
+required = false
+
+[[variable]]
+name = "JWT_SECRET"
+since = "v0.15.0"
+required = true
+
+[[variable]]
+name = "LETS_CHAT_AUDIENCE"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "LETS_CHAT_CLIENT_SECRET_HASH"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "LETS_CHAT_POST_LOGOUT_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "LETS_CHAT_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "LOGIN_APPROVAL_ENABLED"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "MAILER_WEBHOOK_SECRET"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "MIRZAM_API_TOKEN"
+since = "v0.21.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_APPS_AUDIENCE"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_APPS_REDIRECT_URIS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_BACKUP_API_URL"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_GOOGLE_CLIENT_SECRET"
+since = "v0.21.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_PROVIDER_STATUS_URL"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_WEBHOOK_URL"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "OCI_BLOB_CACHE_DIR"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_BLOB_CACHE_MAX_BYTES"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_CONCURRENT_MANIFESTS_PER_USER"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_MANIFEST_CACHE_TTL_SECS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_PULLS_PER_USER_PER_DAY"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_REGISTRY_ENABLED"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_REGISTRY_PORT"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_REGISTRY_REALM"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_REGISTRY_SERVICE"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OCI_TOKEN_TTL_SECS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_ACCESS_TOKEN_TTL_SECONDS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_CODE_TTL_SECONDS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_ISSUER"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_JWT_ACTIVE_KID"
+since = "v0.2.1"
+required = true
+
+[[variable]]
+name = "OIDC_JWT_PRIVATE_KEY_PATH"
+since = "v0.2.1"
+required = true
+
+[[variable]]
+name = "OIDC_JWT_PUBLIC_KEYS_DIR"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_LIFECYCLE_EVENT_KEY"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_REFRESH_IDLE_TTL_SECONDS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_REFRESH_TOKEN_TTL_SECONDS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "OIDC_RS_AUDIENCE"
+since = "v0.5.0"
+required = false
+
+[[variable]]
+name = "PROVIDER_STATUS_CLIENT_ID"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "PROVIDER_STATUS_CLIENT_SECRET"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "RUST_LOG"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SECRETS_STORAGE"
+since = "v0.15.0"
+required = true
+
+[[variable]]
+name = "SESSION_IDLE_TTL_REMEMBER_SECONDS"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "SESSION_IDLE_TTL_SECONDS"
+since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "SETUP_DEFAULT_ADMIN"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SIGNUP_BOT_GUARD_ENABLED"
+since = "v0.8.0"
+required = false
+
+[[variable]]
+name = "SMTP_EHLO_NAME"
+since = "v0.14.0"
+required = false
+
+[[variable]]
+name = "SMTP_FROM"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SMTP_HOST"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SMTP_PASSWORD"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SMTP_PORT"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SMTP_TLS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "SMTP_USERNAME"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "STRIPE_SECRET_KEY"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "STRIPE_WEBHOOK_SECRET"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_ENABLED"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_HOST"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_MAILBOX"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_PASSWORD"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_POLL_SECS"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_PORT"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_IMAP_USERNAME"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "SUPPORT_INBOX_EMAIL"
+since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "TIER_EARLY_ADOPTER_SLOTS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "TIER_EARLY_ADOPTER_TRIAL_DAYS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "TIER_LIFETIME_SLOTS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "TIER_STANDARD_TRIAL_DAYS"
+since = "v0.2.1"
+required = false
+
+[[variable]]
+name = "TRUSTED_PROXY_CIDR"
+since = "v0.3.0"
+required = false
+

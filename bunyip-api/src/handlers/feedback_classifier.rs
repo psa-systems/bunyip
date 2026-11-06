@@ -28,7 +28,24 @@
 //! first" ordering (strongest -> weakest) means a flagged row has the
 //! most specific reason attached.
 
-use std::collections::HashSet;
+/// Hosting-provider ASN name substrings for signal 3. Fixed, compile-time
+/// list; a `const` array scanned linearly costs nothing per call, unlike a
+/// `HashSet` rebuilt on every submission, which pays for hashing and
+/// inserts that a substring-containment check cannot use anyway.
+const HOSTING_ASN_PATTERNS: &[&str] = &[
+    "interserver",
+    "ovh",
+    "linode",
+    "digitalocean",
+    "amazon",
+    "aws",
+    "hetzner",
+    "google cloud",
+    "microsoft azure",
+    "oracle cloud",
+    "vultr",
+    "contabo",
+];
 
 /// Inputs the classifier reads. Each one comes from either the submitted
 /// multipart form (`sender_email`, `message`, `tags`), the deployment's
@@ -160,23 +177,7 @@ fn check_hosting_asn(input: &SpamClassifierInput<'_>) -> Option<String> {
         return None;
     }
     let asn_lower = asn.to_ascii_lowercase();
-    let hosting: HashSet<&str> = [
-        "interserver",
-        "ovh",
-        "linode",
-        "digitalocean",
-        "amazon",
-        "aws",
-        "hetzner",
-        "google cloud",
-        "microsoft azure",
-        "oracle cloud",
-        "vultr",
-        "contabo",
-    ]
-    .into_iter()
-    .collect();
-    hosting
+    HOSTING_ASN_PATTERNS
         .iter()
         .find(|pattern| asn_lower.contains(*pattern))
         .map(|pattern| format!("submitted from hosting-range IP (ASN names {pattern})"))

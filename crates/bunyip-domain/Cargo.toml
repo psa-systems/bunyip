@@ -44,7 +44,11 @@ dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90f
 # a descendant of the DUNITE-10 merge, so it carries the classified
 # `StripeServiceError::Stripe` variant BUNYIP-516 maps as well as the
 # `unarchive_price` BUNYIP-513 uses.
-dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
+# BUNYIP-822/823: bumped to 91e27f2 to pick up DUNITE-16 (deterministic ranking
+# in `get_customer_subscription`, so a canceled+active customer resolves to
+# active) and DUNITE-17 (`list_products`/`list_prices` walk `has_more` instead
+# of silently truncating to the first 100 rows).
+dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
@@ -59,7 +63,8 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # (HTTP status + Stripe `error.code` / `error.type`, no free-text Stripe message)
 # plus the `list_webhook_endpoints` 403-check that BUNYIP-516's `stripe_err`
 # permission mapping depends on. Moves in lock-step with dunite-stripe-core above.
-dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "5dab94d7658efbd77661a0565c7b218bb22dbfc1" }
+# BUNYIP-822/823: bumped to 91e27f2 for the DUNITE-16 / DUNITE-17 fixes.
+dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this
 # crate's models. The User row + repository stay here (a8n's schema has not

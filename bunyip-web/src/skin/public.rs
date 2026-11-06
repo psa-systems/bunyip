@@ -11,7 +11,7 @@ use maud::{html, Markup};
 use crate::api::calls;
 use crate::api::types::Application;
 use crate::config::Config;
-use crate::handlers::{cookie_of, public_ctx};
+use crate::handlers::{cookie_of, dashboard_input, public_ctx};
 use crate::util::{app_gradient, app_link};
 use crate::views::layout::{asset, brand_mark, brand_name, branding, document, public_shell};
 use crate::views::ui::{button_class, icon};
@@ -172,6 +172,49 @@ fn wired_apps_section(apps: &[Application], domain: &str) -> Markup {
     }
 }
 
+/// MIRZAM-217: the newsletter blurb names the brand when there is one, like
+/// every other marketing sentence on the page (BUNYIP-561).
+fn newsletter_blurb(brand_name: &str) -> String {
+    if brand_name.is_empty() {
+        "News and release notes, straight to your inbox.".to_string()
+    } else {
+        format!("{brand_name} news and release notes, straight to your inbox.")
+    }
+}
+
+/// MIRZAM-217: the newsletter signup, absent while the branding record's
+/// `newsletter_url` (Admin, Branding, Newsletter) is blank. A plain form posting straight to the Mirzam list's subscribe
+/// endpoint, the shape of the list's own embed snippet: no script and no
+/// cookie, and Mirzam answers with its confirmation email and its thank-you
+/// page. `website` is Mirzam's honeypot, kept out of sight and out of the tab
+/// order so only a bot fills it.
+fn newsletter_section(url: &str, brand_name: &str) -> Markup {
+    html! {
+        @if !url.is_empty() {
+            section id="newsletter" class="relative border-t border-border/50 py-20" {
+                div class="container relative" {
+                    div class="mx-auto max-w-2xl text-center" {
+                        p class="text-sm uppercase tracking-wide font-semibold text-brand-primary-600 dark:text-brand-primary-300" { "Newsletter" }
+                        h2 class="mt-2 text-3xl md:text-4xl font-bold tracking-tight text-brand-primary-900 dark:text-brand-primary-50" { "Hear about every release" }
+                        p class="mt-4 text-muted-foreground" { (newsletter_blurb(brand_name)) }
+                        form method="post" action=(url) class="mt-8 flex flex-col gap-4 sm:flex-row" {
+                            label for="newsletter-email" class="sr-only" { "Email" }
+                            input id="newsletter-email" name="email" type="email" required maxlength="254"
+                                autocomplete="email" placeholder="you@example.com" class=(dashboard_input());
+                            div class="sr-only" aria-hidden="true" {
+                                label for="newsletter-website" { "Leave this empty" }
+                                input id="newsletter-website" name="website" type="text" tabindex="-1" autocomplete="off";
+                            }
+                            button type="submit" class=(button_class("brand", "default", "w-full sm:w-auto shrink-0")) { "Subscribe" }
+                        }
+                        p class="mt-3 text-sm text-muted-foreground" { "We email you a link to confirm. Unsubscribe anytime." }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// The application list backing the landing page's cards (BUNYIP-833).
 /// `GET /v1/applications` omits a `requires_entitlement` application entirely
 /// for an anonymous caller (BUNYIP-794's security fix), so the shared,
@@ -291,6 +334,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             @if app_links_allowed {
                 (wired_apps_section(&apps, &st.cfg.app_domain))
             }
+            (newsletter_section(&branding.newsletter_url, &branding.brand_name))
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {
@@ -961,5 +1005,34 @@ mod landing_entitlement_tests {
         let body = body_of(anonymous).await;
         assert!(!body.contains("Restricted App"), "{body}");
         assert!(!body.contains("Open App"), "{body}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newsletter_section_is_absent_without_a_url() {
+        assert!(newsletter_section("", "Acme").into_string().is_empty());
+    }
+
+    #[test]
+    fn newsletter_section_posts_to_the_mirzam_list_with_its_honeypot() {
+        let url = "https://news.example.com/s/00000000-0000-0000-0000-000000000000";
+        let html = newsletter_section(url, "Acme").into_string();
+        assert!(html.contains(&format!(r#"action="{url}""#)));
+        assert!(html.contains(r#"method="post""#));
+        assert!(html.contains(r#"name="email" type="email" required"#));
+        assert!(html.contains(r#"name="website" type="text" tabindex="-1""#));
+        assert!(html.contains("Acme news and release notes"));
+    }
+
+    #[test]
+    fn newsletter_blurb_names_no_product_when_unbranded() {
+        assert_eq!(
+            newsletter_blurb(""),
+            "News and release notes, straight to your inbox."
+        );
     }
 }

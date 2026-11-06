@@ -27,8 +27,10 @@
 use bunyip_domain::config::{Config, GovernedSecret, SecretsProvider};
 use bunyip_domain::errors::AppError;
 use bunyip_domain::models::stripe::{decrypt_secret, encrypt_secret};
-use bunyip_domain::repositories::{EmailConfigRepository, StripeConfigRepository};
-use bunyip_domain::services::{AppKeySet, InfisicalClient};
+use bunyip_domain::repositories::{
+    EmailConfigRepository, MirzamConfigRepository, MokoshConfigRepository, StripeConfigRepository,
+};
+use bunyip_domain::services::{EncryptionKeySet, InfisicalClient};
 use sqlx::PgPool;
 use tracing::{error, warn};
 
@@ -96,6 +98,22 @@ impl Survey {
     pub fn complete_in(&self, provider: SecretsProvider) -> bool {
         self.secrets.iter().all(|row| row.present_in(provider))
     }
+
+    /// BUNYIP-1000: the governed secrets that would lose their last copy if
+    /// `secrets-purge` ran against `declared` right now. A row contributes
+    /// ONLY when some other inspected provider holds it but `declared` does
+    /// not; a row no inspected provider holds (the integration is simply off)
+    /// is fine, because purge has nothing to delete for it. The previous
+    /// `complete_in` guard treated every unset secret as a blocker, which
+    /// meant a deployment that did not use one integration (no Mirzam token
+    /// today, say) could never purge the duplicates of the others.
+    pub fn would_orphan(&self, declared: SecretsProvider) -> Vec<&'static str> {
+        self.secrets
+            .iter()
+            .filter(|row| !row.present_in(declared) && row.holders.iter().any(|p| *p != declared))
+            .map(|row| row.secret.name())
+            .collect()
+    }
 }
 
 /// What the boot enforcement decides for one governed secret.
@@ -148,11 +166,13 @@ fn non_empty(value: Option<String>) -> Option<String> {
 pub async fn survey(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     probe: InfisicalProbe,
 ) -> Result<Survey, AppError> {
     let email_row = EmailConfigRepository::get(pool).await?;
     let stripe_row = StripeConfigRepository::get(pool).await?;
+    let mirzam_row = MirzamConfigRepository::get(pool).await?;
+    let mokosh_row = MokoshConfigRepository::get(pool).await?;
 
     let db_value = |secret: GovernedSecret| -> Option<String> {
         match secret {
@@ -176,6 +196,8 @@ pub async fn survey(
             GovernedSecret::SupportImapPassword => {
                 bunyip_domain::config::EmailConfig::db_imap_password(&email_row, key_set)
             }
+            GovernedSecret::MirzamApiToken => mirzam_row.db_api_token(key_set),
+            GovernedSecret::MokoshGoogleClientSecret => mokosh_row.db_google_client_secret(key_set),
         }
     };
 
@@ -253,7 +275,7 @@ pub async fn survey(
 pub async fn read_secret(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     secret: GovernedSecret,
 ) -> Result<Option<String>, AppError> {
     match config.secrets_provider {
@@ -291,6 +313,14 @@ pub async fn read_secret(
                     &row, key_set,
                 ))
             }
+            GovernedSecret::MirzamApiToken => {
+                let row = MirzamConfigRepository::get(pool).await?;
+                Ok(row.db_api_token(key_set))
+            }
+            GovernedSecret::MokoshGoogleClientSecret => {
+                let row = MokoshConfigRepository::get(pool).await?;
+                Ok(row.db_google_client_secret(key_set))
+            }
         },
         SecretsProvider::Infisical => {
             let client = InfisicalClient::from_settings(&config.infisical)
@@ -313,7 +343,7 @@ pub async fn read_secret(
 pub async fn stripe_runtime_config(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     row: &bunyip_domain::models::stripe::StripeConfig,
 ) -> Result<bunyip_domain::services::StripeConfig, AppError> {
     let mut runtime = bunyip_domain::services::stripe_settings_from_db_model(row);
@@ -332,7 +362,7 @@ pub async fn stripe_runtime_config(
 /// read is reported at `error` and treated as absent: the enforcement below then
 /// says so out loud instead of quietly falling through to another provider.
 fn decrypt_column(
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     secret: GovernedSecret,
     ciphertext: Option<&[u8]>,
     nonce: Option<&[u8]>,
@@ -439,7 +469,7 @@ fn provider_list(providers: &[SecretsProvider]) -> String {
 pub async fn write_secret(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     provider: SecretsProvider,
     secret: GovernedSecret,
     value: &str,
@@ -506,7 +536,53 @@ pub async fn write_secret(
                     )
                     .await?;
                 }
-                (_, Some(admin)) => {
+                // BUNYIP-997: explicit arms ahead of the Stripe fall-through,
+                // which would otherwise write the token into
+                // `stripe_config.webhook_secret`.
+                (GovernedSecret::MirzamApiToken, Some(admin)) => {
+                    MirzamConfigRepository::update_api_token(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                        admin,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MirzamApiToken, None) => {
+                    MirzamConfigRepository::update_api_token_encryption(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MokoshGoogleClientSecret, Some(admin)) => {
+                    MokoshConfigRepository::update_client_secret(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                        admin,
+                    )
+                    .await?;
+                }
+                (GovernedSecret::MokoshGoogleClientSecret, None) => {
+                    MokoshConfigRepository::update_client_secret_encryption(
+                        pool,
+                        &ciphertext,
+                        &nonce,
+                        key_version,
+                    )
+                    .await?;
+                }
+                // Named rather than `_`, so a new governed secret is a compile
+                // error here instead of a silent write into `stripe_config`.
+                (
+                    GovernedSecret::StripeSecretKey | GovernedSecret::StripeWebhookSecret,
+                    Some(admin),
+                ) => {
                     StripeConfigRepository::update(
                         pool,
                         secret_key.0,
@@ -522,7 +598,7 @@ pub async fn write_secret(
                     )
                     .await?;
                 }
-                (_, None) => {
+                (GovernedSecret::StripeSecretKey | GovernedSecret::StripeWebhookSecret, None) => {
                     StripeConfigRepository::update_secret_encryption(
                         pool,
                         secret_key.0,
@@ -606,6 +682,14 @@ async fn clear_database_secret(pool: &PgPool, secret: GovernedSecret) -> Result<
         GovernedSecret::SupportImapPassword => {
             "UPDATE email_config SET imap_password = NULL, imap_password_nonce = NULL, \
              updated_at = NOW() WHERE id = 1"
+        }
+        GovernedSecret::MirzamApiToken => {
+            "UPDATE mirzam_config SET api_token = NULL, api_token_nonce = NULL, \
+             updated_at = NOW() WHERE id = 1"
+        }
+        GovernedSecret::MokoshGoogleClientSecret => {
+            "UPDATE mokosh_config SET google_client_secret = NULL, \
+             google_client_secret_nonce = NULL, updated_at = NOW() WHERE id = 1"
         }
     };
     sqlx::query(statement).execute(pool).await?;
@@ -893,7 +977,7 @@ fn verification_failures(
 pub async fn run_migration(
     pool: &PgPool,
     config: &Config,
-    key_set: &AppKeySet,
+    key_set: &EncryptionKeySet,
     survey: &Survey,
     target: SecretsProvider,
     dry_run: bool,
@@ -965,9 +1049,13 @@ pub async fn run_migration(
 
 /// Remove every governed-secret copy that sits outside the declared provider.
 ///
-/// Refuses unless the declared provider holds every governed secret, so a purge can
-/// never leave a deployment with no copy at all. Never invoked automatically:
-/// only this subcommand, with `--confirm`, deletes anything.
+/// Refuses only when a purge would leave a secret with no copy at all. A
+/// governed secret that no inspected provider holds (the integration is simply
+/// off: no Mirzam token today, say) is fine; purge has nothing to do for it.
+/// BUNYIP-1000: the previous `complete_in` guard refused in that case too,
+/// so a deployment that did not use one integration could never purge the
+/// duplicates of the others. Never invoked automatically: only this subcommand,
+/// with `--confirm`, deletes anything.
 pub async fn run_purge(
     pool: &PgPool,
     config: &Config,
@@ -982,18 +1070,13 @@ pub async fn run_purge(
                 .to_string(),
         ));
     }
-    if !survey.complete_in(declared) {
-        let missing: Vec<&str> = survey
-            .secrets
-            .iter()
-            .filter(|row| !row.present_in(declared))
-            .map(|row| row.secret.name())
-            .collect();
+    let would_orphan = survey.would_orphan(declared);
+    if !would_orphan.is_empty() {
         return Err(AppError::BadRequest(format!(
-            "the declared {declared} provider is not complete ({} missing), so purging the \
-             other providers would leave no copy at all. Run `bunyip-api secrets-migrate --to \
-             {declared}` first.",
-            missing.join(", ")
+            "{} would lose its last copy if purge ran now: held outside {declared} but not in \
+             it, so purging the other providers would leave no copy at all. Run `bunyip-api \
+             secrets-migrate --to {declared}` first.",
+            would_orphan.join(", ")
         )));
     }
 
@@ -1148,6 +1231,51 @@ mod tests {
         assert!(enforce(&survey).is_empty());
         assert!(survey.complete_in(Database));
         assert!(!survey.complete_in(Infisical));
+    }
+
+    /// BUNYIP-1000: `secrets-purge` must not refuse because the deployment
+    /// does not use one integration (e.g. no Mirzam token today). A secret
+    /// held by nobody is a no-op for the purge; one held outside the
+    /// declared provider but not inside it is the only shape that must
+    /// block (purging would delete the only copy).
+    #[test]
+    fn would_orphan_names_only_the_misplaced_secrets_not_the_unset_ones() {
+        // Mix: one secret in the declared provider, one unset entirely, one
+        // present only in a non-declared provider. Only the third is a
+        // blocker; the second (unset) must NOT contribute to the result.
+        let survey = survey_of(Database, vec![vec![Database], vec![], vec![Infisical]]);
+        let orphans = survey.would_orphan(Database);
+        assert_eq!(
+            orphans.len(),
+            1,
+            "only the secret held outside Database but not in it blocks purge; \
+             an unset secret (nothing to purge) must not contribute. got {orphans:?}"
+        );
+        assert_eq!(orphans[0], GovernedSecret::ALL[2].name());
+    }
+
+    /// BUNYIP-1000 counterpart: a survey whose declared provider holds
+    /// every secret that any provider holds (and nothing-held-anywhere for
+    /// the rest) must NOT block purge. This is the pre-fix regression:
+    /// `complete_in` returned false here (because of the unset secret),
+    /// and the old guard refused to run.
+    #[test]
+    fn would_orphan_is_empty_when_only_declared_holds_or_nobody_holds() {
+        let survey = survey_of(
+            Database,
+            vec![vec![Database], vec![], vec![Database, Environment]],
+        );
+        assert_eq!(
+            survey.would_orphan(Database),
+            Vec::<&str>::new(),
+            "an unset secret and a Database-plus-elsewhere secret are both fine"
+        );
+        // The pre-fix guard would have refused this case; the sanity check
+        // against `complete_in` makes that regression explicit.
+        assert!(
+            !survey.complete_in(Database),
+            "the unset secret still makes complete_in false; purge must not use it"
+        );
     }
 
     /// An unreachable Infisical is fatal in `infisical` mode: the operator

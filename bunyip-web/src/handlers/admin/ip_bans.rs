@@ -11,7 +11,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::{AdminIpBan, IpEnrichment};
 use crate::handlers::{admin_guard, admin_response, dashboard_input};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{badge, button_class, empty_state, error_box_for, icon};
+use crate::views::ui::{badge, button_class, empty_state, error_box_for, filter_chip_select, icon};
 use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
@@ -258,11 +258,7 @@ pub async fn ip_bans(
                     form method="get" action="/admin/ip-bans" class="mt-4 flex flex-wrap items-center gap-2" {
                         input type="text" name="search" value=(search_value) placeholder="IP prefix (e.g. 45.3.)" maxlength="45" class="h-9 w-48 rounded-md border border-input bg-background px-3 text-sm";
                         input type="text" name="reason" value=(reason_value) placeholder="Reason contains…" maxlength="128" class="h-9 flex-1 min-w-[12rem] rounded-md border border-input bg-background px-3 text-sm";
-                        select name="sort" class="h-9 rounded-md border border-input bg-background px-3 text-sm" data-submit-on-change {
-                            @for (value, label) in IP_BANS_SORT_OPTIONS {
-                                option value=(value) selected[sort == *value] { (label) }
-                            }
-                        }
+                        (filter_chip_select("sort", sort, IP_BANS_SORT_OPTIONS))
                         button type="submit" class=(button_class("outline", "sm", "")) { "Apply" }
                         @if any_filter_active {
                             a href="/admin/ip-bans" class=(button_class("ghost", "sm", "")) { "Clear" }

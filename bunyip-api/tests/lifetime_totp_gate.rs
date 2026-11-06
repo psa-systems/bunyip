@@ -18,7 +18,7 @@ use bunyip_api::config::TierConfig;
 use bunyip_api::models::{CreateUser, User, UserRole};
 use bunyip_api::repositories::UserRepository;
 use bunyip_api::services::{
-    unconfigured_stripe_config, AppKeySet, EventBus, JwtConfig, JwtService, StripeService,
+    unconfigured_stripe_config, EncryptionKeySet, EventBus, JwtConfig, JwtService, StripeService,
     TotpService,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -96,11 +96,11 @@ fn bearer(jwt: &JwtService, user: &User) -> String {
     )
 }
 
-fn test_key_set() -> AppKeySet {
+fn test_key_set() -> EncryptionKeySet {
     let mut key = [0u8; 32];
     key[..16].copy_from_slice(b"test-encrypt-key");
     key[16..].copy_from_slice(b"0123456789abcdef");
-    AppKeySet::new(key, 1)
+    EncryptionKeySet::new(key, 1)
 }
 
 /// `POST .../lifetime` without a `totp_code` the acting admin has configured
