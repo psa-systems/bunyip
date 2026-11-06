@@ -185,6 +185,7 @@ pub mod host_config;
 pub mod host_secrets;
 pub mod mailer;
 pub mod membership;
+pub mod mx_check;
 pub mod pricing;
 pub mod support;
 pub mod system_config;
