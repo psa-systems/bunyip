@@ -79,12 +79,12 @@ fn build_card(h: &SystemHealth) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
             div class="flex flex-col space-y-1.5 p-6" {
-                h3 class="text-2xl font-semibold leading-none tracking-tight" { "Build" }
+                h3 class="text-2xl font-semibold leading-none tracking-tight" { "API Build" }
                 p class="text-sm text-muted-foreground" { "The exact source revision this instance was built from." }
             }
             div class="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2 text-sm" {
                 div { span class="text-muted-foreground" { "Version: " } (h.version) }
-                div { span class="text-muted-foreground" { "Commit: " } code class="font-mono" { (short_commit) } }
+                div { span class="text-muted-foreground" { "Revision: " } code class="font-mono" { (short_commit) } }
                 div { span class="text-muted-foreground" { "Describe: " } code class="font-mono" { (h.git_tag) } }
                 div { span class="text-muted-foreground" { "Built: " } (h.build_date) }
             }
