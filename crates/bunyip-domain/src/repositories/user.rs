@@ -49,6 +49,22 @@ impl UserRepository {
         Ok(user)
     }
 
+    /// Every live account with a verified address, oldest first: the accounts
+    /// the Mirzam backfill (BUNYIP-999) puts on the two lists.
+    pub async fn list_verified(pool: &PgPool) -> Result<Vec<User>, AppError> {
+        let users = sqlx::query_as::<_, User>(
+            r#"
+            SELECT * FROM users
+            WHERE email_verified AND deleted_at IS NULL
+            ORDER BY created_at, id
+            "#,
+        )
+        .fetch_all(pool)
+        .await?;
+
+        Ok(users)
+    }
+
     /// Find user by email
     pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query_as::<_, User>(
@@ -280,20 +296,31 @@ impl UserRepository {
         Ok(row)
     }
 
-    /// Update email verified status
-    pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
-        sqlx::query(
+    /// Mark the user's email verified. Returns `true` only when this call
+    /// changed it from unverified, so a caller can act on the transition (the
+    /// Mirzam sync, BUNYIP-998) and not on every magic-link sign-in.
+    pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<bool, AppError> {
+        Self::set_email_verified_in(pool, user_id).await
+    }
+
+    /// [`Self::set_email_verified`] on any executor, for a caller that flips
+    /// the flag inside its own transaction.
+    pub async fn set_email_verified_in<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
+    where
+        E: sqlx::Executor<'e, Database = Postgres>,
+    {
+        let result = sqlx::query(
             r#"
             UPDATE users
             SET email_verified = TRUE, updated_at = NOW()
-            WHERE id = $1
+            WHERE id = $1 AND email_verified = FALSE
             "#,
         )
         .bind(user_id)
-        .execute(pool)
+        .execute(executor)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     /// Update membership status
@@ -871,17 +898,18 @@ impl UserRepository {
     /// matches `pattern` (a SQL `LIKE` pattern, e.g. `%+e2e-%` for the disposable
     /// subaddress marker) (BUNYIP-246). The reaper safety net for crashed e2e
     /// runs. The eligible ids are resolved once (the cutoff uses the transaction
-    /// timestamp), then deleted via the shared helper. Returns the number of user
-    /// rows removed.
+    /// timestamp), then deleted via the shared helper. Returns each removed
+    /// row's `(id, email, email_verified, already soft-deleted)`, read before
+    /// the delete, so the caller can tell Mirzam (BUNYIP-998).
     pub async fn hard_delete_stale_disposable(
         pool: &PgPool,
         pattern: &str,
         max_age_secs: i64,
-    ) -> Result<u64, AppError> {
+    ) -> Result<Vec<(Uuid, String, bool, bool)>, AppError> {
         let mut tx = pool.begin().await?;
-        let ids: Vec<Uuid> = sqlx::query_scalar(
+        let rows: Vec<(Uuid, String, bool, bool)> = sqlx::query_as(
             r#"
-            SELECT id FROM users
+            SELECT id, email, email_verified, deleted_at IS NOT NULL FROM users
             WHERE email LIKE $1
               AND created_at < NOW() - ($2::double precision * INTERVAL '1 second')
             "#,
@@ -890,9 +918,10 @@ impl UserRepository {
         .bind(max_age_secs)
         .fetch_all(&mut *tx)
         .await?;
-        let removed = Self::clear_deps_and_delete_users(&mut tx, &ids).await?;
+        let ids: Vec<Uuid> = rows.iter().map(|row| row.0).collect();
+        Self::clear_deps_and_delete_users(&mut tx, &ids).await?;
         tx.commit().await?;
-        Ok(removed)
+        Ok(rows)
     }
 
     /// Set two_factor_enabled flag on a user
@@ -986,7 +1015,10 @@ impl UserRepository {
         sort_by: Option<&str>,
         sort_desc: bool,
     ) -> Result<(Vec<User>, i64), AppError> {
-        let offset = (page - 1) * per_page;
+        // BUNYIP-995: compute the offset in i64 and saturate, mirroring
+        // BUNYIP-946 F14, so a page value large enough to overflow an i32
+        // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
         let search_pattern = search.map(|s| format!("%{}%", s));
 
         let deleted_clause = match active {

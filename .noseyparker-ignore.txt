@@ -8,10 +8,14 @@
 /bunyip-api/tests/country_gate.rs
 /bunyip-api/tests/feature_toggles.rs
 /bunyip-api/tests/feedback_new_count.rs
+/bunyip-api/tests/host_secrets.rs
 /bunyip-api/tests/hub_refresh_op_session.rs
 /bunyip-api/tests/lifetime_totp_gate.rs
 /bunyip-api/tests/login_approval.rs
 /bunyip-api/tests/mailer_relay.rs
+/bunyip-api/tests/mirzam_backfill.rs
+/bunyip-api/tests/mirzam_config.rs
+/bunyip-api/tests/mirzam_sync.rs
 /bunyip-api/tests/pms709_repro.rs
 /bunyip-api/tests/rls_isolation.rs
 /bunyip-api/tests/super_admin_gate.rs
@@ -26,6 +30,7 @@
 /crates/bunyip-domain/src/models/stripe.rs
 /crates/bunyip-domain/src/services/org_pricing_tests.rs
 /crates/bunyip-domain/src/services/organizations_tests.rs
+/docs/host-secrets.md
 /docs/mailer-relay.md
 /e2e/lib/accounts.ts
 /e2e/tests/account/change-password.spec.ts

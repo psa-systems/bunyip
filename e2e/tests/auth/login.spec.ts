@@ -40,8 +40,14 @@ test.describe('auth login / session', () => {
       // rather than bouncing us back to the login screen.
       await page.goto('/settings');
       expect(page.url(), 'post-login /settings URL').not.toMatch(/\/login(\/|$)/);
-      const settingsForm = page.locator('form').first();
-      await expect(settingsForm, 'settings page should render a form').toBeVisible({
+      // Target the profile form by its action, NOT `form.first()`: since logout
+      // became a POST `<form action="/logout">` in the topbar profile menu
+      // (commit 4563c0f), the first form in the DOM is that hidden logout form,
+      // so `form.first()` resolved to it and never became visible. The profile
+      // form is always rendered in `<main>` and proves we reached the real
+      // settings page.
+      const settingsForm = page.locator('form[action="/settings/profile"]');
+      await expect(settingsForm, 'settings page should render the profile form').toBeVisible({
         timeout: 15_000,
       });
     } catch (err) {

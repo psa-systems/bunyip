@@ -333,10 +333,14 @@ async function fillTotpStep(page: Page): Promise<void> {
 // Browser-driven logout: submits the profile menu's POST /logout form, which
 // clears the access_token / refresh_token / bunyip_2fa cookies and redirects.
 // Logout is a POST (BUNYIP-907, CSRF under SameSite=Lax), so this opens the
-// profile menu and clicks "Log out" rather than navigating directly.
+// profile menu and clicks "Log out" rather than navigating directly. The button
+// is looked up inside that menu and by its exact name (BUNYIP-1013): a page-wide
+// substring match also finds the dashboard's "Log out all other devices", which
+// appears once the account holds more than one session.
 export async function logoutViaHub(page: Page): Promise<void> {
-  await page.locator('[data-menu]:not([data-mobile-nav]) summary').click();
-  await page.getByRole('button', { name: 'Log out' }).click();
+  const menu = page.locator('[data-menu]:not([data-mobile-nav])');
+  await menu.locator('summary').click();
+  await menu.getByRole('button', { name: 'Log out', exact: true }).click();
 }
 
 // An authenticated session can read its own user record (200); an anonymous

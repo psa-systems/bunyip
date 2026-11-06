@@ -118,6 +118,15 @@ pub enum AuditAction {
     /// Metadata carries host/port/tls and the `ok` result, never the recipient
     /// address (BUNYIP-265: no raw email addresses in logs).
     AdminTestEmailSent,
+    /// BUNYIP-997: an admin saved the Mirzam integration settings. Metadata
+    /// carries the four settings (public addresses and slugs, not secrets) and
+    /// whether the API token changed and to which provider, never the token.
+    AdminMirzamConfigUpdated,
+    /// BUNYIP-983: an admin saved the Mokosh Google OAuth client. Metadata
+    /// carries the client id (public, it travels in every OAuth redirect),
+    /// whether the secret changed and to which provider, and the SHA-256 of a
+    /// changed secret so two saves can be told apart, never the secret.
+    AdminMokoshConfigUpdated,
     AdminAutoBanConfigUpdated,
     AdminKeyRotation,
     /// BUNYIP-353: an account admin downloaded an account backup bundle.
@@ -289,6 +298,8 @@ impl AuditAction {
             AuditAction::AdminBrandingUpdated => "admin_branding_updated",
             AuditAction::AdminEmailConnectionTested => "admin_email_connection_tested",
             AuditAction::AdminTestEmailSent => "admin_test_email_sent",
+            AuditAction::AdminMirzamConfigUpdated => "admin_mirzam_config_updated",
+            AuditAction::AdminMokoshConfigUpdated => "admin_mokosh_config_updated",
             AuditAction::AdminAutoBanConfigUpdated => "admin_auto_ban_config_updated",
             AuditAction::AccountBackupCreated => "account_backup_created",
             AuditAction::AccountRestored => "account_restored",
@@ -373,6 +384,8 @@ impl AuditAction {
                 | AuditAction::AdminBrandingUpdated
                 | AuditAction::AdminEmailConnectionTested
                 | AuditAction::AdminTestEmailSent
+                | AuditAction::AdminMirzamConfigUpdated
+                | AuditAction::AdminMokoshConfigUpdated
                 | AuditAction::AdminAutoBanConfigUpdated
                 | AuditAction::AccountBackupCreated
                 | AuditAction::AccountRestored
@@ -683,6 +696,15 @@ mod tests {
         assert!(!AuditAction::UserRegistered.is_admin_action());
         assert!(!AuditAction::PasswordChanged.is_admin_action());
         assert!(!AuditAction::FeedbackSubmitted.is_admin_action());
+    }
+
+    #[test]
+    fn audit_action_admin_mirzam_config_updated() {
+        assert_eq!(
+            AuditAction::AdminMirzamConfigUpdated.as_str(),
+            "admin_mirzam_config_updated"
+        );
+        assert!(AuditAction::AdminMirzamConfigUpdated.is_admin_action());
     }
 
     #[test]
