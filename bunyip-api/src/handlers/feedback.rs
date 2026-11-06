@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::errors::AppError;
 use crate::handlers::feedback_classifier;
+use crate::handlers::mx_check::{self, MxLookupOutcome, MxResolver};
 use crate::middleware::{extract_client_ip, AdminUser, VerifiedAdminUser};
 use crate::models::{
     AuditAction, CreateAdminNotification, CreateAuditLog, CreateFeedback, FeedbackStatus,
@@ -415,6 +416,7 @@ pub async fn submit_feedback(
     pool: web::Data<PgPool>,
     email_service: web::Data<Arc<EmailService>>,
     config: web::Data<Config>,
+    mx_resolver: web::Data<Arc<dyn MxResolver>>,
     mut payload: Multipart,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
@@ -543,6 +545,14 @@ pub async fn submit_feedback(
         .unwrap_or_default()
         .to_string();
     let honeypot_flagged = !honeypot.is_empty();
+    // BUNYIP-925: MX-lookup for signal 4. Only runs when an email was
+    // submitted and an `@domain` is extractable; `Unknown` otherwise so
+    // the classifier short-circuits that signal.
+    let sender_domain_mx = if let Some(domain) = email.as_deref().and_then(mx_check::domain_of) {
+        mx_resolver.lookup(&domain).await
+    } else {
+        MxLookupOutcome::Unknown
+    };
     // BUNYIP-934: composite classifier. Runs even when the honeypot
     // already flagged, so the admin UI gets a reason either way, but
     // never un-flags a honeypot hit (short-circuits on OR). The
@@ -555,12 +565,13 @@ pub async fn submit_feedback(
             tags: &tags,
             // BUNYIP-474 enrichment is per-request upstream; the submit
             // path does not have the ASN cheaply here yet. Pass `None`
-            // until that wiring lands (follow-up); the other two signals
+            // until that wiring lands (follow-up); the other signals
             // still fire.
             ip_asn_name: None,
             recipient_domain_registrable_word: deployment_registrable_word(&config.email.base_url)
                 .as_deref(),
             recipient_domain_apex: deployment_apex_host(&config.email.base_url).as_deref(),
+            sender_domain_mx,
         });
     let is_spam = honeypot_flagged || classifier_reason.is_some();
 

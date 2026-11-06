@@ -619,6 +619,14 @@ async fn main() -> anyhow::Result<()> {
 
     info!(enabled = email_enabled, "Email service initialized");
 
+    // BUNYIP-925: shared MX-record resolver for the feedback spam gate.
+    // One instance per worker arena; the internal cache lives for the process
+    // lifetime and amortizes repeat lookups during a spam burst. The lookup
+    // itself has a short per-call timeout and fails open, so a transient DNS
+    // outage never drops real feedback.
+    let mx_resolver: Arc<dyn bunyip_api::handlers::mx_check::MxResolver> =
+        Arc::new(bunyip_api::handlers::mx_check::HickoryMxResolver::new());
+
     // BUNYIP-602 / BUNYIP-603: the send-only relay other apps in the suite call,
     // reading the shared `mailer_suppressions` table before every send. The same
     // store is handed to the feedback-webhook handler below, so the read on the
@@ -1464,6 +1472,8 @@ async fn main() -> anyhow::Result<()> {
             // Update checker for the root-level /version endpoint
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))
+            // BUNYIP-925: shared MX-record resolver for the feedback spam gate.
+            .app_data(web::Data::from(Arc::clone(&mx_resolver)))
             // Configure routes
             .configure(routes::configure)
     })

@@ -6,8 +6,8 @@
 //! signals are pure functions of the submitted row, so the classifier
 //! itself holds no state and no DB round-trip.
 //!
-//! The three signals, filed as [BUNYIP-932](research) + [BUNYIP-934]
-//! (implementation):
+//! The four signals, originally BUNYIP-932/934 (first three) and BUNYIP-925
+//! (fourth):
 //!
 //! 1. **Sender-domain mimicry.** The sender's email domain contains the
 //!    recipient's registrable word AND differs (e.g. `search-psa.systems`
@@ -19,6 +19,11 @@
 //!    short list of hosting providers (Interserver, OVH, Linode,
 //!    DigitalOcean, AWS, Hetzner). A hosting IP alone does not block
 //!    (CGNAT edge cases exist) but adds to the score.
+//! 4. **Sender domain has no MX records.** The submitter's email domain is
+//!    NXDOMAIN or holds no MX records at all. A real inbound mail server
+//!    rejects any address on such a domain; marketing floods use them to
+//!    avoid bounce handling. A resolver error or timeout leaves the row
+//!    un-flagged by this signal so a DNS outage never drops real feedback.
 //!
 //! The classifier short-circuits on the FIRST firing signal and does not
 //! enumerate every match: a submission that trips all three is still one
@@ -27,6 +32,8 @@
 //! classifier, not the full enumeration; and the "which signal fired
 //! first" ordering (strongest -> weakest) means a flagged row has the
 //! most specific reason attached.
+
+use crate::handlers::mx_check::MxLookupOutcome;
 
 /// Hosting-provider ASN name substrings for signal 3. Fixed, compile-time
 /// list; a `const` array scanned linearly costs nothing per call, unlike a
@@ -73,6 +80,11 @@ pub struct SpamClassifierInput<'a> {
     /// (`search-psa.systems`) apart from "a legitimate subdomain of the
     /// recipient" (`staff.psa.systems`).
     pub recipient_domain_apex: Option<&'a str>,
+    /// Outcome of the MX lookup against the sender's email domain. The
+    /// caller does the async DNS work; the classifier stays a pure function.
+    /// `Unknown` (resolver error or timeout) leaves the row unflagged by
+    /// this signal so transient DNS outages never swallow real feedback.
+    pub sender_domain_mx: MxLookupOutcome,
 }
 
 /// Classifier output. `None` for a clean submission; `Some(reason)` for a
@@ -82,6 +94,9 @@ pub fn classify_feedback_spam(input: &SpamClassifierInput<'_>) -> Option<String>
     if let Some(reason) = check_sender_mimicry(input) {
         return Some(reason);
     }
+    if let Some(reason) = check_sender_domain_has_no_mx(input) {
+        return Some(reason);
+    }
     if let Some(reason) = check_urls_plus_tags(input) {
         return Some(reason);
     }
@@ -89,6 +104,29 @@ pub fn classify_feedback_spam(input: &SpamClassifierInput<'_>) -> Option<String>
         return Some(reason);
     }
     None
+}
+
+/// BUNYIP-925 (signal 4): the sender's email domain is NXDOMAIN or holds no
+/// MX records. An A/AAAA-only domain still counts as no-MX because real
+/// inbound mail servers reject it; the classifier uses the same rule so a
+/// marketing flood from a bare-A domain never reaches the Active queue.
+///
+/// `Unknown` (resolver error or timeout) returns `None` by design: a transient
+/// DNS outage must not cause legitimate feedback to be dropped. `HasMx`
+/// returns `None` too. Only `NoMx` flags.
+fn check_sender_domain_has_no_mx(input: &SpamClassifierInput<'_>) -> Option<String> {
+    let sender = input.sender_email?;
+    let (_, domain) = sender.rsplit_once('@')?;
+    let domain = domain.trim().to_ascii_lowercase();
+    if domain.is_empty() {
+        return None;
+    }
+    match input.sender_domain_mx {
+        MxLookupOutcome::NoMx => Some(format!(
+            "sender domain {domain} has no MX records; cannot receive mail"
+        )),
+        MxLookupOutcome::HasMx | MxLookupOutcome::Unknown => None,
+    }
 }
 
 /// Signal 1: sender's email domain contains the recipient's registrable
@@ -194,6 +232,24 @@ mod tests {
         ip_asn: Option<&'a str>,
         recipient_word: Option<&'a str>,
     ) -> SpamClassifierInput<'a> {
+        input_with_mx(
+            sender,
+            message,
+            tags,
+            ip_asn,
+            recipient_word,
+            MxLookupOutcome::HasMx,
+        )
+    }
+
+    fn input_with_mx<'a>(
+        sender: Option<&'a str>,
+        message: &'a str,
+        tags: &'a [String],
+        ip_asn: Option<&'a str>,
+        recipient_word: Option<&'a str>,
+        sender_domain_mx: MxLookupOutcome,
+    ) -> SpamClassifierInput<'a> {
         SpamClassifierInput {
             sender_email: sender,
             message,
@@ -204,6 +260,7 @@ mod tests {
                 Some("psa") => Some("psa.systems"),
                 _ => None,
             },
+            sender_domain_mx,
         }
     }
 
@@ -368,5 +425,68 @@ mod tests {
     fn empty_input_is_clean() {
         let got = classify_feedback_spam(&input(None, "", &[], None, None));
         assert!(got.is_none());
+    }
+
+    /// BUNYIP-925: a sender whose domain has no MX records flags on signal 4.
+    #[test]
+    fn no_mx_sender_domain_flags_on_mx_signal() {
+        let tags = vec!["Bug".to_string()];
+        let got = classify_feedback_spam(&input_with_mx(
+            Some("anyone@unregistered.example"),
+            "The dashboard loads a split-second late.",
+            &tags,
+            None,
+            Some("psa"),
+            MxLookupOutcome::NoMx,
+        ));
+        let reason = got.expect("classifier flagged");
+        assert!(reason.contains("no MX records"), "mx reason: {reason}");
+    }
+
+    /// BUNYIP-925: a resolver error / timeout (`Unknown`) must not flag by
+    /// itself; the other signals get their chance.
+    #[test]
+    fn resolver_error_does_not_flag_by_itself() {
+        let tags = vec!["Bug".to_string()];
+        let got = classify_feedback_spam(&input_with_mx(
+            Some("alice@lovelace.example"),
+            "A short note.",
+            &tags,
+            None,
+            Some("psa"),
+            MxLookupOutcome::Unknown,
+        ));
+        assert!(got.is_none(), "unknown mx leaves the row clean: {got:?}");
+    }
+
+    /// BUNYIP-925: a sender whose domain has MX records passes this signal.
+    #[test]
+    fn mx_present_sender_passes_cleanly() {
+        let tags = vec!["Bug".to_string()];
+        let got = classify_feedback_spam(&input_with_mx(
+            Some("alice@lovelace.example"),
+            "A short note.",
+            &tags,
+            None,
+            Some("psa"),
+            MxLookupOutcome::HasMx,
+        ));
+        assert!(got.is_none(), "has_mx leaves the row clean: {got:?}");
+    }
+
+    /// BUNYIP-925: an anonymous submission (no sender email) does not trip
+    /// signal 4, regardless of the carried outcome.
+    #[test]
+    fn anonymous_submission_is_not_flagged_by_mx_signal() {
+        let tags = vec!["Bug".to_string()];
+        let got = classify_feedback_spam(&input_with_mx(
+            None,
+            "Anonymous submission.",
+            &tags,
+            None,
+            None,
+            MxLookupOutcome::NoMx,
+        ));
+        assert!(got.is_none(), "anonymous passes: {got:?}");
     }
 }
