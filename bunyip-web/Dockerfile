@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.28
 #
 # Development image for bunyip-web: the Axum SSR server with hot reload
 # (cargo-watch) + a Tailwind v4 watcher. The whole workspace is bind-mounted at

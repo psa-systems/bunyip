@@ -13,14 +13,14 @@ path = "src/main.rs"
 
 [dependencies]
 # Web server.
-axum = { version = "0.7", features = ["macros", "multipart"] }
+axum = { version = "0.8.9", features = ["macros", "multipart"] }
 tokio = { workspace = true }
-tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
 
 # HTML templating (compile-checked Rust macro) - rendered to String and wrapped
 # in axum::response::Html, so no version coupling with a maud "axum" feature.
-maud = "0.26"
+maud = "0.27.0"
 
 # BUNYIP-502: the branding-free shared SSR web-kit (icons/buttons/badges/boxes,
 # the auth-card shell, the Origin/Referer CSRF middleware). Re-exported through
@@ -36,14 +36,14 @@ bunyip-domain = { path = "../crates/bunyip-domain" }
 
 # BUNYIP-385: render the embedded top-level docs (src/docs/*.md) to HTML for the
 # public /docs pages. `html` feature only (no CLI / default features).
-pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 
 # Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
 # BUNYIP-559 F12: `gzip` makes the client advertise Accept-Encoding and decode
 # the reply transparently, so bunyip-api's Compress middleware has something to
 # negotiate with on the BFF hop. Without it the BFF never asks and every /v1
 # response crosses uncompressed, admin lists included.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "multipart", "stream", "gzip"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-tls", "multipart", "stream", "gzip"] }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -54,26 +54,26 @@ chrono = { workspace = true }
 # role reported by /users/me. Signature verification is not needed - the
 # /users/me call has already validated the token; we only decode to detect a
 # stale-role mismatch and rotate through /auth/refresh.
-base64 = "0.21"
+base64 = "0.23.1"
 
 # Percent-encode the OIDC return URL when shuttling it through the 2FA hop.
-urlencoding = "2"
+urlencoding = "2.1.3"
 
 # BUNYIP-311: parse TRUSTED_PROXY_CIDR into networks so the BFF can decide
 # whether its inbound socket peer (Traefik) is a trusted proxy before it
 # forwards the resolved end-user IP to bunyip-api as X-Forwarded-For. Same
 # crate + version bunyip-api uses (crates/bunyip-domain) so the CIDR parsing
 # matches on both hops of the trust chain.
-ipnetwork = "0.20"
+ipnetwork = "0.21.1"
 
 # BUNYIP-112: parse + validate URL fields at the web edge (icon_url,
 # source_code_url, health_check_url, webhook_url) so malformed values never
 # reach the API or render as broken `href`s. Already in tree transitively via
 # reqwest -> url; declared here to use it directly.
-url = "2"
+url = "2.5.8"
 
 # Server-side QR rendering (otpauth URI -> inline SVG) for 2FA setup.
-qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+qrcode = { version = "0.14.1", default-features = false, features = ["svg"] }
 
 # Logging.
 tracing = { workspace = true }
