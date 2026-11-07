@@ -58,10 +58,11 @@ on:
     # No `paths-ignore:` here (STD-3.1, BUNYIP-1040): a workflow-level filter
     # on a `pull_request` trigger drops the whole workflow when it does not
     # match, so a required check never reports for the PRs it was meant to
-    # cost nothing. The guard job still runs on every PR regardless of the
-    # diff; the `cargo` job's classify-diff step below is what skips
-    # Clippy, the lockfile-sync check, Unit tests, the docker builder stage
-    # and `cargo fmt` for a docs-only or comment-only PR instead.
+    # cost nothing. The `guards` and `secrets` jobs still run on every PR
+    # regardless of the diff; the `cargo` job's classify-diff step below is
+    # what skips Clippy, the lockfile-sync check, Unit tests, the docker
+    # builder stage and `cargo fmt` for a docs-only or comment-only PR
+    # instead.
 
 # Supersede obsolete runs. `github.ref` differs between the pull_request
 # ref (refs/pull/<N>/merge) and the main push (refs/heads/main), so PRs
