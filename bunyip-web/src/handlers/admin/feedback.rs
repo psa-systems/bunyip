@@ -21,6 +21,7 @@ use crate::web::{redirect_cookies, AppState};
 use super::with_attachment_hardening;
 use super::PageQuery;
 
+// SPEC-12.9.2
 /// BUNYIP-938: query shape for the three live feedback tabs (Active /
 /// Closed / Spam). The Archive view has its own handler and its own
 /// query. Dedicated struct so adding filters here does not force every
@@ -42,6 +43,7 @@ pub struct FeedbackListQuery {
     pub q: Option<String>,
 }
 
+// SPEC-12.9.2
 /// Parse the tri-state `attachment` / `response` query values into
 /// Option<bool>. "yes" -> Some(true), "no" -> Some(false), anything else
 /// -> None (no filter).
@@ -53,6 +55,7 @@ fn tri_state(value: Option<&str>) -> Option<bool> {
     }
 }
 
+// SPEC-12.9.1
 /// Top-of-page tabs that bucket the feedback queue by triage state.
 /// Active is the working queue (new/reviewed/responded, not spam).
 /// Closed is the resolved bin (status=closed, not spam). Spam is
@@ -103,6 +106,7 @@ impl FeedbackTab {
         }
     }
 
+    // SPEC-12.9.7
     /// Parse the `?from=` slug back into a tab; unknown / absent defaults to
     /// Active (the safe fallback, matching [`from_tab_path`]).
     pub(super) fn from_query(from: Option<&str>) -> FeedbackTab {
@@ -115,6 +119,7 @@ impl FeedbackTab {
     }
 }
 
+// SPEC-12.9.1
 fn feedback_tabs(current: FeedbackTab) -> Markup {
     let tab_class = |selected: bool| {
         if selected {
@@ -207,6 +212,7 @@ fn feedback_pager_base(tab: FeedbackTab, q: &FeedbackListQuery) -> String {
     }
 }
 
+// SPEC-12.9.2, SPEC-12.9.3, SPEC-12.9.11
 async fn render_feedback_list(
     st: AppState,
     headers: HeaderMap,
@@ -295,6 +301,7 @@ async fn render_feedback_list(
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
+// SPEC-12.9.5
 /// Inline status chip for a feedback row / detail header, mirroring the
 /// users-list verification indicator (icon + short label, color-coded) so the
 /// two admin lists read the same (BUNYIP-422).
@@ -318,6 +325,7 @@ fn feedback_status_chip(status: &FeedbackStatus) -> Markup {
     }
 }
 
+// SPEC-12.9.4
 /// One feedback row: a whole-row link into the detail view (BUNYIP-422),
 /// matching the users-list row-as-link pattern. The row surfaces subject,
 /// submitter identity, source page, a message excerpt, the relative
@@ -366,6 +374,7 @@ pub(super) fn feedback_row(
     }
 }
 
+// SPEC-12.9.6
 /// The tab-aware triage actions for one feedback item, shown on the detail
 /// page (BUNYIP-422 moved these off the list rows). Mirrors the previous
 /// per-row action set: Active gets review / close / archive / spam / delete,
@@ -455,6 +464,7 @@ pub struct StatusForm {
     pub from: Option<String>,
 }
 
+// SPEC-12.9.7
 /// Map a `from` form value to the tab path the BFF redirects back to
 /// after a row action. Unknown values default to `/admin/feedback`
 /// (Active) which is the safe fallback.
@@ -467,6 +477,7 @@ fn from_tab_path(from: Option<&str>) -> &'static str {
     }
 }
 
+// SPEC-12.9.8
 pub async fn feedback_status(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -512,6 +523,7 @@ pub struct FromForm {
     pub from: Option<String>,
 }
 
+// SPEC-12.9.9
 /// POST /admin/feedback/:id/mark-spam (BUNYIP-92).
 pub async fn feedback_mark_spam(
     State(st): State<AppState>,
@@ -536,6 +548,7 @@ pub async fn feedback_mark_spam(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.9.9
 /// POST /admin/feedback/:id/unmark-spam (BUNYIP-92).
 pub async fn feedback_unmark_spam(
     State(st): State<AppState>,
@@ -560,6 +573,7 @@ pub async fn feedback_unmark_spam(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.9.9
 /// POST /admin/feedback/:id/archive (BUNYIP-93). Per-row archive: the
 /// row moves out of `feedback` and into `feedback_archive`. Reversible
 /// from the Archive tab via the existing Restore button (BUNYIP-85).
@@ -583,6 +597,7 @@ pub async fn feedback_archive_action(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.9.9
 /// POST /admin/feedback/:id/delete (BUNYIP-92). Hard delete, gated by a
 /// JS confirm() on the form; the BFF does NOT add a second confirmation.
 pub async fn feedback_delete(
@@ -605,6 +620,7 @@ pub async fn feedback_delete(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.10.8, SPEC-12.10.9: a non-2xx answer must never be saved as the CSV file
 /// GET /admin/feedback/export
 ///
 /// BFF proxy for the bunyip-api CSV export. The browser cannot hit
@@ -663,6 +679,7 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
     }
 }
 
+// SPEC-12.10.1
 /// GET /admin/feedback/:id
 ///
 /// Detail subpage for a single feedback submission. Shows the unmasked
@@ -699,6 +716,7 @@ pub struct FeedbackDetailQuery {
     pub from: Option<String>,
 }
 
+// SPEC-12.10.2, SPEC-12.10.3, SPEC-12.10.4: only the masked address is shown
 /// Renders the feedback detail page. `response_value` overrides the
 /// textarea's pre-fill with a just-submitted (and possibly rejected) draft;
 /// `None` falls back to the persisted `admin_response` (the plain GET case).
@@ -873,6 +891,7 @@ pub struct RespondForm {
     pub response: String,
 }
 
+// SPEC-12.10.5, SPEC-12.10.6
 /// POST /admin/feedback/:id/respond
 pub async fn feedback_respond(
     State(st): State<AppState>,
@@ -929,6 +948,7 @@ pub async fn feedback_respond(
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
+// SPEC-12.10.10, SPEC-12.9.11
 /// GET /admin/feedback/archive
 pub async fn feedback_archive(
     State(st): State<AppState>,
@@ -1001,6 +1021,7 @@ pub async fn feedback_archive(
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
 }
 
+// SPEC-12.10.7
 /// Render the attachments block on the feedback detail page. Image
 /// MIMEs get an inline `<img>` thumbnail loaded from the same BFF
 /// proxy URL; other MIMEs (text/plain) stay as a plain download link
@@ -1034,6 +1055,7 @@ fn feedback_attachments_view(feedback_id: &str, atts: &[FeedbackAttachmentMeta])
     }
 }
 
+// SPEC-12.10.7
 /// Render byte count as KB / MB with one decimal. Bytes-only for tiny
 /// (rare) values. Used in the attachments list.
 fn format_size(bytes: i64) -> String {
@@ -1047,6 +1069,7 @@ fn format_size(bytes: i64) -> String {
     }
 }
 
+// SPEC-12.10.8, SPEC-12.10.9
 /// GET /admin/feedback/:id/attachments/:attachment_id
 ///
 /// BFF proxy for a single feedback attachment. The browser cannot hit
@@ -1106,6 +1129,7 @@ pub async fn feedback_attachment(
     }
 }
 
+// SPEC-12.9.10
 /// POST /admin/feedback/archive/:archive_id/restore
 pub async fn feedback_restore(
     State(st): State<AppState>,

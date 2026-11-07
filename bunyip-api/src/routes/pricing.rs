@@ -7,6 +7,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.24.5: public pricing payload
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/pricing", web::get().to(handlers::public_pricing));
 }

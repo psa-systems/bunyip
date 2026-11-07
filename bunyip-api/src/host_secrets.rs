@@ -32,6 +32,7 @@ use bunyip_domain::config::{Config, GovernedSecret};
 use bunyip_domain::repositories::MokoshConfigRepository;
 use bunyip_domain::services::EncryptionKeySet;
 
+// SPEC-9.13.1: a key is servable only if it is a variant here
 /// A secret this route can serve, by the key a caller asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostSecret {
@@ -40,6 +41,7 @@ pub enum HostSecret {
     MokoshGoogleOauthClient,
 }
 
+// SPEC-9.13.2
 /// Every servable key, which is also what `machine-client register
 /// --secret-key` validates an operator's spelling against.
 pub const HOST_SECRET_KEYS: &[&str] = &[HostSecret::MokoshGoogleOauthClient.key()];
@@ -53,6 +55,7 @@ impl HostSecret {
         }
     }
 
+    // SPEC-9.13.1
     /// The variant for a key, or `None` for a key this build cannot serve.
     pub fn parse(key: &str) -> Option<Self> {
         match key {
@@ -61,6 +64,7 @@ impl HostSecret {
         }
     }
 
+    // SPEC-9.13.3: both halves or neither
     /// The value, or `None` when nothing is set for it yet.
     ///
     /// Both halves or neither: a pair with one half missing is not a usable

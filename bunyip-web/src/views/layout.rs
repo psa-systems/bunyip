@@ -21,6 +21,7 @@ use crate::views::ui::{button_class, icon};
 // sse_subscriber_script, theme_controls, admin_block(_grid), NavItem, nav_links,
 // the APP_* consts) moved to the shared web-kit crate; re-exported so this
 // module's kept builders and every handler call site resolve them unchanged.
+// SPEC-11.20.3
 pub use web_kit::shell::*;
 
 /// BUNYIP-561: the admin-managed branding record (product name, tagline, meta
@@ -32,6 +33,7 @@ pub fn branding() -> Arc<Branding> {
     crate::branding::current()
 }
 
+// SPEC-11.23.1: empty when unbranded; callers omit markup
 /// The product name for the nav mark, the browser-title suffix and
 /// `og:site_name`. Empty when nothing has been branded and nothing has loaded,
 /// in which case every site that renders it omits it.
@@ -39,6 +41,7 @@ pub fn brand_name() -> String {
     branding().brand_name.clone()
 }
 
+// SPEC-11.22.1
 /// BUNYIP-561: the browser-title string, `"<page> · <brand>"`, or the bare page
 /// title when nothing has been branded. Also what `og:title` carries, so the
 /// two never disagree. Pure, so the omission rule is unit-testable.
@@ -50,6 +53,7 @@ fn document_title(page_title: &str, branding: &Branding) -> String {
     }
 }
 
+// SPEC-11.22.8: committed image is a fallback, never an override
 /// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
 /// is empty, so an unbranded deployment emits none of them rather than
 /// advertising a placeholder. There is deliberately no `og:url`: `document()`
@@ -70,6 +74,8 @@ fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
     }
 }
 
+// SPEC-11.22.2, SPEC-11.22.3, SPEC-11.22.4, SPEC-11.22.5, SPEC-11.22.6, SPEC-11.22.7, SPEC-11.22.9:
+// every tag omitted when its source is empty
 fn social_meta(page_title: &str, branding: &Branding) -> Markup {
     let share_image = share_image(branding, default_share_image());
     let has_any = !branding.brand_name.is_empty()
@@ -96,6 +102,7 @@ fn social_meta(page_title: &str, branding: &Branding) -> Markup {
     }
 }
 
+// SPEC-11.22.11, SPEC-11.22.12: derived icon set replaces the committed one
 /// BUNYIP-560: the icon set, from the branding record when an admin has
 /// uploaded a favicon source, and from the committed files under
 /// `bunyip-web/assets/` when they have not.
@@ -131,6 +138,7 @@ struct IconLink {
     committed_type: Option<&'static str>,
 }
 
+// SPEC-11.22.10, SPEC-11.22.13, SPEC-11.36.2, SPEC-11.36.6: kinds must be on the /brand allow-list
 /// The icon set every page references, ordered as browsers read it.
 ///
 /// The derived 512 is PNG while the committed one is WebP: BUNYIP-554 measured
@@ -198,10 +206,12 @@ const FAVICON_LINKS: &[IconLink] = &[
     },
 ];
 
+// SPEC-11.21.1
 pub fn document(title: &str, body: Markup) -> Markup {
     document_with_avatar_picker(title, body, false)
 }
 
+// SPEC-11.21.15, SPEC-11.36.1: assets are immutable for a year; the ?v= busts them
 /// BUNYIP-554: `document()` plus the avatar picker's stylesheet and controller.
 /// The picker renders on exactly one page (`/settings`), so the shared shell
 /// carries only `AVATAR_SLOT_CSS` - the one rule its avatar image needs - and
@@ -210,17 +220,20 @@ pub fn document(title: &str, body: Markup) -> Markup {
 pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker: bool) -> Markup {
     let branding = branding();
     html! {
+        // SPEC-11.21.2
         (DOCTYPE)
         html lang="en" {
             head {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
+                // SPEC-11.21.3
                 // BUNYIP-561: omitted, not defaulted, when the admin has set no
                 // description. A compiled-in sentence here is exactly the copy
                 // this issue took out of the binary.
                 @if !branding.meta_description.is_empty() {
                     meta name="description" content=(branding.meta_description);
                 }
+                // SPEC-11.21.4
                 // BUNYIP-560/568: the record, else omitted. Nothing compiled in
                 // and no environment variable behind it.
                 @if let Some(c) = palette_value(&branding.theme_color_light) {
@@ -230,9 +243,12 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                     meta name="theme-color" media="(prefers-color-scheme: dark)" content=(c);
                 }
                 (social_meta(title, &branding))
+                // SPEC-11.21.5
                 title { (document_title(title, &branding)) }
                 (favicon_links(&branding))
+                // SPEC-11.21.6
                 link rel="stylesheet" href=(asset("/assets/styles.css"));
+                // SPEC-11.21.7: record CSS is validated api-side to hold no angle bracket
                 // BUNYIP-500: theme override. The brand `@theme` tokens read
                 // `var(--skin-*, <default>)`, so a palette recolors the UI by
                 // setting `--skin-*` here. CSP already allows
@@ -245,6 +261,7 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 @if let Some(css) = palette_value(&branding.theme_css) {
                     style { ":root{" (PreEscaped(css)) "}" }
                 }
+                // SPEC-11.21.8, SPEC-11.21.9, SPEC-11.21.10, SPEC-11.36.4: first-party scripts; theme.js sync
                 // BUNYIP-294: `defer` so no script blocks HTML parsing. A
                 // render-blocking `<script src>` in `<head>` gated page-ready
                 // timing on network latency, which raced the automated credential
@@ -267,6 +284,7 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 // <html> before first paint or the page flashes the wrong theme.
                 script src=(asset("/assets/js/theme.js")) {}
                 script src=(asset("/assets/js/app.js")) defer {}
+                // SPEC-11.21.11, SPEC-11.21.12
                 // BUNYIP-408: avatar CSS shipped inline (not via the separately
                 // cached styles.css) so a stale stylesheet can never leave the
                 // component's structural rules undefined. BUNYIP-554: only the
@@ -279,6 +297,7 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
                 }
             }
             body {
+                // SPEC-11.21.13
                 // BUNYIP-243: app-wide "service unavailable" banner. Renders
                 // nothing while bunyip-api is reachable; when down it shows on
                 // every page (including /login) so an outage is communicated
@@ -302,11 +321,13 @@ pub fn document_with_avatar_picker(title: &str, body: Markup, with_avatar_picker
     }
 }
 
+// SPEC-11.21.14: sits below the h-16 header
 /// The toast container's classes (BUNYIP-1015). A constant so the test that
 /// keeps it below the header reads the same string the shell renders.
 pub(crate) const TOAST_ROOT_CLASS: &str =
     "pointer-events-none fixed top-20 right-4 left-4 z-50 flex flex-col items-end gap-2 sm:left-auto";
 
+// SPEC-11.23.2, SPEC-11.23.3: empty alt: the link text already names the product
 /// The nav mark: the uploaded brand image when one is set (BUNYIP-560),
 /// otherwise the reed-and-eyes glyph ported from the Dioxus `BrandMark`
 /// component. The glyph is a shape drawn in the theme's own `currentColor`, not
@@ -334,6 +355,7 @@ pub(crate) fn brand_mark(branding: &Branding) -> Markup {
     }
 }
 
+// SPEC-11.23.4: wordmark length is admin-managed, so it must shrink
 fn brand() -> Markup {
     html! {
         // The wordmark is admin-managed, so its length is unknown at build
@@ -353,6 +375,7 @@ fn brand() -> Markup {
     }
 }
 
+// SPEC-11.24.10, SPEC-11.24.11: href is the no-JS fallback; app.js adds ?from=
 /// Floating "open feedback" launcher pinned to the bottom-right of the
 /// viewport. BUNYIP-370: mounted by EVERY authenticated shell -
 /// `dashboard_shell` and `admin_shell` - so feedback can be sent from any
@@ -388,6 +411,8 @@ fn feedback_launcher() -> Markup {
     }
 }
 
+// SPEC-11.24.2, SPEC-11.24.3, SPEC-11.24.4, SPEC-11.24.5, SPEC-11.24.6, SPEC-11.24.7:
+// Pricing and Applications links exist only when their pages do
 /// `_show_feedback` is the public-shell flag that gates whether the floating
 /// launcher is mounted; the header itself no longer renders any feedback
 /// affordance (the launcher lives below the page content, mounted by the
@@ -466,6 +491,7 @@ fn header(
     }
 }
 
+// SPEC-11.24.3, SPEC-11.24.4, SPEC-11.24.8, SPEC-11.24.9
 fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: bool) -> Markup {
     let year = chrono::Utc::now().format("%Y").to_string();
     html! {
@@ -523,6 +549,7 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
     }
 }
 
+// SPEC-11.24.1, SPEC-11.24.11
 /// `show_feedback` mirrors the historical `launcher: bool` parameter (the name
 /// changed when the floating widget was retired; the semantic stays the same).
 /// `true` for the marketing pages (Pricing / Our Story / Terms / Privacy);
@@ -547,6 +574,7 @@ pub fn public_shell(
     }
 }
 
+// SPEC-11.25.2, SPEC-11.25.3: flagged entries are absent, not disabled, while off
 fn dashboard_items(is_member: bool) -> Vec<NavItem> {
     let mut items = vec![NavItem {
         title: "Dashboard",
@@ -622,6 +650,7 @@ fn dashboard_items(is_member: bool) -> Vec<NavItem> {
     items
 }
 
+// SPEC-11.25.4, SPEC-11.25.5, SPEC-11.25.6, SPEC-11.25.7: every icon name must resolve or the glyph renders empty
 // BUNYIP-919: `feedback_badge` is the new-items bubble shown on the Feedback
 // item (and only that item); every other entry passes `badge: None`. The caller
 // (`admin_response` via `admin_shell`) supplies it per render.
@@ -817,6 +846,7 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
     ]
 }
 
+// SPEC-11.25.1, SPEC-11.25.5, SPEC-11.25.7: one list feeds the sidebar and the below-md disclosure
 /// BUNYIP-547: the complete nav destination list of an authenticated shell,
 /// grouped into the sections a divider separates. The cross-shell switch
 /// (BUNYIP-417) is its own leading section; the page items follow. Both the
@@ -858,6 +888,7 @@ fn shell_nav_sections(
     sections
 }
 
+// SPEC-11.25.8
 /// BUNYIP-547: the authenticated navigation below the `md` breakpoint, where
 /// [`sidebar`] is not rendered at all. A `<details data-menu>` disclosure, the
 /// same pattern [`profile_menu`] uses, so it inherits the click-away and Escape
@@ -884,6 +915,7 @@ fn mobile_nav(
     }
 }
 
+// SPEC-11.25.9
 fn sidebar(
     admin: bool,
     is_admin: bool,
@@ -911,6 +943,7 @@ fn sidebar(
     }
 }
 
+// SPEC-11.26.4
 /// BUNYIP-408: the round avatar shown in the profile menu. Renders the uploaded
 /// image when the user has one; otherwise a gradient circle with the display
 /// name's initial. `size` supplies the Tailwind sizing classes (e.g. `h-8 w-8`).
@@ -937,6 +970,7 @@ fn avatar_badge(user: &User, size: &str) -> Markup {
     }
 }
 
+// SPEC-11.26.3
 /// BUNYIP-408: the consistent upper-right profile menu shared by every shell
 /// (dashboard, admin, and the public header). An avatar button opens a dropdown
 /// containing a link to profile settings and Log out - replacing the old
@@ -969,6 +1003,7 @@ fn profile_menu(user: &User) -> Markup {
     }
 }
 
+// SPEC-11.26.2: one click at every width
 /// BUNYIP-630: the destinations a signed-in visitor reaches most, promoted out
 /// of the sidebar into the top bar so each is ONE click from every page rather
 /// than a menu open away. Applications was reached through membership and then
@@ -994,6 +1029,7 @@ fn topbar_link(href: &str, label: &str, glyph: &str) -> Markup {
     }
 }
 
+// SPEC-11.26.1
 /// `nav` is the below-`md` navigation disclosure ([`mobile_nav`]), rendered left
 /// of the page title. It is the only nav an authenticated shell has under 768px,
 /// where [`sidebar`] is `hidden` (BUNYIP-547).
@@ -1021,6 +1057,7 @@ fn app_topbar(title: &str, user: &User, nav: Markup) -> Markup {
     }
 }
 
+// SPEC-11.25.10, SPEC-11.25.12: only Admin role gets admin entry points
 /// `topbar_title` is the heading rendered in the top bar (NOT the browser
 /// `<title>`). BUNYIP-499: it is the bare page title; the browser tab's
 /// " · {app_name}" suffix is appended separately in `document()`, so the header
@@ -1045,6 +1082,7 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
     }
 }
 
+// SPEC-11.25.11, SPEC-11.25.12
 // BUNYIP-919: `feedback_badge` is the admin sidebar's Feedback new-items bubble,
 // fetched once per render by `admin_response` (via `admin_guard`) and passed in.
 pub fn admin_shell(

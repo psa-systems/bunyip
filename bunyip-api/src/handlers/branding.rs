@@ -17,6 +17,7 @@ use crate::repositories::BrandingRepository;
 use crate::responses::{get_request_id, success};
 
 /// `GET /v1/branding`
+// SPEC-10.27.2: unauthenticated branding read
 pub async fn public_branding(
     req: HttpRequest,
     branding: web::Data<Arc<BrandingCache>>,
@@ -41,6 +42,7 @@ pub async fn public_branding(
 /// control that should apply. The BFF relays it with a day-long
 /// `Cache-Control`, so a visitor spends a handful of requests per browser per
 /// day, and a throttled one loses an icon rather than a page.
+// SPEC-10.27.3, SPEC-10.27.4: allow-listed kind, 404 when unset
 pub async fn public_branding_asset(
     pool: web::Data<PgPool>,
     kind: web::Path<String>,

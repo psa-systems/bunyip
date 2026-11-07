@@ -14,6 +14,7 @@ use crate::models::{AuditAction, CreateApplicationDoc, CreateAuditLog, UpdateApp
 use crate::repositories::{ApplicationDocRepository, ApplicationRepository, AuditLogRepository};
 use crate::responses::{get_request_id, success};
 
+// SPEC-10.6.7, SPEC-10.6.9: only the app being active gates public docs.
 /// 404 unless `slug` names an ACTIVE application. Docs are public content
 /// (BUNYIP-388): readable for any active app regardless of whether the app
 /// itself requires an entitlement to download or launch, so a user can read how
@@ -26,6 +27,7 @@ async fn require_active_app(pool: &PgPool, slug: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+// SPEC-10.6.7: public page index.
 /// Public: `GET /v1/applications/{slug}/docs` - the app's doc-page index
 /// (metadata only, ordered). Empty list when the app has no docs.
 pub async fn list_app_docs(
@@ -40,6 +42,7 @@ pub async fn list_app_docs(
     Ok(success(docs, request_id))
 }
 
+// SPEC-10.6.8: public list of documented apps.
 /// Public: `GET /v1/application-docs` - every ACTIVE application that has at
 /// least one documentation page (BUNYIP-635). The `/docs` hub lists these
 /// alongside its own static pages; it cannot use `/v1/applications`, which
@@ -53,6 +56,7 @@ pub async fn list_documented_apps(
     Ok(success(apps, request_id))
 }
 
+// SPEC-10.6.9: one public page.
 /// Public: `GET /v1/applications/{slug}/docs/{doc_slug}` - one doc page.
 pub async fn get_app_doc(
     req: HttpRequest,
@@ -68,6 +72,7 @@ pub async fn get_app_doc(
     Ok(success(doc, request_id))
 }
 
+// SPEC-10.6.10: admin full-row listing.
 /// Admin: `GET /v1/admin/applications/{app_id}/docs` - all pages for an app
 /// (full rows, for the manager UI).
 pub async fn list_app_docs_admin(
@@ -82,6 +87,7 @@ pub async fn list_app_docs_admin(
     Ok(success(docs, request_id))
 }
 
+// SPEC-10.6.11: audited create.
 /// Admin: `POST /v1/admin/applications/{app_id}/docs` - create a page.
 pub async fn create_app_doc(
     req: HttpRequest,
@@ -105,6 +111,7 @@ pub async fn create_app_doc(
     Ok(success(doc, request_id))
 }
 
+// SPEC-10.6.11: audited patch.
 /// Admin: `PUT /v1/admin/application-docs/{doc_id}` - patch a page.
 pub async fn update_app_doc(
     req: HttpRequest,
@@ -128,6 +135,7 @@ pub async fn update_app_doc(
     Ok(success(doc, request_id))
 }
 
+// SPEC-10.6.12: 404 when absent; audited.
 /// Admin: `DELETE /v1/admin/application-docs/{doc_id}` - remove a page.
 pub async fn delete_app_doc(
     req: HttpRequest,

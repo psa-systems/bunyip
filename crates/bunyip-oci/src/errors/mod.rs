@@ -8,6 +8,8 @@
 pub use bunyip_domain::errors::*;
 
 pub use dunite_oci::errors::oci;
+// SPEC-6.20.1: status map and envelope are defined by the engine
 pub use dunite_oci::errors::oci::OciError;
 
+// SPEC-6.20.4: every internal failure is logged here before it becomes a bare 500
 pub use dunite_oci::errors::context::{internal_fault, OciErrorContext};

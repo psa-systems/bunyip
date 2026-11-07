@@ -48,6 +48,7 @@ pub enum InfisicalError {
 
 /// The shared outbound timeout used across bunyip (see `main.rs`
 /// `backchannel_http_client`); a slow or unreachable Infisical fails fast.
+// SPEC-8.4.2
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// A minimal Infisical client: Universal Auth login + read one secret by name.
@@ -101,6 +102,7 @@ impl InfisicalClient {
     /// Build a client from settings. Returns `None` when any required field is
     /// missing; the caller decides what that means, which depends on whether
     /// Infisical is the declared store (fatal) or merely inspectable (skipped).
+    // SPEC-8.4.1, SPEC-8.4.2
     pub fn from_settings(settings: &InfisicalSettings) -> Option<Self> {
         if settings.address.is_empty()
             || settings.project_id.is_empty()
@@ -146,6 +148,7 @@ impl InfisicalClient {
     }
 
     /// Universal Auth login, returning the access token.
+    // SPEC-8.4.3
     async fn login(&self) -> Result<String, InfisicalError> {
         let body = LoginRequest {
             client_id: &self.client_id,
@@ -181,6 +184,7 @@ impl InfisicalClient {
     /// the cause: in `SECRETS_STORAGE=infisical` the caller makes it fatal,
     /// because "the store of record is unreachable" and "the store of record is
     /// empty" are different facts.
+    // SPEC-8.4.4, SPEC-8.4.5: 404 is absent; every other failure is an Err
     pub async fn fetch_secret(&self, name: &str) -> Result<Option<String>, InfisicalError> {
         let token = self.login().await?;
         let resp = self
@@ -227,6 +231,7 @@ impl InfisicalClient {
     /// is what both callers (the admin write path and `secrets-migrate --to
     /// infisical`) actually want, and neither knows whether the key exists yet.
     /// The machine identity needs WRITE access to `INFISICAL_SECRET_PATH`.
+    // SPEC-8.4.6: PATCH first, POST only on 404
     pub async fn upsert_secret(&self, name: &str, value: &str) -> Result<(), InfisicalError> {
         let token = self.login().await?;
         let body = WriteSecretRequest {
@@ -282,6 +287,7 @@ impl InfisicalClient {
 
     /// Delete one secret by name, for `secrets-purge` (BUNYIP-542). A key that
     /// is already gone (404) counts as deleted, so the purge is idempotent.
+    // SPEC-8.4.7: 404 counts as deleted so purge is idempotent
     pub async fn delete_secret(&self, name: &str) -> Result<(), InfisicalError> {
         let token = self.login().await?;
         let resp = self
@@ -311,6 +317,7 @@ impl InfisicalClient {
 
 /// Keep an error body short enough for one log line. Infisical error bodies name
 /// the project/path and the missing permission, never a secret value.
+// SPEC-8.4.8
 fn truncate_body(body: &str) -> String {
     const MAX: usize = 300;
     let trimmed = body.trim();

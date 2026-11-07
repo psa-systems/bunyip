@@ -10,6 +10,7 @@ use uuid::Uuid;
 // `crate::models::user::*` paths are unchanged and a8n-tools and bunyip cannot
 // drift on the string values or on the tier-selection boundary. The `User` row
 // struct below stays bunyip-side: it carries columns a8n's schema does not have.
+// SPEC-7.2.5: shared vocabulary so string values cannot drift.
 pub use dunite_user_core::{MembershipStatus, UserRole};
 
 // BUNYIP-488: dunite still names the enum `SubscriptionTier`; DUNITE-7 renames it.
@@ -17,6 +18,7 @@ pub use dunite_user_core::{MembershipStatus, UserRole};
 // dunite `rev` is bumped.
 pub use dunite_user_core::SubscriptionTier as MembershipTier;
 
+// SPEC-7.2.147, SPEC-7.2.153, SPEC-7.2.154: password_hash never serialized; markers and flags.
 /// User database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct User {
@@ -86,6 +88,7 @@ pub struct User {
 }
 
 impl User {
+    // SPEC-7.2.148: string columns converted via the shared crate.
     /// Get the user's role as enum
     pub fn role_enum(&self) -> UserRole {
         UserRole::from(self.role.as_str())
@@ -96,6 +99,7 @@ impl User {
         MembershipStatus::from(self.membership_status.as_str())
     }
 
+    // SPEC-7.2.149: admin iff role is "admin".
     /// Check if user is admin
     pub fn is_admin(&self) -> bool {
         self.role == "admin"
@@ -116,6 +120,7 @@ impl User {
         MembershipTier::from(self.membership_tier.as_str())
     }
 
+    // SPEC-7.2.149: one trial per user.
     /// Whether a new checkout should carry the one-time signup free trial
     /// (BUNYIP-209 / BUNYIP-225). Eligible only until the trial has been used:
     /// a returning member who cancels and resubscribes has `has_used_trial =
@@ -124,6 +129,7 @@ impl User {
         !self.has_used_trial
     }
 
+    // SPEC-7.2.150: admin, lifetime, live trial, live grace, then status.
     /// Check if the user is allowed to access protected features.
     ///
     /// Access is granted when ANY of the following are true:
@@ -156,6 +162,7 @@ impl User {
     }
 }
 
+// SPEC-7.2.151: lowercase only, matching the LOWER() lookups.
 /// Normalize an email address for storage (BUNYIP-325).
 ///
 /// The address stored on the user row must never diverge in case from the
@@ -175,6 +182,7 @@ pub fn normalize_email(email: &str) -> String {
     email.to_lowercase()
 }
 
+// SPEC-7.2.155: new-user input.
 /// Data for creating a new user
 #[derive(Debug, Clone)]
 pub struct CreateUser {
@@ -183,6 +191,7 @@ pub struct CreateUser {
     pub role: UserRole,
 }
 
+// SPEC-7.2.152: public shape; no secrets or billing ids.
 /// Public user response (no sensitive data)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -219,6 +228,7 @@ pub struct UserResponse {
     pub is_super_admin: bool,
 }
 
+// SPEC-7.2.152: suspended derives from deleted_at.
 impl From<User> for UserResponse {
     fn from(user: User) -> Self {
         Self {

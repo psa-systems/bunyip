@@ -21,7 +21,9 @@
 # bunyip-api mints.
 
 services:
+  # SPEC-14.31.1, SPEC-14.31.3, SPEC-14.31.4: proxy routes the web host; no published port
   web:
+    # SPEC-14.31.1: proxy publishes, not the container
     ports: !reset []
     environment:
       BUNYIP_OIDC_ISSUER: ${BUNYIP_OIDC_ISSUER:?BUNYIP_OIDC_ISSUER missing - copy .env.example to .env and fill in}
@@ -55,6 +57,7 @@ services:
       - traefik.http.routers.bunyip-${USER}.tls.certresolver=cert-cloudflare
       - traefik.http.services.bunyip-${USER}.loadbalancer.server.port=4400
 
+  # SPEC-14.31.2, SPEC-14.31.3, SPEC-14.31.4: issuer, origins and cookie domain move to the public hosts
   # The api joins the Traefik network ONLY to expose the OCI registry on its
   # own per-developer hostname. docker login/pull require TLS; Traefik
   # terminates it with a real certificate and forwards both /v2/* and
@@ -104,6 +107,7 @@ services:
       - traefik.http.routers.bunyip-registry-${USER}.rule=Host(`${USER}-bunyip-registry.a8n.run`)
       - traefik.http.routers.bunyip-registry-${USER}.entrypoints=web-secure,nebula-secure
       - traefik.http.routers.bunyip-registry-${USER}.tls.certresolver=cert-cloudflare
+      # SPEC-14.31.5: two services on one container need explicit links
       # This container now exposes TWO services (registry + OP), so each router
       # MUST name its service explicitly; without it Traefik refuses to
       # auto-link ("cannot be linked automatically with multiple Services") and
@@ -118,6 +122,7 @@ services:
       - traefik.http.routers.bunyip-api-${USER}.service=bunyip-api-${USER}
       - traefik.http.services.bunyip-api-${USER}.loadbalancer.server.port=4401
 
+# SPEC-14.31.3: shared proxy network is external
 networks:
   traefik-public:
     name: network-traefik-public

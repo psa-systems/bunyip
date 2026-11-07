@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use super::download::{AppOciImage, ArtifactSource};
 
+// SPEC-7.2.7: row contract; artifact_source is one of the two constants below.
 /// Application database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Application {
@@ -56,6 +57,7 @@ pub struct Application {
     pub updated_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.22: public shape; internal fields stay out.
 /// Application response for public API (excludes internal fields)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApplicationResponse {
@@ -79,6 +81,7 @@ pub struct ApplicationResponse {
 }
 
 impl ApplicationResponse {
+    // SPEC-7.2.20, SPEC-7.2.21: accessibility and maintenance-message rules.
     /// Create from Application with access flag
     pub fn from_application(app: Application, has_access: bool) -> Self {
         Self {
@@ -103,6 +106,7 @@ impl ApplicationResponse {
     }
 }
 
+// SPEC-7.2.8: the only two artifact_source values.
 /// `applications.artifact_source` value: download via the Forgejo Releases API.
 pub const ARTIFACT_SOURCE_RELEASE: &str = "release";
 /// `applications.artifact_source` value: download via the Forgejo generic
@@ -110,6 +114,7 @@ pub const ARTIFACT_SOURCE_RELEASE: &str = "release";
 pub const ARTIFACT_SOURCE_GENERIC_PACKAGE: &str = "generic_package";
 
 impl Application {
+    // SPEC-7.2.10: single per-product access decision.
     /// The per-product access decision (BUNYIP-39), in ONE place so the OCI,
     /// download, and web gates cannot drift. Given whether the caller is an
     /// admin and whether they hold an active entitlement, returns whether the
@@ -122,12 +127,14 @@ impl Application {
         !self.requires_entitlement || is_admin || is_entitled
     }
 
+    // SPEC-7.2.9: exact, case-sensitive match.
     /// Whether `value` is an allowed `artifact_source` (mirrors the DB CHECK
     /// constraint; admin handlers validate against this before writing).
     pub fn valid_artifact_source(value: &str) -> bool {
         value == ARTIFACT_SOURCE_RELEASE || value == ARTIFACT_SOURCE_GENERIC_PACKAGE
     }
 
+    // SPEC-7.2.17: downloadable iff a source resolves.
     /// Convenience wrapper over [`Application::download_source`]: whether this
     /// application's Forgejo download configuration is complete. Public API
     /// surface for admin/UI code (BUNYIP-33/34); handlers that also need the
@@ -136,6 +143,7 @@ impl Application {
         self.download_source().is_some()
     }
 
+    // SPEC-7.2.11: needs a pinned release tag.
     /// Build the dunite-download [`ArtifactSource`] for this application, when
     /// its Forgejo download configuration is complete.
     ///
@@ -146,6 +154,8 @@ impl Application {
         self.download_source_for(self.pinned_release_tag.as_deref()?)
     }
 
+    // SPEC-7.2.12, SPEC-7.2.13, SPEC-7.2.14, SPEC-7.2.15, SPEC-7.2.16: per-source coordinates;
+    // unknown source warns and yields None; no allow-list check here.
     /// Like [`download_source`](Self::download_source) but resolves an explicit version
     /// tag instead of the current `pinned_release_tag`, so the download proxy can serve a
     /// recorded historical version (BUNYIP-386). Callers MUST gate `version` against the
@@ -182,6 +192,7 @@ impl Application {
         }
     }
 
+    // SPEC-7.2.18: active and all three OCI fields set.
     /// True when all three OCI fields are set AND the application is active.
     pub fn is_pullable(&self) -> bool {
         self.is_active
@@ -190,6 +201,7 @@ impl Application {
             && self.pinned_image_tag.is_some()
     }
 
+    // SPEC-7.2.19: the one place a pull reference is built (repository is the slug).
     /// Member-facing OCI pull coordinates against the public registry host,
     /// `Some` only when this application [`is pullable`](Self::is_pullable).
     ///
@@ -216,6 +228,7 @@ impl Application {
     }
 }
 
+// SPEC-7.2.29, SPEC-7.2.30: built by create/update so both validate alike.
 /// The distribution-related fields of an application configuration, borrowed
 /// for validation. Handlers build it via [`CreateApplication::distribution`] /
 /// [`UpdateApplication::distribution_merged`] so the field mapping AND the
@@ -233,6 +246,7 @@ pub struct DistributionConfig<'a> {
 }
 
 impl DistributionConfig<'_> {
+    // SPEC-7.2.23: first failing rule wins, in the order of the checks below.
     /// Validate the configuration. Returns `(field, message)` on failure so
     /// handlers can map it to a validation error.
     ///
@@ -248,6 +262,7 @@ impl DistributionConfig<'_> {
     ///   + tag.
     /// - OCI config is all-or-nothing: owner + name + tag.
     pub fn validate(&self) -> Result<(), (&'static str, String)> {
+        // SPEC-7.2.24: emptiness rule.
         // Reject empty/whitespace values outright: every later check treats
         // Some("") as "present", so letting them through would store unusable
         // coordinates that only fail when a member tries to pull or download.
@@ -271,6 +286,7 @@ impl DistributionConfig<'_> {
             }
         }
 
+        // SPEC-7.2.25: known-value rule.
         if let Some(source) = self.artifact_source {
             if !Application::valid_artifact_source(source) {
                 return Err((
@@ -282,6 +298,7 @@ impl DistributionConfig<'_> {
 
         let is_generic_package = self.artifact_source == Some(ARTIFACT_SOURCE_GENERIC_PACKAGE);
 
+        // SPEC-7.2.26: package only for generic_package.
         // A package name on a release source is silently dead configuration;
         // reject it so the misconfiguration is visible at write time.
         if self.forgejo_package.is_some() && !is_generic_package {
@@ -291,6 +308,7 @@ impl DistributionConfig<'_> {
             ));
         }
 
+        // SPEC-7.2.27: Forgejo group is all-or-nothing.
         let forgejo_any = self.forgejo_owner.is_some()
             || self.forgejo_repo.is_some()
             || self.forgejo_package.is_some()
@@ -316,6 +334,7 @@ impl DistributionConfig<'_> {
             ));
         }
 
+        // SPEC-7.2.28: OCI group is all-or-nothing.
         let oci_any = self.oci_image_owner.is_some()
             || self.oci_image_name.is_some()
             || self.pinned_image_tag.is_some();
@@ -334,6 +353,7 @@ impl DistributionConfig<'_> {
     }
 }
 
+// SPEC-7.2.32: required and optional create fields.
 /// Data for creating an application (admin only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateApplication {
@@ -368,6 +388,7 @@ pub struct CreateApplication {
 }
 
 impl CreateApplication {
+    // SPEC-7.2.29: one-to-one mapping into DistributionConfig.
     /// The distribution fields of this request, for validation. Owns the
     /// body-to-[`DistributionConfig`] mapping so handlers cannot drift from
     /// [`UpdateApplication::distribution_merged`].
@@ -385,6 +406,7 @@ impl CreateApplication {
     }
 }
 
+// SPEC-7.2.34: both credentials are required.
 /// Request body for deleting an application (requires password + 2FA)
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeleteApplicationRequest {
@@ -392,6 +414,7 @@ pub struct DeleteApplicationRequest {
     pub totp_code: String,
 }
 
+// SPEC-7.2.35: full ordered id list.
 /// Request body for reordering applications (BUNYIP-473): the full list of
 /// application ids in their new display order. Each id's `sort_order` is set to
 /// its index, so positions are always distinct and the previous "swap two equal
@@ -401,6 +424,7 @@ pub struct ReorderApplicationsRequest {
     pub ordered_ids: Vec<Uuid>,
 }
 
+// SPEC-7.2.33: all optional; forgejo_package "" clears.
 /// Data for updating an application (admin only)
 #[derive(Debug, Clone, Deserialize)]
 pub struct UpdateApplication {
@@ -434,6 +458,7 @@ pub struct UpdateApplication {
 }
 
 impl UpdateApplication {
+    // SPEC-7.2.30, SPEC-7.2.31: request over stored row; "" clears forgejo_package only.
     /// The distribution fields of this request MERGED over the existing row,
     /// for validation: every field falls back to `old`'s value when the
     /// request omits it. An empty-string `forgejo_package` (the documented

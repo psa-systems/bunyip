@@ -16,6 +16,7 @@ use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
 
+// SPEC-12.12.3
 /// Render one active IP auto-ban row: the banned IP, reason, strike count, when
 /// it was banned and when it expires, plus an Unban button that POSTs to the
 /// lift handler.
@@ -50,6 +51,7 @@ const DEFAULT_MANUAL_BAN_SECS: i64 = 86_400;
 const MIN_MANUAL_BAN_SECS: i64 = 60;
 const MAX_MANUAL_BAN_SECS: i64 = 31_536_000;
 
+// SPEC-12.12.4
 /// The "add a ban" card (BUNYIP-413): address, reason and duration. Rendered
 /// only for the super admin, who is the only account the API will accept it
 /// from.
@@ -114,6 +116,7 @@ fn enrich_field(label: &str, value: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.12.5: advisory only; absence must not read as a clean address
 /// Advisory ASN / VPN enrichment panel for the looked-up address (BUNYIP-437).
 ///
 /// Rendered only when the page arrives with `?ip=` (an admin looking up or about
@@ -167,6 +170,7 @@ fn ip_enrichment_panel(ip: &str, enrichment: &Option<IpEnrichment>) -> Markup {
     }
 }
 
+// SPEC-12.12.1, SPEC-12.12.2, SPEC-12.12.5: the API returns the whole live ban map, so filtering is local
 /// Admin IP auto-ban view (BUNYIP-320): the currently-active IP bans surfaced by
 /// the subtask 7 endpoint, each liftable in place. AdminUser-guarded like the
 /// other admin pages; the add form (BUNYIP-413) is super-admin-only.
@@ -295,6 +299,7 @@ pub struct CreateBanForm {
     pub duration_secs: String,
 }
 
+// SPEC-12.12.6
 /// Ban an IP by hand (BUNYIP-413), then redirect back to the list with a
 /// success/error toast. Super-admin-only, enforced again by the API, which
 /// validates the address, reason and duration and audits the ban.
@@ -344,6 +349,7 @@ pub struct UnbanForm {
     pub ip: String,
 }
 
+// SPEC-12.12.7
 /// Lift an IP auto-ban (BUNYIP-320), then redirect back to the list with a
 /// success/error toast. AdminUser-guarded.
 pub async fn ip_unban(

@@ -9,6 +9,7 @@ use crate::models::tier::TierConfigRow;
 pub struct TierConfigRepository;
 
 impl TierConfigRepository {
+    // SPEC-7.3.161
     pub async fn get(pool: &PgPool) -> Result<TierConfigRow, AppError> {
         let row = sqlx::query_as::<_, TierConfigRow>("SELECT * FROM tier_config WHERE id = 1")
             .fetch_one(pool)
@@ -25,6 +26,7 @@ impl TierConfigRepository {
     /// simply omits the price columns. The numeric slots/trials and the
     /// `pricing_enabled` / `orgs_enabled` switches stay plain `COALESCE`
     /// (keep-on-None).
+    // SPEC-7.3.165
     pub async fn update(
         pool: &PgPool,
         lifetime_slots: Option<i64>,

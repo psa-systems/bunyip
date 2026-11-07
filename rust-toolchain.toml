@@ -1,3 +1,4 @@
+# SPEC-14.2.1, SPEC-14.2.2, SPEC-2.1.5: exact pin, bumped with the builder image tags
 # Pin the Rust toolchain so CI, local checks, and the rust-builder images all
 # agree on one compiler.
 #

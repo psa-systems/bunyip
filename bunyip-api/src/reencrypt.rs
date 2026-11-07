@@ -27,6 +27,7 @@ use crate::repositories::{
 };
 use crate::services::EncryptionKeySet;
 
+// SPEC-9.18.2
 /// What one pass did, per secret store.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ReencryptSummary {
@@ -46,6 +47,7 @@ impl ReencryptSummary {
     }
 }
 
+// SPEC-9.18.5
 impl std::fmt::Display for ReencryptSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -58,6 +60,7 @@ impl std::fmt::Display for ReencryptSummary {
     }
 }
 
+// SPEC-9.18.2, SPEC-9.18.3
 /// Re-encrypt the TOTP secrets (active and BUNYIP-355 pending).
 pub async fn reencrypt_totp(
     pool: &PgPool,
@@ -119,6 +122,7 @@ pub async fn reencrypt_totp(
     Ok(summary)
 }
 
+// SPEC-9.18.4
 /// Re-encrypt the Stripe secret key and webhook signing secret.
 pub async fn reencrypt_stripe(
     pool: &PgPool,
@@ -264,6 +268,7 @@ pub async fn reencrypt_mokosh(
     Ok(summary)
 }
 
+// SPEC-9.18.1
 /// Run the whole pass: TOTP secrets, Stripe secrets, the SMTP and IMAP
 /// passwords, the Mirzam API token and the Mokosh Google client secret.
 pub async fn reencrypt_all(

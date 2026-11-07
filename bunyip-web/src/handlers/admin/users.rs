@@ -19,6 +19,7 @@ use crate::web::{redirect_cookies, AppState};
 use super::audit::audit_row;
 use super::rate_limits::rate_limit_row;
 
+// SPEC-12.35.4: real user is 3 of 4 signals
 /// BUNYIP-930: `Real user: Yes` iff three or more of the four signals are
 /// present. Email verification carries no extra weight; the rule stays
 /// inspectable without a hidden weighting table (decision 2026-10-20).
@@ -40,6 +41,7 @@ pub(super) fn is_real_user(
     score >= 3
 }
 
+// SPEC-12.34.1: users list query
 #[derive(Deserialize)]
 pub struct UserQuery {
     pub page: Option<u32>,
@@ -65,6 +67,7 @@ pub struct UserQuery {
     pub page_size: Option<u32>,
 }
 
+// SPEC-12.34.2: verified filter is tri-state
 /// BUNYIP-410 overhaul: map the `verified` filter query value to the API's
 /// tri-state filter. `verified` -> only verified, `unverified` -> only
 /// unverified, anything else -> no filter (both).
@@ -76,6 +79,7 @@ pub(super) fn parse_verified_filter(s: &str) -> Option<bool> {
     }
 }
 
+// SPEC-12.34.9: tier label
 /// Human-readable label for a membership tier badge.
 pub(super) fn tier_label(tier: &crate::api::types::MembershipTier) -> &'static str {
     use crate::api::types::MembershipTier::*;
@@ -107,6 +111,7 @@ pub(super) struct UsersQ {
 }
 
 impl UsersQ {
+    // SPEC-12.34.1: normalize the query
     pub(super) fn from_query(q: UserQuery) -> Self {
         let status = match q.status.as_deref() {
             Some("suspended") => "suspended",
@@ -131,6 +136,7 @@ impl UsersQ {
         }
     }
 
+    // SPEC-12.34.7: only non-default params
     /// Build the `/admin/users` URL for this state, emitting only non-default
     /// params so a clean list is a clean URL.
     pub(super) fn href(&self) -> String {
@@ -163,6 +169,7 @@ impl UsersQ {
         }
     }
 
+    // SPEC-12.34.7: filter changes reset to page 1
     pub(super) fn with_search(&self, v: &str) -> Self {
         let mut q = self.clone();
         q.search = v.trim().to_string();
@@ -198,6 +205,7 @@ impl UsersQ {
         q.page = 1;
         q
     }
+    // SPEC-12.34.7: sort toggle
     /// Toggle sort on `col`: same column flips direction, a new column starts
     /// ascending.
     pub(super) fn with_sort(&self, col: &str) -> Self {
@@ -212,6 +220,7 @@ impl UsersQ {
         q
     }
 
+    // SPEC-12.34.6: narrowed list state
     /// True when any content filter (search / tier / verification) or a
     /// non-default status segment is applied - i.e. the list is narrowed.
     pub(super) fn is_filtered(&self) -> bool {
@@ -238,11 +247,13 @@ fn htmx_script() -> Markup {
     html! { script src=(crate::views::layout::asset("/assets/vendor/htmx-2.0.3.min.js")) defer {} }
 }
 
+// SPEC-12.34.3, SPEC-12.34.4: users list page or htmx fragment
 pub async fn users(
     State(st): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<UserQuery>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -262,6 +273,7 @@ pub async fn users(
     )
     .await;
     let fetch_error = data.as_ref().err().cloned();
+    // SPEC-12.34.3: denominator fetch may fail without failing the list
     // Denominator for "N of M users". stats.total_users counts live accounts;
     // good enough for the common Active view and only ever a hint.
     let total_all = admin_api::stats(&st.api, c.forward.as_deref())
@@ -271,6 +283,7 @@ pub async fn users(
 
     let panel = users_panel(&uq, data.as_ref().ok(), total_all, fetch_error.as_ref());
 
+    // SPEC-12.34.4: htmx request gets only the panel
     // BUNYIP-410 overhaul: htmx swaps just the panel (search-as-you-type, sort,
     // filter, page) so focus and scroll survive and there is no full reload. A
     // non-htmx request (first load, no-JS, refresh) gets the whole page. The URL
@@ -331,6 +344,7 @@ fn filter_dropdown(prefix: &str, current: &str, options: &[(String, String, bool
     }
 }
 
+// SPEC-12.34.8: status segmented control
 /// The Active / All / Suspended segmented control (single element, one selected,
 /// arrow-key navigable via `data-segmented` in `assets/js/admin-users.js`, radiogroup
 /// ARIA).
@@ -357,6 +371,7 @@ fn segmented_control(uq: &UsersQ) -> Markup {
     }
 }
 
+// SPEC-12.34.8: sortable header
 /// A sortable column header. A link (no-JS: navigates; JS: swaps the panel), with
 /// Space-key activation added in `assets/js/admin-users.js`, a direction chevron on the
 /// active column, and a dimmed up/down chevron on inactive columns so their
@@ -380,6 +395,7 @@ fn sort_header(uq: &UsersQ, col: &str, label: &str) -> Markup {
     }
 }
 
+// SPEC-12.34.9: email verification indicator
 /// Email-verification indicator (green check / amber alert), shared by rows.
 /// Explicitly labelled "Email verified" / "Email unverified" so an admin does
 /// not read it as "the whole account is verified" and miss that names and
@@ -395,6 +411,7 @@ fn verified_indicator(verified: bool) -> Markup {
     }
 }
 
+// SPEC-12.34.9: both names non-blank
 /// Whether both first and last name are supplied (whitespace does not count),
 /// mirroring the shape of `handlers::names_present` which takes a `User`.
 fn admin_names_present(u: &crate::api::types::AdminUser) -> bool {
@@ -404,6 +421,7 @@ fn admin_names_present(u: &crate::api::types::AdminUser) -> bool {
     present(u.first_name.as_deref()) && present(u.last_name.as_deref())
 }
 
+// SPEC-12.34.9: profile completeness indicator
 /// Profile-completeness indicator: supplied names versus the "Name missing"
 /// nudge. Separate from the email-verified indicator so an admin can tell the
 /// two apart on a row: a spam sign-up often clears email verification but
@@ -419,6 +437,7 @@ fn profile_complete_indicator(complete: bool) -> Markup {
     }
 }
 
+// SPEC-12.34.9, SPEC-12.34.10: user row, suspended rows are not links
 /// One user row in the grid. Active users are a whole-row link into the detail
 /// (hover background + focus-visible ring, chevron hint). Suspended users cannot
 /// open the detail (a soft-deleted lookup 404s), so their row is not a link and
@@ -495,6 +514,7 @@ pub(super) fn user_grid_row(u: &crate::api::types::AdminUser) -> Markup {
     }
 }
 
+// SPEC-12.34.8: removable filter chips
 /// Removable filter chips + "Clear all", in a reserved-height row so their
 /// appearance never shifts the list. Empty (no chips) still occupies the row.
 fn filter_chips(uq: &UsersQ) -> Markup {
@@ -551,6 +571,7 @@ fn filter_chips(uq: &UsersQ) -> Markup {
     }
 }
 
+// SPEC-12.34.8: pager and page size
 /// Prev / next pager + a page-size dropdown, all as panel-swapping links.
 fn users_pager(uq: &UsersQ, total_pages: i64) -> Markup {
     let size_opt = |n: u32| -> (String, String, bool) {
@@ -580,6 +601,7 @@ fn users_pager(uq: &UsersQ, total_pages: i64) -> Markup {
     }
 }
 
+// SPEC-12.34.5, SPEC-12.34.6, SPEC-12.34.8: swappable users panel
 /// The swappable panel: heading + result count, filter bar, chips, the sortable
 /// grid list, pager. `data == None` renders the error state with a retry.
 pub(super) fn users_panel(
@@ -761,12 +783,14 @@ const USERS_FILTER_CSS: &str = r#".users-loading{opacity:0;pointer-events:none;t
 pub struct RoleForm {
     pub role: String,
 }
+// SPEC-12.36.1, SPEC-12.36.2, SPEC-12.20.2, SPEC-12.20.3: role change
 pub async fn user_role(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(f): Form<RoleForm>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -793,11 +817,13 @@ pub async fn user_role(
         };
     redirect_cookies(&target, &c.set_cookies)
 }
+// SPEC-12.36.3: delete user
 pub async fn user_delete(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -815,11 +841,13 @@ pub async fn user_delete(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.36.4: suspend user
 pub async fn user_suspend(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -840,6 +868,7 @@ pub async fn user_suspend(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.36.5: reactivate user
 /// Reactivate a suspended user, then return to the suspended list so the admin
 /// stays in the same view (BUNYIP-120).
 pub async fn user_reactivate(
@@ -847,6 +876,7 @@ pub async fn user_reactivate(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -870,11 +900,13 @@ pub async fn user_reactivate(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.36.6: password reset email
 pub async fn user_reset_password(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -907,6 +939,7 @@ pub struct EmailForm {
     pub verified: Option<String>,
 }
 
+// SPEC-12.37.1, SPEC-12.37.2: correct email
 /// POST /admin/users/{id}/email - correct a user's email (BUNYIP-119).
 pub async fn user_email(
     State(st): State<AppState>,
@@ -914,6 +947,7 @@ pub async fn user_email(
     Path(id): Path<String>,
     Form(f): Form<EmailForm>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -939,12 +973,14 @@ pub async fn user_email(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.37.3: force-verify email
 /// POST /admin/users/{id}/email/verify - force-verify a user's email (BUNYIP-119).
 pub async fn user_verify_email(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -959,12 +995,14 @@ pub async fn user_verify_email(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.37.4: clear two-factor
 /// POST /admin/users/{id}/two-factor/reset - clear a user's 2FA (BUNYIP-119).
 pub async fn user_reset_2fa(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -988,12 +1026,14 @@ pub struct LifetimeActionForm {
     pub totp_code: String,
 }
 
+// SPEC-12.38.3: lifetime grant needs the admin's 2FA code
 pub async fn user_grant_lifetime(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(f): Form<LifetimeActionForm>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1017,12 +1057,14 @@ pub async fn user_grant_lifetime(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.38.3: lifetime revoke needs the admin's 2FA code
 pub async fn user_revoke_lifetime(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Form(f): Form<LifetimeActionForm>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1058,6 +1100,7 @@ pub struct TierChangeForm {
     pub totp_code: String,
 }
 
+// SPEC-12.38.1, SPEC-12.38.2: 2FA-gated tier move
 /// POST /admin/users/{id}/tier (BUNYIP-431). Relays the destination tier and the
 /// admin's 2FA code to the API, which applies the move only on a valid code. On
 /// a bad/absent code the API returns a validation error and nothing changes; we
@@ -1069,6 +1112,7 @@ pub async fn user_set_tier(
     Path(id): Path<String>,
     Form(f): Form<TierChangeForm>,
 ) -> Response {
+    // SPEC-12.20.1, SPEC-12.20.4: admin gate, then the verification gate, before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1091,6 +1135,7 @@ pub async fn user_set_tier(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.35.8: actions card, each prompt names the user
 /// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
 /// BUNYIP-430: the per-user "Actions" card. Every state-changing control here
 /// routes through the one shared confirmation dialog - the `data-confirm`
@@ -1130,6 +1175,7 @@ pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Ma
     }
 }
 
+// SPEC-12.35.9: any-to-any tier options and 2FA field
 /// BUNYIP-431: move a member to any configured tier. The options never depend on
 /// the member's current tier (any-to-any, including downgrades). Applying a
 /// change requires the acting admin's own 2FA code - a stronger gate than the
@@ -1183,11 +1229,13 @@ pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
     }
 }
 
+// SPEC-12.35.1, SPEC-12.35.5, SPEC-12.35.6, SPEC-12.35.7: user detail page
 pub async fn user_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1211,6 +1259,7 @@ pub async fn user_detail(
     };
     let is_admin_target = matches!(target.role, crate::api::types::UserRole::Admin);
 
+    // SPEC-12.35.2: card shown only when this user is throttled
     // This user's currently-active throttles (BUNYIP-317). The active set is
     // small by design (the API builds it in memory), so a single page of the
     // API max (100) covers every realistic case; filter it to this user.
@@ -1224,6 +1273,7 @@ pub async fn user_detail(
             Err(_) => Vec::new(),
         };
 
+    // SPEC-12.35.3: newest 25 audit entries
     // BUNYIP-930: the user's own audit log, newest 25 entries. The Real User
     // classifier reads a bool over the same list, so one fetch covers both the
     // badge (used/not) and the User activity section (rendered). A failed
@@ -1247,6 +1297,7 @@ pub async fn user_detail(
         .map(|p| p.items.clone())
         .unwrap_or_default();
     let has_audit = !user_audit.is_empty();
+    // SPEC-12.35.4: classifier input
     let real_user = is_real_user(
         target.first_name.as_deref(),
         target.last_name.as_deref(),

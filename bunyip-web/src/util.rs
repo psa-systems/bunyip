@@ -7,6 +7,7 @@ use crate::api::types::{
     Application, MembershipStatus, MembershipTier, PricingResponse, User, UserRole,
 };
 
+// SPEC-11.12.1
 /// Format a Stripe price amount for display. A zero-amount lifetime price is
 /// `Some(0)` -> "$0.00" (not "--"); a null amount -> "--".
 ///
@@ -29,6 +30,7 @@ pub fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String 
     }
 }
 
+// SPEC-11.12.2
 /// "year" when the tier's own `recurring_interval` says so, else "month" -
 /// the admin catalog form offers only Monthly and Yearly per price
 /// (BUNYIP-828), so any other value (including absent, e.g. a one-time
@@ -41,6 +43,7 @@ pub fn price_period(interval: Option<&str>) -> &'static str {
     }
 }
 
+// SPEC-11.12.2
 /// The formatted amount plus the period it actually bills for, e.g.
 /// "$99.00/year" - never an assumed "/month" (BUNYIP-828).
 pub fn price_with_period(amount: i64, currency: &str, interval: Option<&str>) -> String {
@@ -51,6 +54,7 @@ pub fn price_with_period(amount: i64, currency: &str, interval: Option<&str>) ->
     )
 }
 
+// SPEC-11.12.3
 /// BUNYIP-590: the cheapest monthly price a visitor can still sign up for,
 /// formatted with its period, or `None` when nothing is published. Restricted
 /// to tiers whose `recurring_interval` is `"month"` (BUNYIP-828), which also
@@ -71,6 +75,7 @@ pub fn entry_price(pricing: &PricingResponse) -> Option<String> {
         .map(|t| price_with_period(t.amount, &t.currency, t.interval.as_deref()))
 }
 
+// SPEC-11.12.4
 /// BUNYIP-590: the published price of ONE tier, formatted with its actual
 /// period (BUNYIP-828), or `None` when that tier is not published.
 /// Availability is ignored on purpose: a sold-out tier still prices the
@@ -88,6 +93,7 @@ pub fn tier_price(pricing: &PricingResponse, tier: &MembershipTier) -> Option<St
         .map(|t| price_with_period(t.amount, &t.currency, t.interval.as_deref()))
 }
 
+// SPEC-11.12.5
 /// BUNYIP-590: the currency the published tiers are priced in, for the amounts
 /// that arrive without one of their own (the per-user locked price, which
 /// bunyip-api stores as bare cents). `usd` when nothing is published, matching
@@ -102,6 +108,7 @@ pub fn pricing_currency(pricing: &PricingResponse) -> String {
         .to_string()
 }
 
+// SPEC-11.12.6
 /// BUNYIP-684: `{subdomain}.{domain}`, only when the row declares a subdomain and
 /// an app domain is configured. The slug is never guessed into a host.
 pub fn app_host(app: &Application, domain: &str) -> Option<String> {
@@ -113,12 +120,14 @@ pub fn app_host(app: &Application, domain: &str) -> Option<String> {
     (!domain.is_empty()).then(|| format!("{sub}.{domain}"))
 }
 
+// SPEC-11.12.6
 /// External URL for an app: `https://` plus [`app_host`], or `None` when the
 /// host is not declared, so no view renders a guessed or `#` link.
 pub fn app_link(app: &Application, domain: &str) -> Option<String> {
     app_host(app, domain).map(|host| format!("https://{host}"))
 }
 
+// SPEC-11.12.6
 /// Launch URL for a SIGNED-IN user: [`app_link`]'s host plus `/dashboard`
 /// (BUNYIP-638). `/dashboard`, not the apex, so the child app's AuthGuard sees a
 /// protected route and starts the OIDC code flow against the user's existing OP
@@ -128,6 +137,7 @@ pub fn app_launch_link(app: &Application, domain: &str) -> Option<String> {
     app_link(app, domain).map(|base| format!("{base}/dashboard"))
 }
 
+// SPEC-11.12.7
 /// Tailwind gradient class pairs an application card's accent is drawn from.
 pub const APP_GRADIENTS: [&str; 4] = [
     "from-indigo-500 to-primary",
@@ -140,6 +150,7 @@ pub const APP_GRADIENTS: [&str; 4] = [
 /// group" reads as its own state instead of borrowing a group's colour.
 pub const UNGROUPED_APP_GRADIENT: &str = "from-primary to-primary";
 
+// SPEC-11.12.7
 /// Accent for one application card, keyed to its group (BUNYIP-495). Colour
 /// means "these belong together", so it only moves when an admin regroups the
 /// application. It is deliberately NOT a function of the card's position: a
@@ -152,6 +163,7 @@ pub fn app_gradient(group_id: Option<&str>) -> &'static str {
     }
 }
 
+// SPEC-11.12.7: fixed hash so accents survive restarts.
 /// FNV-1a. A fixed hash, not `DefaultHasher`, whose `RandomState` seed changes
 /// per process and would repaint every tile on restart.
 fn fnv1a(s: &str) -> u64 {
@@ -163,12 +175,14 @@ fn fnv1a(s: &str) -> u64 {
     hash
 }
 
+// SPEC-11.12.8
 fn is_future(iso: &str) -> bool {
     DateTime::parse_from_rfc3339(iso)
         .map(|d| d.with_timezone(&Utc) > Utc::now())
         .unwrap_or(false)
 }
 
+// SPEC-11.12.8
 /// Mirrors `hasActiveMembership` / backend `has_member_access`.
 pub fn has_active_membership(user: Option<&User>) -> bool {
     let Some(user) = user else { return false };
@@ -179,6 +193,7 @@ pub fn has_active_membership(user: Option<&User>) -> bool {
         || user.membership_status == MembershipStatus::GracePeriod
 }
 
+// SPEC-11.12.9
 /// Coarse "x ago" string for an ISO timestamp. Ported from `formatRelativeTime`.
 pub fn relative_time(iso: &str) -> String {
     let Ok(then) = DateTime::parse_from_rfc3339(iso) else {
@@ -215,6 +230,7 @@ pub fn relative_time(iso: &str) -> String {
     format!("{y} year{} ago", if y == 1 { "" } else { "s" })
 }
 
+// SPEC-11.12.10
 /// Format an ISO-8601 timestamp as a compact absolute time for the `title`
 /// tooltip on a relative timestamp. Falls back to the raw string when it does
 /// not parse.
@@ -224,6 +240,7 @@ fn abs_time(iso: &str) -> String {
         .unwrap_or_else(|_| iso.to_string())
 }
 
+// SPEC-11.12.10
 /// Render an ISO-8601 timestamp as a `<time>` element (BUNYIP-466 F23): a
 /// machine-readable `datetime`, an absolute-time `title` tooltip, and the coarse
 /// `relative_time` string as the visible text. Single source for relative
@@ -234,6 +251,7 @@ pub fn rel_time(iso: &str) -> Markup {
     }
 }
 
+// SPEC-11.12.11
 /// Percent-encode a string for a URL query value (single source for the BFF).
 ///
 /// Unreserved RFC 3986 chars pass through, space becomes `+`, everything else
@@ -253,6 +271,7 @@ pub fn urlenc(s: &str) -> String {
     out
 }
 
+// SPEC-11.12.12
 /// Days left until an ISO timestamp, or None if it's in the past / unparseable.
 pub fn days_until(iso: &str) -> Option<i64> {
     let then = DateTime::parse_from_rfc3339(iso).ok()?.with_timezone(&Utc);

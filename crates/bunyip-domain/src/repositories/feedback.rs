@@ -7,6 +7,7 @@
 //! matched); their callers in the bunyip-api feedback handlers raise
 //! `AppError::not_found("Feedback")` on `false`.
 
+// SPEC-7.3.111
 pub use dunite_feedback::FeedbackRepository;
 
 /// BUNYIP-938: filter parameters the admin feedback list carries beyond
@@ -30,6 +31,7 @@ pub struct FeedbackFilters<'a> {
 /// `rev` bump across all four dunite crates (BUNYIP-426 F6). The bucket
 /// semantics mirror dunite's `list_paginated` byte-for-byte so callers
 /// swapping between the two see the same tab behaviour.
+// SPEC-7.3.112, SPEC-7.3.113, SPEC-7.3.114
 pub async fn list_paginated_filtered(
     pool: &sqlx::PgPool,
     page: i32,
@@ -42,6 +44,7 @@ pub async fn list_paginated_filtered(
     // BUNYIP-995: compute the offset in i64 and saturate, mirroring
     // BUNYIP-946 F14, so a page value large enough to overflow an i32
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+    // SPEC-7.3.3
     let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
     let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
         "active" => Some("is_spam = FALSE AND status <> 'closed'"),
@@ -130,6 +133,7 @@ pub async fn list_paginated_filtered(
 /// (BUNYIP-426 F6). Runtime query (not the `sqlx::query!` macro), so it needs no
 /// `.sqlx/` cache entry, matching the rest of this repository. The admin sidebar
 /// renders this as a bubble on the Feedback item.
+// SPEC-7.3.115
 pub async fn count_new_feedback(pool: &sqlx::PgPool) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*)::BIGINT FROM feedback WHERE status = 'new' AND is_spam = FALSE",

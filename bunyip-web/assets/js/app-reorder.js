@@ -23,6 +23,7 @@
     return Array.prototype.slice.call(list.querySelectorAll('[data-reorder-item]'));
   }
 
+  // SPEC-11.39.20, SPEC-11.39.21
   function persist(list) {
     var action = list.getAttribute('data-reorder-action');
     if (!action) return;
@@ -38,6 +39,7 @@
         if (window.bunyipToast) window.bunyipToast('Order saved', 'success');
       })
       .catch(function (e) {
+        // SPEC-11.39.21
         // The user sees the toast; the console keeps the cause the toast cannot carry.
         report('error', 'the new order could not be saved', e);
         var failed = 'Could not save the new order';
@@ -63,6 +65,7 @@
       });
   }
 
+  // SPEC-11.39.18
   function initList(list) {
     var dragging = null;
     var armed = false; // a drag only proceeds when it began on the handle
@@ -110,6 +113,7 @@
       persist(list);
     });
 
+    // SPEC-11.39.19
     // Keyboard path: ArrowUp/ArrowDown on a focused handle move its row.
     list.addEventListener('keydown', function (e) {
       var handle = e.target.closest && e.target.closest('[data-reorder-handle]');

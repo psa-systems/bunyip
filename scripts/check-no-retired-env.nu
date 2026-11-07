@@ -58,6 +58,7 @@ def matches-in [path: string, pattern: string]: nothing -> table {
 }
 
 def main [] {
+    # SPEC-3.20.3
     let retired = [
         {
             pattern: '(TOTP|STRIPE)_(ENCRYPTION_KEY(_PREV|_FILE)?|KEY_VERSION)',
@@ -96,6 +97,7 @@ def main [] {
             ]
         }
     ]
+    # SPEC-3.20.4
     let excluded = '^(bunyip-api/migrations/|scripts/check-no-.*-env\.nu$)'
     let tracked = (^git ls-files | lines | where {|f| not ($f =~ $excluded) })
 

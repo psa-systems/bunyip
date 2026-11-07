@@ -19,6 +19,7 @@ use bunyip_domain::services::mirzam_sync::{
 use bunyip_domain::services::EncryptionKeySet;
 use sqlx::PgPool;
 
+// SPEC-9.17.1
 /// `MIRZAM_API_TOKEN` from the ONE provider `SECRETS_STORAGE` declares, read
 /// per sync so a token saved on the admin page applies at once.
 struct GovernedMirzamToken {
@@ -41,6 +42,7 @@ impl MirzamTokenSource for GovernedMirzamToken {
     }
 }
 
+// SPEC-9.17.1
 /// The sync handle, reading its token through the governed-secret providers.
 pub fn mirzam_sync(pool: PgPool, config: Config, key_set: EncryptionKeySet) -> MirzamSync {
     MirzamSync::new(
@@ -53,6 +55,7 @@ pub fn mirzam_sync(pool: PgPool, config: Config, key_set: EncryptionKeySet) -> M
     )
 }
 
+// SPEC-9.17.2
 /// Hand `change` to the sync a handler extracted. Handlers take the handle as
 /// `Option<web::Data<MirzamSync>>`, so an app built without one (most handler
 /// tests) sends nothing rather than failing the request.
@@ -65,6 +68,7 @@ pub fn notify(
     }
 }
 
+// SPEC-9.17.3
 /// `bunyip-api mirzam-backfill` (BUNYIP-999): put every live verified account
 /// on Mirzam's two lists with the saved settings and token. An integration
 /// that is off, incomplete or without a token is an error naming what is

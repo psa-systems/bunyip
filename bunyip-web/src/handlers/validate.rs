@@ -12,6 +12,7 @@
 //! (e.g. `slug` is load-bearing for OCI repo paths in
 //! `Application::oci_pull_image`).
 
+// SPEC-12.43.1: bound input before it hits the API
 /// Trim + bound a text field to a max byte length. Returns the trimmed value
 /// on success; an inline error message on empty / over-length input.
 pub fn trim_bounded<'a>(value: &'a str, field: &str, max: usize) -> Result<&'a str, String> {
@@ -25,6 +26,7 @@ pub fn trim_bounded<'a>(value: &'a str, field: &str, max: usize) -> Result<&'a s
     Ok(t)
 }
 
+// SPEC-12.43.2: blank means absent
 /// Optional text field. Empty / whitespace becomes `None`; otherwise the
 /// trimmed value subject to the same max-length check. The caller decides
 /// whether to omit the JSON key for `None` or send `null`.
@@ -43,6 +45,7 @@ pub fn trim_bounded_opt<'a>(
     Ok(Some(t))
 }
 
+// SPEC-12.43.3: slug is load-bearing for OCI repo paths
 /// Slug grammar: `^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`. Lowercase letters / digits
 /// with hyphens as internal separators only; bounded length matches the DB
 /// caps in `application_groups.slug` / `applications.slug` (64 chars).
@@ -70,6 +73,7 @@ pub fn slug<'a>(value: &'a str, field: &str) -> Result<&'a str, String> {
     Ok(t)
 }
 
+// SPEC-12.43.4: http(s) allow-list with host
 /// Optional URL. Empty -> `None`. Non-empty MUST parse as an absolute
 /// `http(s)://...` URL and stay under the byte cap. The scheme allow-list
 /// matches the values these fields persist (`icon_url`, `source_code_url`,
@@ -92,6 +96,7 @@ pub fn url_opt<'a>(value: &'a str, field: &str, max: usize) -> Result<Option<&'a
     Ok(Some(t))
 }
 
+// SPEC-12.43.5: no silent coercion to 0
 /// `i32` parse with explicit range + numeric guards. Used for sort_order
 /// (BUNYIP-113) where the column is `INTEGER` and the prior code did
 /// `parse::<i64>().unwrap_or(0)`, silently mapping `"abc"` to `0` and
@@ -106,6 +111,7 @@ pub fn parse_i32(value: &str, field: &str) -> Result<i32, String> {
     })
 }
 
+// SPEC-12.43.6: blank means not sent
 /// Optional `i32` parse - blank is `None`, otherwise the parsed value.
 /// Mirrors `parse_i32` for forms where a missing value means "don't send".
 pub fn parse_i32_opt(value: &str, field: &str) -> Result<Option<i32>, String> {
@@ -118,6 +124,7 @@ pub fn parse_i32_opt(value: &str, field: &str) -> Result<Option<i32>, String> {
     })
 }
 
+// SPEC-12.43.7: UX shape check, not a security boundary
 /// BUNYIP-115: minimal RFC-5321-ish email shape check. Bounded at 254 bytes
 /// (the RFC 5321 max), and the simple rule "exactly one `@`, non-empty on
 /// both sides, dot in the domain" is enough to reject "garbage" / typos at
@@ -147,6 +154,7 @@ pub fn email<'a>(value: &'a str, field: &str) -> Result<&'a str, String> {
     Ok(t)
 }
 
+// SPEC-12.43.8: blank means absent
 /// BUNYIP-115: optional email. Empty -> Ok(None); non-empty subject to the
 /// same shape check.
 pub fn email_opt<'a>(value: &'a str, field: &str) -> Result<Option<&'a str>, String> {

@@ -26,6 +26,7 @@ use crate::models::RateLimitConfig;
 use crate::repositories::RateLimitRepository;
 use sqlx::PgPool;
 
+// SPEC-9.15.2
 /// Paths the floor never throttles.
 ///
 /// The probes are hit by orchestration on a fixed schedule and must not be able
@@ -79,12 +80,14 @@ const EXEMPT_PATHS: &[&str] = &[
 ];
 
 /// Whether the floor applies to this request.
+// SPEC-9.15.2
 pub(crate) fn is_exempt(path: &str, method: &Method) -> bool {
     // CORS preflights carry no credential and are answered by the cors layer.
     method == Method::OPTIONS || EXEMPT_PATHS.contains(&path)
 }
 
 /// Actix middleware factory for the default request cap.
+// SPEC-9.15.1
 pub struct RateLimitFloor {
     pool: PgPool,
 }
@@ -144,12 +147,14 @@ where
         let path = req.path().to_string();
 
         Box::pin(async move {
+            // SPEC-9.15.7: a held clone panics the router
             // Borrow the inner HttpRequest, never clone it: actix's router calls
             // `match_info_mut`, which asserts it holds the only reference, so a
             // clone alive across `service.call` panics the worker.
             //
             // An unverifiable token falls back to the tighter unauthenticated
             // budget, so presenting garbage cannot buy the larger one.
+            // SPEC-9.15.3: garbage tokens fall back to the tighter unauthenticated budget
             let (key, config) = {
                 let http_req = req.request();
                 match resolve_rate_limit_subject(http_req).await {
@@ -163,6 +168,7 @@ where
                 }
             };
 
+            // SPEC-9.15.4, SPEC-9.15.5
             match RateLimitRepository::check_and_increment(&pool, &key, config).await {
                 Ok((_count, true)) => {
                     let retry_after = RateLimitRepository::get_retry_after(&pool, &key, config)
@@ -200,6 +206,7 @@ where
                     Ok(req.into_response(res).map_into_right_body())
                 }
                 Ok((_count, false)) => service.call(req).await.map(|res| res.map_into_left_body()),
+                // SPEC-9.15.6: fail open; the failure is logged
                 Err(e) => {
                     // Fail open: a rate-limit table outage must not take the API
                     // down. The per-endpoint caps and the auto-ban still apply.

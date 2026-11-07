@@ -26,6 +26,7 @@
 # (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
 # layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
 # `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
+# SPEC-14.34.1, SPEC-14.2.2: tag and digest pinned; tag tracks the toolchain pin
 FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie@sha256:38bd435e934a1a82939bc473f5226f892a8841df9f5a26bca9b3cb1d57ab4110 AS chef
 WORKDIR /app
 # The cargo cache mounts here and below carry a per-image `id` and
@@ -39,11 +40,13 @@ RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/regi
     cargo install cargo-chef --locked
 
 # ---- Planner: distil the dependency recipe from the manifests ----
+# SPEC-14.34.1: recipe distilled from manifests only
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Builder: cook dependencies, then build the web binary + its CSS ----
+# SPEC-14.34.1: cook, css, then build
 FROM chef AS build
 
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
@@ -54,7 +57,9 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # install is frozen (BUNYIP-566): without it bun re-resolved `^4.0.0` against the
 # registry on every build, so two builds of the same commit could ship CSS from
 # different Tailwind patch releases with no diff anywhere in the repo.
+# SPEC-14.8.2: lockfile travels with the manifest
 COPY bunyip-web/package.json bunyip-web/bun.lock /app/bunyip-web/
+# SPEC-14.8.2, SPEC-14.34.2: frozen install before the cook
 RUN cd bunyip-web && bun install --frozen-lockfile
 
 # Cook dependencies only, from the recipe. Scoped to `--bin bunyip-web` so it
@@ -62,6 +67,7 @@ RUN cd bunyip-web && bun install --frozen-lockfile
 # verticals' as well. The dunite git dependency is anonymously readable, so this
 # needs no token even though the recipe reaches it through bunyip-domain.
 COPY --from=planner /app/recipe.json recipe.json
+# SPEC-14.34.2: cook only the web binary
 RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-web-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo chef cook --release --recipe-path recipe.json --bin bunyip-web
@@ -74,6 +80,7 @@ RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/regi
 # and the bun install: a RUN's cache key includes its exec env and CI passes a
 # fresh BUILD_DATE every build, so an ENV above them made both layers
 # uncacheable (BUNYIP-519). scripts/check-build-cache-keys.nu gates the ordering.
+# SPEC-14.34.2: must stay below the cook and the install
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown
 ARG BUILD_DATE=unknown
@@ -83,12 +90,14 @@ ENV GIT_COMMIT=${GIT_COMMIT} GIT_TAG=${GIT_TAG} BUILD_DATE=${BUILD_DATE}
 # so this only builds bunyip-web itself. build:css stays AFTER the source copy
 # because Tailwind scans the Rust sources for class names.
 COPY . /app
+# SPEC-14.34.3, SPEC-14.8.1: css after the source copy, then locked build
 RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-web-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cd bunyip-web && bun run build:css \
     && cd /app && cargo build --locked --release --bin bunyip-web
 
 # ---- Stage 2: run -----------------------------------------------------------
+# SPEC-14.34.4: digest pinned runtime base
 FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
 
 ARG GIT_COMMIT=unknown
@@ -117,16 +126,19 @@ COPY bunyip-web/oci-build/gosu-entrypoint.sh /usr/local/bin/gosu-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/gosu-entrypoint.sh
 
 WORKDIR /app
+# SPEC-14.34.4: binary and built assets, owned by appuser
 COPY --from=build /app/target/release/bunyip-web /app/bunyip-web
 COPY --from=build /app/bunyip-web/assets /app/assets
 RUN chown -R appuser:appuser /app
 
+# SPEC-14.34.5: revision, version and created come from build args
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.description="Bunyip Web (PSA Systems)" \
       org.opencontainers.image.revision=${GIT_COMMIT} \
       org.opencontainers.image.version=${GIT_TAG} \
       org.opencontainers.image.created=${BUILD_DATE}
 
+# SPEC-14.34.5: no data dirs: the process writes nothing
 ENV BUNYIP_BIND_ADDR=0.0.0.0:4400 \
     APP_USER=appuser \
     DATA_DIRS=""
@@ -137,5 +149,6 @@ EXPOSE 4400
 # chown). A compose `user:` pin skips the remap and runs directly as the
 # pinned uid. WORKDIR is /app so the server's ServeDir("assets") resolves to
 # /app/assets.
+# SPEC-14.34.5: workdir /app keeps the relative assets path valid
 ENTRYPOINT ["/usr/local/bin/gosu-entrypoint.sh"]
 CMD ["/app/bunyip-web"]

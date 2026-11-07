@@ -9,11 +9,13 @@ use serde_json::json;
 
 use crate::version::{self, UpdateChecker};
 
+// SPEC-9.20.3, SPEC-9.22.1: root-level, outside /v1
 /// Mount `GET /version` at the application root (outside the `/v1` scope).
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/version", web::get().to(version_handler));
 }
 
+// SPEC-9.22.1, SPEC-9.22.2, SPEC-9.22.3: three-key body
 /// `GET /version` - report the running version, build revision, and whether a
 /// newer release is available upstream.
 async fn version_handler(checker: web::Data<Arc<UpdateChecker>>) -> HttpResponse {

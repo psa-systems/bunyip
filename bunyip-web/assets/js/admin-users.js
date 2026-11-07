@@ -5,6 +5,7 @@
 // BUNYIP-424: extracted from the USERS_FILTER_JS inline <script> constant in
 // handlers::admin so script-src can be 'self' with no 'unsafe-inline'.
 (function () {
+  // SPEC-11.38.9, SPEC-11.38.10
   document.addEventListener('keydown', function (e) {
     var el = e.target;
     if (!el || !el.closest) return;

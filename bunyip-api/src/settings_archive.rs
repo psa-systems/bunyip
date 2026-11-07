@@ -60,6 +60,7 @@ use crate::handlers::admin_rate_limits::validate_limits;
 // Archive format
 // =============================================================================
 
+// SPEC-9.36.1, SPEC-9.36.7: refused by name before key derivation
 /// The `format` discriminator. Refused by name on `open`, so a JSON file that
 /// merely looks similar is rejected before a passphrase is even derived.
 pub const ARCHIVE_FORMAT: &str = "bunyip-settings-archive";
@@ -67,6 +68,7 @@ pub const ARCHIVE_FORMAT: &str = "bunyip-settings-archive";
 /// The one format version this binary writes and reads.
 pub const ARCHIVE_FORMAT_VERSION: u32 = 1;
 
+// SPEC-9.36.1, SPEC-9.36.2: archive carries its own parameters
 /// Argon2id parameters written into a version-1 archive: the password preset
 /// (`PasswordService`) uses, expressed here rather than borrowed, because the
 /// archive carries its own parameters and must keep opening under them even if
@@ -78,17 +80,20 @@ const KDF_SALT_LEN: usize = 16;
 /// Argon2 version 0x13 as the decimal the envelope carries.
 const KDF_ARGON2_VERSION: u32 = 19;
 
+// SPEC-9.36.8: untrusted file must not choose allocation size
 /// Upper bound on the `memory_kib` an archive may ask for (1 GiB). The
 /// parameters are READ FROM THE FILE so a future format version can raise them
 /// without stranding old archives, which means an attacker-supplied file would
 /// otherwise choose this process's allocation size.
 const KDF_MAX_MEMORY_KIB: u32 = 1024 * 1024;
 
+// SPEC-9.36.3: checked before the strength score
 /// Shortest passphrase `seal` accepts, in characters (BUNYIP-714). Length is
 /// checked on its own, ahead of the strength score, so the message can name the
 /// rule that actually failed.
 pub const MIN_PASSPHRASE_CHARS: usize = 16;
 
+// SPEC-9.36.1: envelope layout
 /// The sealed file: a JSON envelope whose `ciphertext` is the encrypted
 /// [`SettingsSnapshot`]. The KDF parameters and the salt travel with it, so an
 /// archive written under one parameter set still opens after the defaults move.
@@ -145,6 +150,7 @@ pub struct ArchivedTable {
     pub excluded: &'static [&'static str],
 }
 
+// SPEC-9.37.6, SPEC-9.37.8, SPEC-9.37.9: archived vs excluded columns
 /// Every table the archive reads, with its column split.
 pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
     ArchivedTable {
@@ -361,6 +367,7 @@ pub const ARCHIVED_TABLES: &[ArchivedTable] = &[
     },
 ];
 
+// SPEC-9.38.10: named in the plan
 /// What deleting one `applications` row takes with it, named in the plan so an
 /// operator sees the blast radius before confirming a restore.
 const APPLICATION_CASCADES: &[&str] = &[
@@ -371,6 +378,7 @@ const APPLICATION_CASCADES: &[&str] = &[
     "download_cache",
 ];
 
+// SPEC-9.38.10, SPEC-9.39.5: first three are deleted explicitly by apply
 /// What deleting one `oauth_clients` row takes with it. The first three are
 /// deleted EXPLICITLY by [`apply`] because their foreign keys carry no
 /// `ON DELETE` action and would otherwise block the delete outright.
@@ -398,6 +406,7 @@ pub struct ExportOptions {
     pub include_oauth_clients: bool,
 }
 
+// SPEC-9.36.10: unknown fields rejected
 /// The archive plaintext.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -413,6 +422,7 @@ pub struct SettingsSnapshot {
     pub sections: Sections,
 }
 
+// SPEC-9.36.10, SPEC-9.37.4: None means not carried, not touched on import
 /// The archived sections. The two `Option` fields are the flag-gated ones:
 /// `None` means the export did not carry them, and import leaves the target's
 /// own rows alone.
@@ -738,6 +748,7 @@ mod base64_bytes {
 // Schema-state guards
 // =============================================================================
 
+// SPEC-9.37.1: compiled side of the schema guard
 /// The highest migration compiled into this binary.
 fn compiled_schema_version() -> i64 {
     sqlx::migrate!("./migrations")
@@ -748,6 +759,7 @@ fn compiled_schema_version() -> i64 {
         .unwrap_or(0)
 }
 
+// SPEC-9.37.1: applied side of the schema guard
 /// The highest migration applied to `pool`.
 async fn applied_schema_version(pool: &PgPool) -> Result<i64, AppError> {
     let applied: Option<i64> = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
@@ -768,6 +780,7 @@ async fn applied_schema_version(pool: &PgPool) -> Result<i64, AppError> {
     })
 }
 
+// SPEC-9.37.1: exact version match required
 /// Refuse to read or write settings against a database whose schema is not the
 /// one this binary was built for, and return the agreed version.
 ///
@@ -795,6 +808,7 @@ pub async fn require_matching_schema(pool: &PgPool) -> Result<i64, AppError> {
 // Export
 // =============================================================================
 
+// SPEC-9.37.2, SPEC-9.37.3, SPEC-9.37.4, SPEC-9.37.7, SPEC-2.2.2: settings-export
 /// Read every archived section out of `pool` and the declared providers.
 pub async fn export(
     pool: &PgPool,
@@ -927,6 +941,7 @@ async fn read_feature_toggles(pool: &PgPool) -> Result<Vec<FeatureToggleRow>, Ap
     .await?)
 }
 
+// SPEC-9.37.5: plaintext via the declared provider
 async fn read_governed_secrets(
     pool: &PgPool,
     config: &Config,
@@ -940,6 +955,7 @@ async fn read_governed_secrets(
     Ok(out)
 }
 
+// SPEC-9.37.6, SPEC-9.37.7: slugs replace uuids, stable order
 async fn read_catalog(pool: &PgPool) -> Result<CatalogSection, AppError> {
     let application_groups = sqlx::query_as::<_, ApplicationGroupRow>(
         "SELECT slug, name, display_name, description, icon_url, sort_order \
@@ -985,6 +1001,7 @@ async fn read_catalog(pool: &PgPool) -> Result<CatalogSection, AppError> {
     })
 }
 
+// SPEC-9.37.6, SPEC-9.37.7: secret hash only, ordered by client_id
 async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppError> {
     Ok(sqlx::query_as::<_, OauthClientRow>(
         "SELECT client_id, client_secret_hash, client_type, name, redirect_uris, \
@@ -1003,6 +1020,7 @@ async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppErr
 // Seal / open
 // =============================================================================
 
+// SPEC-9.36.6: deployment name is a guessable input
 /// The zxcvbn `user_inputs` for a passphrase check: the resolved brand name and
 /// the host of `APP_URL`.
 ///
@@ -1028,6 +1046,7 @@ pub fn passphrase_inputs(snapshot: &SettingsSnapshot, config: &Config) -> Vec<St
     inputs
 }
 
+// SPEC-9.36.3, SPEC-9.36.4, SPEC-9.36.5: never echo the passphrase
 /// Refuse a passphrase that a leaked archive would not survive.
 ///
 /// Length and strength are separate rules with separate messages: "too short"
@@ -1067,6 +1086,7 @@ fn check_passphrase(passphrase: &str, user_inputs: &[&str]) -> Result<(), AppErr
     Ok(())
 }
 
+// SPEC-9.36.2, SPEC-9.36.8: Argon2id on the blocking pool
 /// Derive the 32-byte archive key from a passphrase and the stored parameters.
 ///
 /// Argon2id at these parameters is ~100 ms of CPU and 64 MiB resident, which is
@@ -1138,6 +1158,7 @@ async fn derive_key(
     .await
 }
 
+// SPEC-9.36.1, SPEC-9.36.2, SPEC-9.36.3, SPEC-9.36.4: seal
 /// Encrypt a snapshot into the archive bytes, after checking the passphrase.
 ///
 /// Deviates from a bare `(snapshot, passphrase)` signature by taking the zxcvbn
@@ -1187,6 +1208,7 @@ pub async fn seal(
         .map_err(|e| AppError::internal(format!("could not serialise the settings archive: {e}")))
 }
 
+// SPEC-9.36.7, SPEC-9.36.8, SPEC-9.36.9: check order matters
 /// Decrypt archive bytes back into a snapshot.
 pub async fn open(bytes: &[u8], passphrase: &str) -> Result<SettingsSnapshot, AppError> {
     let envelope: Envelope = serde_json::from_slice(bytes).map_err(|e| {
@@ -1237,6 +1259,7 @@ pub async fn open(bytes: &[u8], passphrase: &str) -> Result<SettingsSnapshot, Ap
 
     let key = derive_key(passphrase, envelope.kdf.clone(), salt).await?;
 
+    // SPEC-9.36.9: wrong key and damage are indistinguishable
     // AES-GCM authenticates the whole ciphertext, so a wrong key and a mangled
     // byte are the same failure to it. Saying so is more useful than guessing
     // one of the two.
@@ -1343,6 +1366,7 @@ impl ImportPlan {
     }
 }
 
+// SPEC-9.38.7: column names only
 /// Diff one singleton section. Pure: both sides are already JSON objects, so
 /// the changed-column list is the set of keys whose values differ.
 fn plan_singleton<T: Serialize>(section: &str, target: &T, archive: &T) -> SingletonPlan {
@@ -1365,6 +1389,7 @@ fn plan_singleton<T: Serialize>(section: &str, target: &T, archive: &T) -> Singl
     }
 }
 
+// SPEC-9.38.8: replace semantics live here
 /// Diff one keyed table. Pure: both sides are `key -> row fingerprint` maps, so
 /// the three buckets are a set difference and a value comparison.
 ///
@@ -1402,6 +1427,7 @@ fn plan_table(
     }
 }
 
+// SPEC-9.38.11: environment mode carries the refusal
 /// Diff one governed secret. Pure.
 ///
 /// Mirrors [`write_governed_secrets`]'s own gate: under `SecretsProvider::Environment`
@@ -1440,6 +1466,7 @@ fn keyed<T: Serialize, F: Fn(&T) -> String>(rows: &[T], key: F) -> BTreeMap<Stri
         .collect()
 }
 
+// SPEC-9.38.1, SPEC-9.38.2, SPEC-9.38.6: validation precedes any write
 /// Validate every section, then diff the target against the archive.
 ///
 /// Validation runs HERE rather than in [`apply`] so `--dry-run` reports a
@@ -1452,6 +1479,7 @@ pub async fn plan(
     snapshot: &SettingsSnapshot,
 ) -> Result<ImportPlan, AppError> {
     let schema_version = require_matching_schema(pool).await?;
+    // SPEC-9.38.1: cross-version import is refused
     if snapshot.schema_version != schema_version {
         return Err(AppError::validation(
             "schema_version",
@@ -1485,6 +1513,7 @@ pub async fn plan(
     Ok(plan)
 }
 
+// SPEC-9.38.3, SPEC-9.38.4, SPEC-9.38.5: reuses the admin validators
 /// Everything the archive must satisfy before a single row is written. Reuses
 /// the admin path's own validators so a restored row can never be one the admin
 /// pages would have refused.
@@ -1606,6 +1635,7 @@ fn validate_snapshot(config: &Config, snapshot: &SettingsSnapshot) -> Result<(),
     Ok(())
 }
 
+// SPEC-9.38.6, SPEC-9.38.9: absent optional sections are skipped
 /// The pure diff, given both sides' sections.
 fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
     let mut singletons = vec![
@@ -1727,10 +1757,12 @@ fn diff(config: &Config, target: &Sections, archive: &Sections) -> ImportPlan {
     }
 }
 
+// SPEC-9.38.9: documentation diff key
 fn doc_key(row: &ApplicationDocRow) -> String {
     format!("{}/{}", row.application_slug, row.slug)
 }
 
+// SPEC-9.38.9: price entitlement diff key
 fn entitlement_key(row: &PriceEntitlementRow) -> String {
     format!("{} -> {}", row.stripe_price_id, row.application_slug)
 }
@@ -1739,6 +1771,7 @@ fn entitlement_key(row: &PriceEntitlementRow) -> String {
 // Apply
 // =============================================================================
 
+// SPEC-9.39.9: per-step reporting
 /// One import step and whether it reached the target.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct StepOutcome {
@@ -1755,12 +1788,14 @@ pub struct ImportReport {
 }
 
 impl ImportReport {
+    // SPEC-9.39.9: caller exits non-zero on these
     /// Steps that did not apply, so the caller can exit 1 naming them.
     pub fn unapplied(&self) -> Vec<&StepOutcome> {
         self.steps.iter().filter(|s| !s.applied).collect()
     }
 }
 
+// SPEC-9.39.1, SPEC-9.39.2, SPEC-9.39.6, SPEC-9.39.7, SPEC-9.39.9, SPEC-2.2.2: settings-import
 /// Validate, plan and write. `updated_by` stamps every attribution column; the
 /// CLI passes `None`, which is the honest value for a run no admin account made.
 ///
@@ -1781,6 +1816,7 @@ pub async fn apply(
     let plan = plan(pool, config, key_set, snapshot).await?;
     let mut steps = Vec::new();
 
+    // SPEC-9.39.2: a failure here aborts before later steps
     write_database_sections(pool, snapshot, updated_by).await?;
     steps.push(StepOutcome {
         step: "database sections".to_string(),
@@ -1802,6 +1838,7 @@ pub async fn apply(
         },
     });
 
+    // SPEC-9.39.7: no interleaving with an admin save
     // BUNYIP-831: hold `SAVE_LOCK` so a concurrent `update_system_config` merge cannot interleave.
     let settings_result = {
         let _save_guard = bunyip_domain::sys_config::SAVE_LOCK.lock().await;
@@ -1820,6 +1857,7 @@ pub async fn apply(
         },
     });
 
+    // SPEC-9.39.8: success must mean landed
     // Verification: re-read every section and require it to equal the archive.
     // A write that reported success but did not land (a trigger, a stricter
     // column, an Infisical write that was accepted and dropped) is the failure
@@ -1841,6 +1879,7 @@ pub async fn apply(
     Ok(ImportReport { plan, steps })
 }
 
+// SPEC-9.39.8: only archive-carried sections are compared
 /// Re-export and compare. Only the sections the archive carries are compared,
 /// so an archive without the catalog does not fail on the target's own.
 async fn verify(
@@ -1871,6 +1910,7 @@ async fn verify(
     )))
 }
 
+// SPEC-9.39.8: names only, never values
 /// The section names still differing after a write, for the verification error.
 /// Names only, never values.
 fn render_differences(plan: &ImportPlan) -> String {
@@ -1903,6 +1943,7 @@ fn render_differences(plan: &ImportPlan) -> String {
     parts.join("; ")
 }
 
+// SPEC-9.39.2, SPEC-9.39.3: replace semantics, one commit
 /// Write every database section in ONE transaction.
 ///
 /// The repositories take a `&PgPool` rather than a transaction, so joining them
@@ -2123,6 +2164,7 @@ async fn write_database_sections(
     Ok(())
 }
 
+// SPEC-9.39.4: groups before apps, deleted after
 /// The catalogue, in the order the foreign keys allow.
 ///
 /// Groups are inserted BEFORE applications (an application names its group) and
@@ -2285,6 +2327,7 @@ async fn write_catalog(
     Ok(())
 }
 
+// SPEC-9.39.5: blocking FKs are cleared explicitly
 /// The OAuth client registrations.
 ///
 /// Three of the tables that reference `oauth_clients(client_id)` carry no
@@ -2384,6 +2427,7 @@ async fn write_oauth_clients(
     Ok(())
 }
 
+// SPEC-9.39.6: environment mode refuses
 /// Write the governed secrets through the declared provider.
 ///
 /// `environment` is read-only by nature (a process cannot set a variable for its
@@ -2430,6 +2474,7 @@ async fn write_governed_secrets(
     Ok(())
 }
 
+// SPEC-9.38.11, SPEC-9.39.6: shared by dry run and apply
 /// The refusal message in `environment` mode, naming the file the operator must
 /// change. Pure and shared: [`plan_secret`] surfaces it in `--dry-run` and
 /// [`environment_provider_error`] wraps it in the `apply`-time [`AppError`], so
@@ -2471,6 +2516,7 @@ fn environment_provider_error(secret: GovernedSecret, outcome: SecretOutcome) ->
 // screenshot) would undo that.
 // =============================================================================
 
+// SPEC-9.39.10: no values; states nothing was written
 /// Render a plan for `--dry-run`.
 pub fn render_plan(plan: &ImportPlan) -> String {
     let mut out = String::new();
@@ -2537,6 +2583,7 @@ fn render_sections(out: &mut String, plan: &ImportPlan) {
     }
 }
 
+// SPEC-9.39.10: restart notice is the last line
 /// Render the outcome of a real import.
 pub fn render_report(report: &ImportReport) -> String {
     let mut out = String::new();
@@ -2569,6 +2616,7 @@ pub fn render_report(report: &ImportReport) -> String {
 // File handling for the subcommands
 // =============================================================================
 
+// SPEC-9.39.11, SPEC-9.36.5: never taken from a flag
 /// Read a passphrase from a file, or from stdin when the path is `-`.
 ///
 /// No flag takes the passphrase literally: an argument is visible in `ps`, in
@@ -2603,6 +2651,7 @@ pub fn read_passphrase(path: &str) -> Result<String, AppError> {
     Ok(trimmed.to_string())
 }
 
+// SPEC-9.39.12: no overwrite, mode 0600 at creation
 /// Create the archive file at `path`, refusing to overwrite an existing one, and
 /// give it mode 0600 as it is created.
 ///
@@ -2643,6 +2692,7 @@ pub fn write_archive(path: &str, bytes: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
+// SPEC-9.39.13: stdin is shared with the log
 /// Read archive bytes from `path`. `-` is refused for the same reason `--output`
 /// refuses it: the stream is shared with the log.
 pub fn read_archive(path: &str) -> Result<Vec<u8>, AppError> {

@@ -20,6 +20,7 @@
 //! `crate::errors::{AppError, OciError}`, `crate::models::oci::*`,
 //! `crate::services::{BlobCache, OciTokenService, ...}`, etc. unchanged.
 
+// SPEC-6.1.1: domain re-exports keep crate:: paths stable for the handlers
 pub use bunyip_domain::{config, responses};
 
 pub mod errors;
@@ -38,6 +39,7 @@ pub mod services {
     //! OciTokenService, ForgejoRegistryClient).
     pub use bunyip_domain::services::*;
 
+    // SPEC-6.1.1: engine services re-exported next to the domain ones
     pub use dunite_oci::services::{
         BlobCache, BlobCacheError, ForgejoRegistryClient, ManifestCache, OciLimitDenial,
         OciLimiter, OciTokenService, RegistryError, RegistryTokenClaims,
@@ -52,6 +54,7 @@ pub mod repositories {
     pub mod oci_blob_cache;
     pub mod oci_pull_daily_counts;
 
+    // SPEC-6.1.4: only these two repositories persist registry bookkeeping
     pub use oci_blob_cache::OciBlobCacheRepository;
     pub use oci_pull_daily_counts::OciPullDailyCountRepository;
 }
@@ -62,6 +65,7 @@ pub mod middleware {
     //! `dunite_oci::middleware::WwwAuthenticate` (DUNITE-21); re-exported
     //! here so bunyip-api does not need its own `dunite-oci` dep.
     pub use bunyip_domain::middleware::*;
+    // SPEC-6.1.3, SPEC-6.20.3: 401s on the registry surface carry the Bearer challenge
     pub use dunite_oci::middleware::WwwAuthenticate;
 
     pub mod oci_auth;

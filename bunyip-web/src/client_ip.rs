@@ -3,4 +3,5 @@
 //! sites are unchanged. The middleware now takes the trusted-proxy CIDRs as
 //! state; the wiring in `main.rs` passes `cfg.trusted_proxies`.
 
+// SPEC-11.10.1, SPEC-11.10.2, SPEC-11.10.3, SPEC-2.3.3: behavior lives in web-kit.
 pub use web_kit::client_ip::*;

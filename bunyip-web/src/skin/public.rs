@@ -17,6 +17,7 @@ use crate::views::layout::{asset, brand_mark, brand_name, branding, document, pu
 use crate::views::ui::{button_class, icon};
 use crate::web::{html_cookies, html_status, AppState};
 
+// SPEC-11.29.4: a short label, never marketing copy
 /// BUNYIP-606: the landing page's browser-title label. `document()` formats its
 /// argument into `"<page> · <brand>"`, so every call site passes a short
 /// navigation label and never marketing copy. The tagline is admin-managed and
@@ -25,6 +26,7 @@ use crate::web::{html_cookies, html_status, AppState};
 /// admin rebranded.
 const LANDING_PAGE_TITLE: &str = "Home";
 
+// SPEC-11.29.7
 /// Hero trust-chip for the trial length, from `tier_config.standard_trial_days`.
 /// Drops the number when the length is unknown rather than printing "0-day".
 fn trial_chip(days: i64) -> String {
@@ -41,6 +43,7 @@ struct Feature {
     desc: String,
 }
 
+// SPEC-11.29.8
 /// BUNYIP-561: the subject of a marketing sentence. The admin-managed brand
 /// name, or a neutral noun when nothing is branded, so the copy never falls
 /// back to a product name compiled into the binary.
@@ -52,6 +55,7 @@ fn brand_or_platform(brand_name: &str) -> &str {
     }
 }
 
+// SPEC-11.29.8
 /// BUNYIP-561: the CTA's "Try X" line. Unbranded, there is nothing to name.
 fn try_phrase(brand_name: &str) -> String {
     if brand_name.is_empty() {
@@ -61,6 +65,7 @@ fn try_phrase(brand_name: &str) -> String {
     }
 }
 
+// SPEC-11.29.9: icon names must resolve; copy claims only existing features
 /// BUNYIP-809: the six feature cards describe the CAPABILITY without naming
 /// the brand. The hero subhead and the features intro already name the brand
 /// once each on this page, so a repeated name in every card body added no
@@ -83,6 +88,8 @@ fn features(_brand_name: &str) -> Vec<Feature> {
     ]
 }
 
+// SPEC-11.29.10, SPEC-11.29.11, SPEC-11.29.12, SPEC-11.36.2, SPEC-11.36.7:
+// hero is the LCP element: eager, box reserved
 /// The hero illustration, captioned with the admin-managed tagline.
 ///
 /// BUNYIP-560: the mascot is an admin-managed asset, served from the record
@@ -130,6 +137,7 @@ fn hero_mascot(branding: &crate::api::types::Branding) -> maud::Markup {
     }
 }
 
+// SPEC-11.29.14: no declared host means no link
 /// The landing page's application cards. Absent with no applications.
 ///
 /// BUNYIP-809: the subtitle no longer repeats the brand. The section heading
@@ -172,6 +180,7 @@ fn wired_apps_section(apps: &[Application], domain: &str) -> Markup {
     }
 }
 
+// SPEC-11.29.16
 /// MIRZAM-217: the newsletter blurb names the brand when there is one, like
 /// every other marketing sentence on the page (BUNYIP-561).
 fn newsletter_blurb(brand_name: &str) -> String {
@@ -182,6 +191,7 @@ fn newsletter_blurb(brand_name: &str) -> String {
     }
 }
 
+// SPEC-11.29.15: plain form, no script; honeypot kept out of tab order
 /// MIRZAM-217: the newsletter signup, absent while the branding record's
 /// `newsletter_url` (Admin, Branding, Newsletter) is blank. A plain form posting straight to the Mirzam list's subscribe
 /// endpoint, the shape of the list's own embed snippet: no script and no
@@ -215,6 +225,7 @@ fn newsletter_section(url: &str, brand_name: &str) -> Markup {
     }
 }
 
+// SPEC-11.29.2, SPEC-11.29.3: restricted apps appear only in the cookie-bearing list
 /// The application list backing the landing page's cards (BUNYIP-833).
 /// `GET /v1/applications` omits a `requires_entitlement` application entirely
 /// for an anonymous caller (BUNYIP-794's security fix), so the shared,
@@ -233,6 +244,7 @@ async fn landing_applications(st: &AppState, cookie: Option<&str>) -> Vec<Applic
     }
 }
 
+// SPEC-11.29.1, SPEC-11.29.4
 pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // the application list feeds only the landing cards now, so
     // it is fetched here rather than in `public_ctx` (which every public
@@ -247,6 +259,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     // BUNYIP-487: the advertised trial length comes from
     // `tier_config.standard_trial_days`, never a literal.
     let trial_days = pricing.trial_days;
+    // SPEC-11.29.5
     let (cta_href, cta_label) = if signed_in {
         ("/membership", "Go to Membership")
     } else {
@@ -294,6 +307,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         @if pricing.published() { a href="/pricing" class=(button_class("outline", "lg", "w-full sm:w-auto")) { "See pricing" } }
                     }
                     div class="mt-10 flex flex-wrap items-center justify-center md:justify-start gap-x-8 gap-y-2 text-sm text-brand-primary-700 dark:text-brand-primary-300" {
+                        // SPEC-11.29.6
                         @for t in ["No credit card required".to_string(), trial_chip(trial_days), "Cancel anytime".to_string()] {
                             span class="flex items-center justify-center gap-2" { (icon("check", "h-4 w-4 shrink-0 text-brand-primary-600 dark:text-brand-primary-300")) (t) }
                         }
@@ -323,6 +337,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                     }
                 }
             }
+            // SPEC-11.29.13
             // Apps wired through the platform. BUNYIP-685: the per-app
             // links inside would take the visitor to a subdomain the
             // verification gate would refuse, so hide the whole section
@@ -342,6 +357,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
                         div class="flex flex-col gap-6 md:flex-row md:items-center md:justify-between" {
                             div {
                                 h3 class="text-2xl md:text-3xl font-bold tracking-tight" { "Ready to wire up your business layer?" }
+                                // SPEC-11.29.17
                                 p class="mt-2 text-brand-primary-100" { (try_phrase(&branding.brand_name)) " " (crate::skin::content::trial_phrase(trial_days)) ". Bring your team along." }
                             }
                             // Same size and shape as the hero CTA; the
@@ -369,6 +385,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
     html_cookies(document(LANDING_PAGE_TITLE, body), &c.set_cookies)
 }
 
+// SPEC-11.30.1
 /// The branded 404 body. Shared so a route that decides it has nothing to serve
 /// (BUNYIP-487: `/pricing` when pricing is unpublished) renders the same page as
 /// the router fallback rather than a bespoke near-miss.
@@ -382,6 +399,7 @@ pub fn not_found_content() -> maud::Markup {
     }
 }
 
+// SPEC-11.30.2: a real 404 status, not a soft 200
 pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let body = public_shell(
@@ -397,13 +415,16 @@ pub async fn not_found(State(st): State<AppState>, headers: HeaderMap) -> Respon
     html_status(document("Not found", body), StatusCode::NOT_FOUND)
 }
 
+// SPEC-11.30.3
 /// BUNYIP-686: stamped by the edge proxy's lowest-priority catch-all router on
 /// hosts no other router claims (DEV-741).
 pub const UNKNOWN_HOST_HEADER: &str = "x-bunyip-unknown-host";
 
+// SPEC-11.30.7
 /// BUNYIP-686: long enough to read why the visitor is being moved.
 const UNKNOWN_HOST_REDIRECT_MS: u32 = 10_000;
 
+// SPEC-11.30.6, SPEC-11.30.7
 /// BUNYIP-686: the 404 body for a host nothing serves. No `public_shell`: its
 /// links are host-relative and would keep the visitor on the unknown host.
 pub fn unknown_host_content(apex: Option<&str>, domain: &str) -> Markup {
@@ -426,6 +447,7 @@ pub fn unknown_host_content(apex: Option<&str>, domain: &str) -> Markup {
     }
 }
 
+// SPEC-11.30.4, SPEC-11.30.5, SPEC-11.30.8: takes only config so it can never call /v1
 /// BUNYIP-686: a request carrying [`UNKNOWN_HOST_HEADER`] gets the unknown-host
 /// 404 instead of the site, except the assets that page loads itself. Takes only
 /// the config, so rendering it can never call `/v1`.

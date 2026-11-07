@@ -13,6 +13,7 @@ pub struct TrustedDeviceRepository;
 
 impl TrustedDeviceRepository {
     /// Create a trusted-device row.
+    // SPEC-7.3.231
     pub async fn create(
         pool: &PgPool,
         data: CreateTrustedDevice,
@@ -37,6 +38,7 @@ impl TrustedDeviceRepository {
 
     /// Find a trusted device by token hash that is still valid (not revoked,
     /// not expired). This is the lookup that gates a TOTP skip.
+    // SPEC-7.3.232
     pub async fn find_valid_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -55,6 +57,7 @@ impl TrustedDeviceRepository {
     }
 
     /// List a user's active (non-revoked, non-expired) trusted devices.
+    // SPEC-7.3.233
     pub async fn find_user_devices(
         pool: &PgPool,
         user_id: Uuid,
@@ -79,6 +82,7 @@ impl TrustedDeviceRepository {
     /// run it inside a `begin_with_user` transaction and have the per-user RLS
     /// GUC apply (BUNYIP-344). A `&PgPool` still satisfies the bound, so existing
     /// callers are unaffected.
+    // SPEC-7.3.233
     pub async fn find_user_devices_paginated(
         executor: impl sqlx::PgExecutor<'_>,
         user_id: Uuid,
@@ -106,6 +110,7 @@ impl TrustedDeviceRepository {
     ///
     /// Takes any `PgExecutor` so it can share a `begin_with_user` transaction
     /// with [`Self::find_user_devices_paginated`] under per-user RLS (BUNYIP-344).
+    // SPEC-7.3.233
     pub async fn count_user_devices(
         executor: impl sqlx::PgExecutor<'_>,
         user_id: Uuid,
@@ -131,6 +136,7 @@ impl TrustedDeviceRepository {
     /// under per-user RLS (BUNYIP-344): a device belonging to another user is
     /// then invisible (returns `None`) rather than merely failing the in-Rust
     /// ownership check. A `&PgPool` still satisfies the bound.
+    // SPEC-7.3.234
     pub async fn find_by_id(
         executor: impl sqlx::PgExecutor<'_>,
         id: Uuid,
@@ -148,6 +154,7 @@ impl TrustedDeviceRepository {
     }
 
     /// Bump `last_used_at` after a successful skip.
+    // SPEC-7.3.235
     pub async fn touch_last_used(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -166,6 +173,7 @@ impl TrustedDeviceRepository {
     /// Takes any `PgExecutor` so it can share the revoke handler's
     /// `begin_with_user` transaction under per-user RLS (BUNYIP-344). A `&PgPool`
     /// still satisfies the bound.
+    // SPEC-7.3.236
     pub async fn revoke(executor: impl sqlx::PgExecutor<'_>, id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -182,6 +190,7 @@ impl TrustedDeviceRepository {
     /// Revoke all of a user's trusted devices. Called on password change,
     /// password reset, 2FA disable, and "log out everywhere", so a credential
     /// or 2FA change re-arms the TOTP prompt on every device.
+    // SPEC-7.3.236
     pub async fn revoke_all_for_user(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
         let result = sqlx::query(
             r#"

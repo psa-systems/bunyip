@@ -27,6 +27,7 @@
 #   scripts/check-brand-literals.nu
 #   scripts/check-brand-literals.nu --self-test
 
+# SPEC-3.28.3
 const GUARDED_GLOBS = [
     "bunyip-web/src/views/**/*.rs"
     "bunyip-web/src/handlers/**/*.rs"
@@ -67,6 +68,7 @@ def check-rs [path: string]: nothing -> list<string> {
     $problems
 }
 
+# SPEC-3.28.4
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

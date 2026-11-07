@@ -14,6 +14,7 @@ use crate::util::{rel_time, urlenc};
 use crate::views::ui::{back_link, badge, button_class, empty_state, error_box_for};
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.7.1
 pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -68,6 +69,7 @@ pub async fn entitlements(State(st): State<AppState>, headers: HeaderMap) -> Res
 pub struct RestrictedForm {
     pub value: String,
 }
+// SPEC-12.7.2
 pub async fn set_app_restricted(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -102,6 +104,7 @@ pub async fn set_app_restricted(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.7.3
 pub async fn user_entitlements(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -189,6 +192,7 @@ pub async fn user_entitlements(
 pub struct SlugForm {
     pub slug: String,
 }
+// SPEC-12.7.4
 pub async fn grant_user_entitlement_h(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -226,6 +230,7 @@ pub async fn grant_user_entitlement_h(
     };
     redirect_cookies(&target, &c.set_cookies)
 }
+// SPEC-12.7.4
 pub async fn revoke_user_entitlement_h(
     State(st): State<AppState>,
     headers: HeaderMap,

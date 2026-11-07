@@ -58,6 +58,7 @@ def read-env [env_file: string, var: string]: nothing -> string {
 }
 
 # A value counts as "not set" when it is empty or a known dev placeholder.
+# SPEC-3.33.2
 def is-set [value: string]: nothing -> bool {
     if ($value | is-empty) { return false }
     if ($value | str starts-with "dev-only-") { return false }
@@ -68,6 +69,7 @@ def is-set [value: string]: nothing -> bool {
 
 # Write a value to a secret file with mode 600 and report it. Honours
 # idempotency: never clobbers a non-empty file.
+# SPEC-3.33.1, SPEC-3.33.5
 def write-secret [path: string, value: string, origin: string] {
     if (has-content $path) {
         print $"kept ($path)"
@@ -149,6 +151,7 @@ def main [] {
     # rotation reminder below.
     let pg_generated = not (is-set (read-env $env_file "POSTGRES_PASSWORD"))
 
+    # SPEC-3.33.3
     # database_url: prefer an explicit .env DATABASE_URL, else derive it from the
     # postgres_password file so the two always agree. Derived AFTER the password
     # exists.
@@ -169,6 +172,7 @@ def main [] {
         }
     }
 
+    # SPEC-3.33.4
     # Optional secrets: present in .env -> migrated, else an empty file which the
     # api treats as "feature not configured".
     # BUNYIP-360: empty keeps per-user RLS inactive (the app pool falls back to
@@ -191,6 +195,7 @@ def main [] {
     # -----------------------------------------------------------------------
     # OIDC signing keys
     # -----------------------------------------------------------------------
+    # SPEC-3.33.6
     # Dev convenience only: a single ed25519 keypair named dev-2026. Production
     # operators should generate their own kid-named keys out-of-band (SOPS /
     # deploy step) and drop the .pem / .pub.pem pair into ./secrets/oidc/.
@@ -235,6 +240,7 @@ def main [] {
 
     print ""
     print "Done. ./secrets/ is gitignored; key material is never committed."
+    # SPEC-3.33.7
     if $pg_generated {
         print "A random postgres_password was generated and database_url derived from it."
     }

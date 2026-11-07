@@ -21,6 +21,7 @@ interface AuthFixtures {
   request: APIRequestContext;
 }
 
+// SPEC-3.38.8
 export const test = base.extend<AuthFixtures>({
   request: async ({ playwright: _playwright }, use, testInfo) => {
     const token = readToken();

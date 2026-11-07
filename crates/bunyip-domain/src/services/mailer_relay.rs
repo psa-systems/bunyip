@@ -32,6 +32,7 @@ use crate::errors::AppError;
 use crate::repositories::MailerSuppressionRepository;
 use crate::services::EmailService;
 
+// SPEC-8.25.5, SPEC-8.25.6
 /// The production suppression list: the shared `mailer_suppressions` table.
 ///
 /// Thin adapter around [`MailerSuppressionRepository`]. The repository returns
@@ -82,6 +83,7 @@ impl MailerRelay {
         Self { email, suppression }
     }
 
+    // SPEC-8.25.1, SPEC-8.25.2, SPEC-8.25.4: suppression check precedes the transport
     /// Relay `message` on behalf of `client_name`, which is logged so a
     /// delivery can be attributed to the app that asked for it.
     ///
@@ -100,6 +102,7 @@ impl MailerRelay {
             .is_suppressed(&message.to)
             .await
             .map_err(|e| AppError::internal(format!("Suppression store unavailable: {e}")))?;
+        // SPEC-8.25.3: logs the client only, never the address
         if is_suppressed {
             tracing::warn!(
                 client = %client_name,

@@ -55,6 +55,8 @@ use axum::http::{header, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 
+// SPEC-13.2.1, SPEC-13.2.2, SPEC-13.2.3, SPEC-13.3.1, SPEC-13.3.2, SPEC-13.3.3, SPEC-13.3.4, SPEC-13.3.5:
+//  Origin/Referer must match Host on every state-changing request
 /// Origin-check middleware. Rejects every state-changing POST whose
 /// `Origin` header does not match the request's own `Host`. The two
 /// align for any legitimate same-origin form submission; a cross-site
@@ -75,6 +77,7 @@ pub async fn enforce_origin_with(
     req: Request,
     next: Next,
 ) -> Response {
+    // SPEC-13.2.1: no CSRF surface on safe methods
     // Read-only methods don't change state; no CSRF surface.
     if matches!(
         req.method(),
@@ -85,6 +88,7 @@ pub async fn enforce_origin_with(
 
     let path = req.uri().path();
 
+    // SPEC-13.2.2, SPEC-13.2.3: exact-path allowlist, never a prefix
     if exempt.contains(&path) {
         return next.run(req).await;
     }
@@ -105,6 +109,8 @@ pub async fn enforce_origin_with(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
 
+    // SPEC-13.3.1, SPEC-13.3.2, SPEC-13.3.3, SPEC-13.3.4:
+    //  Origin wins; Referer only when Origin is absent; otherwise refuse
     let matches_origin = match (&host, &header_origin, &header_referer) {
         (Some(h), Some(o), _) => host_of(o).as_deref() == Some(h.as_str()),
         (Some(h), None, Some(r)) => host_of(r).as_deref() == Some(h.as_str()),
@@ -114,6 +120,7 @@ pub async fn enforce_origin_with(
     if matches_origin {
         next.run(req).await
     } else {
+        // SPEC-13.3.5, SPEC-13.3.6: refusal is logged with all three headers and answered 403
         tracing::warn!(
             method = %req.method(),
             path = %path,
@@ -133,6 +140,7 @@ pub async fn enforce_origin_with(
     }
 }
 
+// SPEC-13.3.7: host plus non-default port; unparseable input is a mismatch
 /// Extract the host (`example.com:443`) from a full URL like
 /// `https://example.com/path`. Returns `None` for inputs that don't
 /// parse as URLs (treat as mismatch).

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.136, SPEC-7.2.137: hash and op_session_id never serialized.
 /// Refresh token database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct RefreshToken {
@@ -41,6 +42,7 @@ impl RefreshToken {
         self.revoked_at.is_some()
     }
 
+    // SPEC-7.2.138: valid = not expired and not revoked.
     /// Check if the token is valid (not expired and not revoked)
     pub fn is_valid(&self) -> bool {
         !self.is_expired() && !self.is_revoked()
@@ -68,6 +70,7 @@ pub struct SessionInfo {
     pub is_current: bool,
 }
 
+// SPEC-7.2.145: is_current is set by the caller.
 impl From<RefreshToken> for SessionInfo {
     fn from(token: RefreshToken) -> Self {
         Self {
@@ -81,6 +84,7 @@ impl From<RefreshToken> for SessionInfo {
     }
 }
 
+// SPEC-7.2.136, SPEC-7.2.139: single-use, hashed.
 /// Magic link token database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct MagicLinkToken {
@@ -120,6 +124,7 @@ pub struct CreateMagicLinkToken {
     pub ip_address: Option<IpNetwork>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.139: single-use, hashed.
 /// Password reset token database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct PasswordResetToken {
@@ -159,6 +164,7 @@ pub struct CreatePasswordResetToken {
     pub ip_address: Option<IpNetwork>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.139, SPEC-7.2.143: bound to a challenge by jti.
 /// BUNYIP-373: a pending suspicious-login approval challenge. One row per
 /// flagged login attempt (new country and/or new device). The login mints no
 /// tokens; instead a 6-digit code is emailed and this row records only its
@@ -201,6 +207,7 @@ impl LoginApprovalCode {
     }
 }
 
+// SPEC-7.2.143: challenge_jti is required on create.
 /// Data for creating a new login approval challenge (BUNYIP-373).
 #[derive(Debug, Clone)]
 pub struct CreateLoginApprovalCode {
@@ -215,6 +222,7 @@ pub struct CreateLoginApprovalCode {
     pub expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.144: only the device-id hash is stored.
 /// BUNYIP-373: a known login device for a user. Identified by the SHA-256 hash
 /// of a client-supplied stable device id; the raw id is never stored. A login
 /// from a `device_hash` absent here is the "new device" signal, but only once
@@ -232,6 +240,7 @@ pub struct LoginDevice {
     pub last_seen_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.140: valid = unexpired, unconfirmed, uncanceled.
 /// Email change request database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct EmailChangeRequest {
@@ -279,6 +288,7 @@ pub struct CreateEmailChangeRequest {
     pub ip_address: Option<IpNetwork>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.139: single-use, hashed.
 /// Email verification token database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct EmailVerificationToken {
@@ -318,6 +328,7 @@ pub struct CreateEmailVerificationToken {
     pub ip_address: Option<IpNetwork>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.141: valid = unexpired, unaccepted, unrevoked.
 /// Admin invite database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AdminInvite {
@@ -365,6 +376,7 @@ pub struct CreateAdminInvite {
     pub expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.136, SPEC-7.2.142: only the cookie-secret hash is stored.
 /// Trusted device database model (BUNYIP-138). One row per device a
 /// subscriber has marked trusted at 2FA time. `token_hash` is the SHA-256 hash
 /// of the opaque cookie secret; the secret itself is never stored.
@@ -408,6 +420,7 @@ pub struct CreateTrustedDevice {
     pub expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.146: display shape, no hash.
 /// Trusted device info for display to users (no hash).
 #[derive(Debug, Clone, Serialize)]
 pub struct TrustedDeviceInfo {
@@ -419,6 +432,7 @@ pub struct TrustedDeviceInfo {
     pub expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.146: bare address, no prefix length.
 impl From<TrustedDevice> for TrustedDeviceInfo {
     fn from(d: TrustedDevice) -> Self {
         Self {

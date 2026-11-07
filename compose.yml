@@ -50,8 +50,10 @@
 #
 # Resource naming follows the governance convention: bunyip-{service} for
 # containers/volumes/network (no dev- prefix in production).
+# SPEC-14.28.4: production names carry no dev prefix
 name: bunyip
 
+# SPEC-14.24.1, SPEC-14.24.2: eleven file secrets; five must be non-empty
 # File-based secrets, one value per file under ./secrets (gitignored).
 # ./scripts/init-secrets.nu creates all of them in dev (a deployment supplies them
 # via the SOPS compose-secrets.yml); see the header note above for which ones may
@@ -101,6 +103,7 @@ secrets:
 
 services:
 
+  # SPEC-14.25.1, SPEC-14.25.2, SPEC-14.25.3: hardened database service
   # PostgreSQL database. The api runs migrations against it on startup.
   postgres:
     # Postgres 18, matching the deployed infra template
@@ -147,10 +150,12 @@ services:
     networks:
       - private
 
+  # SPEC-14.24.3, SPEC-14.26.2, SPEC-14.26.3, SPEC-14.26.4: secrets arrive only as _FILE paths
   # actix-web backend (bunyip-api). Published musl-static image; binds on
   # HOST_IP:APP_PORT inside the container and IS the OIDC issuer (Ed25519 keys
   # mounted from ./secrets/oidc).
   api:
+    # SPEC-14.26.1: no default so a floating tag is impossible
     # BUNYIP-237: BUNYIP_API_IMAGE must be set explicitly to a pinned tag
     # (e.g. `dev.a8n.run/psa-systems-private/bunyip-api:v0.4.1`). The
     # previous default of `:latest` plus `pull_policy: always` resolves the
@@ -168,6 +173,7 @@ services:
     # api reads that this reference deployment does NOT pass through.
     environment:
 
+      # SPEC-14.26.2: strict posture by default
       # ══ Environmental ═════════════════════════════════════════════════════
       # `production` turns on the strict posture: email must resolve to enabled
       # or the api refuses to start (BUNYIP-204), a `dev-` OIDC kid panics at
@@ -194,6 +200,7 @@ services:
       BUNYIP_APP_PASSWORD_FILE: /run/secrets/bunyip_app_password
       APP_DATABASE_URL_FILE: /run/secrets/app_database_url
 
+      # SPEC-14.26.2: private ranges trusted out of the box
       # ══ Hosting: proxy trust ══════════════════════════════════════════════
       # BUNYIP-311 / BUNYIP-409: trusted-proxy CIDRs for the SECOND hop of the
       # client-IP trust chain (Traefik -> bunyip-web -> bunyip-api). bunyip-api
@@ -212,6 +219,7 @@ services:
       # Branding shown in the UI and in email subjects/templates.
       APP_NAME: ${APP_NAME:-PSA Systems}
 
+      # SPEC-14.26.1: deployment must declare its secret store
       # ══ Security: where the governed secrets live ═════════════════════════
       # BUNYIP-542: which ONE store holds the governed integration secrets (the
       # SMTP password and the two Stripe secrets): environment | database |
@@ -222,6 +230,7 @@ services:
       # runbook: docs/secrets-infisical.md.
       SECRETS_STORAGE: ${SECRETS_STORAGE:?SECRETS_STORAGE must be set to environment, database or infisical - no default (BUNYIP-542, see docs/configuration.md)}
 
+      # SPEC-14.26.3: inert unless the store is infisical
       # ══ Security: Infisical provider (SECRETS_STORAGE=infisical) ══════════
       # Inert with the default SECRETS_STORAGE, but INFISICAL_ENABLED also lets
       # `bunyip-api secrets-status` inspect readiness ahead of a switch
@@ -251,6 +260,7 @@ services:
       # Set to the public bunyip-web origin for any real deployment. BUNYIP-423:
       # the same comma-separated list is the CSRF allow-list.
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:4400}
+      # SPEC-14.26.1: no default so a wrong origin cannot ship
       # BUNYIP-749: the app's own public base URL (email links, EHLO fallback)
       # and the bunyip-web login UI origin (the OIDC authorize handler's bounce
       # target). Both used to be left unset here, so they silently fell back to
@@ -258,6 +268,7 @@ services:
       # shipped deployment. Required, no default: an unset value must fail
       # `docker compose up` loudly rather than resolve to the wrong origin.
       APP_URL: ${APP_URL:?APP_URL must be set to the public bunyip-web origin (e.g. https://bunyip.example.com) - no default (BUNYIP-749, see docs/configuration.md)}
+      # SPEC-14.26.1: no default so a wrong origin cannot ship
       BUNYIP_WEB_ORIGIN: ${BUNYIP_WEB_ORIGIN:?BUNYIP_WEB_ORIGIN must be set to the public bunyip-web origin (e.g. https://bunyip.example.com) - no default (BUNYIP-749, see docs/configuration.md)}
       COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
 
@@ -270,6 +281,7 @@ services:
 
       # ══ Identity provider (bunyip-api IS the OIDC issuer) ═════════════════
       OIDC_ISSUER: ${OIDC_ISSUER:-}
+      # SPEC-14.26.1: no development key default
       # BUNYIP-258: no defaults for OIDC signing key path / active kid. The
       # previous defaults (`/run/secrets/oidc/dev-2026.pem`, `dev-2026`)
       # silently signed prod tokens with a dev-named kid when a deploy
@@ -278,6 +290,7 @@ services:
       # on whatever the OP advertises. Fail loud at `compose up` instead.
       # Mirrors the BUNYIP-237 posture for image pins.
       OIDC_JWT_PRIVATE_KEY_PATH: ${OIDC_JWT_PRIVATE_KEY_PATH:?OIDC_JWT_PRIVATE_KEY_PATH must be set to the production signing-key path (e.g. /run/secrets/oidc/prod-2026.pem) - no dev default}
+      # SPEC-14.26.1: no development kid default
       OIDC_JWT_ACTIVE_KID: ${OIDC_JWT_ACTIVE_KID:?OIDC_JWT_ACTIVE_KID must be set to the active kid name (e.g. prod-2026) - no dev default}
       OIDC_JWT_PUBLIC_KEYS_DIR: /run/secrets/oidc
 
@@ -320,6 +333,7 @@ services:
       # is documented in .env.example and docs/configuration.md.
       FORGEJO_BASE_URL: ${FORGEJO_BASE_URL:-}
       FORGEJO_API_TOKEN_FILE: /run/secrets/forgejo_api_token
+      # SPEC-14.26.4: cache paths and limits
       DOWNLOAD_CACHE_DIR: /var/cache/bunyip-downloads
       DOWNLOAD_CACHE_MAX_BYTES: ${DOWNLOAD_CACHE_MAX_BYTES:-10737418240}
       OCI_REGISTRY_ENABLED: ${OCI_REGISTRY_ENABLED:-false}
@@ -345,6 +359,7 @@ services:
     expose:
       - "4401"
       - "18081"
+    # SPEC-14.26.5: host side defaults to loopback
     ports:
       # NOTE: ${HOST_IP} here is the HOST-side publish interface (loopback by
       # default, for the reverse proxy to consume). It is a DIFFERENT setting
@@ -364,6 +379,7 @@ services:
       - forgejo_api_token
       - update_check_token
       - mailer_webhook_secret
+    # SPEC-14.27.1: caps limited to what the entrypoint needs
     security_opt:
       - no-new-privileges:true
     # The image starts as root: gosu-entrypoint.sh remaps the user, chowns the
@@ -384,6 +400,7 @@ services:
     tmpfs:
       - /tmp
       - /etc
+    # SPEC-14.27.2: only the oidc subdir, named caches
     volumes:
       # OIDC signing keys only (a dedicated subdir, NOT the whole ./secrets
       # dir: the secret value files must never be visible at a second path
@@ -397,15 +414,18 @@ services:
       # (Production notes).
       - oci-cache:/var/cache/bunyip-oci
       - download-cache:/var/cache/bunyip-downloads
+    # SPEC-14.27.3: api waits for a healthy database
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - private
 
+  # SPEC-14.28.1, SPEC-14.28.2, SPEC-14.28.3: BFF holds no secret
   # Axum SSR frontend (bunyip-web). Published image; reaches the api over the
   # internal network and serves the browser-facing pages + /assets.
   web:
+    # SPEC-14.26.1: no default so a floating tag is impossible
     # BUNYIP-237: BUNYIP_WEB_IMAGE must be set explicitly to a pinned tag
     # (e.g. `dev.a8n.run/psa-systems-private/bunyip-web:v0.4.1`). See the
     # comment on the `api` service above for the rationale - same failure
@@ -423,6 +443,7 @@ services:
       # ══ Hosting: listener + upstream ══════════════════════════════════════
       BUNYIP_BIND_ADDR: 0.0.0.0:4400
       BUNYIP_API_URL: ${BUNYIP_API_URL:-http://api:4401}
+      # SPEC-14.26.1: required: the browser cannot reach the internal url
       # BUNYIP-192 / BUNYIP-510 / BUNYIP-720: the browser-facing origin of
       # bunyip-api. Used for the dashboard SSE subscriber and for the Stripe
       # webhook URL the admin page prefills. REQUIRED: an unset value used to
@@ -480,6 +501,7 @@ services:
       - private
 
 
+# SPEC-14.28.4: fixed volume names
 volumes:
   postgres-data:
     name: bunyip-postgres-data
@@ -490,6 +512,7 @@ volumes:
   download-cache:
     name: bunyip-download-cache
 
+# SPEC-14.28.4: fixed network name
 networks:
   private:
     name: bunyip-private

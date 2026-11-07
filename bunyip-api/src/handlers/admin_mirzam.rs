@@ -23,6 +23,7 @@ use crate::repositories::{AuditLogRepository, MirzamConfigRepository};
 use crate::responses::{get_request_id, success};
 use crate::services::EncryptionKeySet;
 
+// SPEC-10.18.3: a blank stored token reads as absent.
 /// The token as the declared provider holds it, blank read as absent.
 async fn stored_token(
     pool: &PgPool,
@@ -36,6 +37,7 @@ async fn stored_token(
     )
 }
 
+// SPEC-10.18.3: the token itself is never returned.
 /// `GET /v1/admin/mirzam`
 pub async fn get_mirzam_config(
     req: HttpRequest,
@@ -53,6 +55,7 @@ pub async fn get_mirzam_config(
     ))
 }
 
+// SPEC-10.18.4, SPEC-10.18.5, SPEC-10.18.6, SPEC-10.18.7: whole-row save, token first, audited.
 /// `PUT /v1/admin/mirzam`
 ///
 /// The four settings are replaced whole. `api_token` empty or absent leaves
@@ -145,6 +148,7 @@ pub async fn update_mirzam_config(
     ))
 }
 
+// SPEC-10.18.8, SPEC-10.18.9: a failing Mirzam is a 200 with ok false; missing settings are 400.
 /// `POST /v1/admin/mirzam/check`
 ///
 /// Reads both SAVED lists from Mirzam with the saved token and reports each

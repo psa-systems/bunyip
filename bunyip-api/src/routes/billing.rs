@@ -4,6 +4,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.25.2: billing route inventory
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/billing")

@@ -29,12 +29,14 @@ use crate::responses::{get_request_id, success};
 /// canvas `avatar-picker.js` already re-encodes to client-side. Bounding it
 /// server-side too closes the no-JS `<form>` fallback and a direct API POST,
 /// which previously stored the upload verbatim.
+// SPEC-10.26.5: long-edge bound for stored avatars
 const AVATAR_MAX_EDGE: u32 = 512;
 
 /// Convert a shared-crate validation failure into bunyip's error type.
 ///
 /// The wording is the crate's, which describes the rule and never the bytes;
 /// the field name stays `avatar` so the client attaches it to the right input.
+// SPEC-10.26.4: field-scoped, logged rejection
 fn avatar_err(e: ImageValidationError) -> AppError {
     tracing::warn!(reason = ?e, "Avatar rejected");
     AppError::validation("avatar", e.to_string())
@@ -44,6 +46,7 @@ fn avatar_err(e: ImageValidationError) -> AppError {
 /// so an animated GIF is not silently flattened into a still PNG. An image
 /// already within bounds is returned unchanged, so a small upload is never
 /// recompressed for no reason.
+// SPEC-10.26.5, SPEC-10.26.6: in-bounds images are kept as is
 fn resize_within(bytes: Vec<u8>, max_edge: u32) -> Result<Vec<u8>, String> {
     let format = image::guess_format(&bytes)
         .map_err(|_| "Could not read that file as an image.".to_string())?;
@@ -67,6 +70,7 @@ fn resize_within(bytes: Vec<u8>, max_edge: u32) -> Result<Vec<u8>, String> {
 /// Reads the single file part, enforces the 2 MiB cap while streaming, sniffs
 /// the MIME from content, guards dimensions, then UPSERTs the bytes. Returns the
 /// refreshed [`UserResponse`] so the caller sees the new `avatar_updated_at`.
+// SPEC-10.26.1, SPEC-10.26.2, SPEC-10.26.3, SPEC-10.26.4, SPEC-10.26.6, SPEC-10.26.7: content-validated upload
 pub async fn upload_avatar(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -137,6 +141,7 @@ pub async fn upload_avatar(
 }
 
 /// DELETE /v1/users/me/avatar. Idempotent removal; returns the refreshed user.
+// SPEC-10.26.8: idempotent removal
 pub async fn delete_avatar(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -152,6 +157,7 @@ pub async fn delete_avatar(
 /// and `inline` disposition. 404 when the user has no avatar (the caller renders
 /// the initials/icon fallback). Authenticated: only the owner fetches their own
 /// avatar, so no cross-user enumeration surface is exposed.
+// SPEC-10.26.9, SPEC-10.26.10: owner-only, inline, never executable
 pub async fn get_avatar(
     user: AuthenticatedUser,
     pool: web::Data<PgPool>,

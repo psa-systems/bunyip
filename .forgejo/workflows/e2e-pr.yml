@@ -32,6 +32,7 @@
 # gate` check never reports for the PRs it was meant to cost nothing; a
 # job-level `if:` still reports the job (skipped), which satisfies branch
 # protection.
+# SPEC-3.9.1
 name: E2E
 
 on:
@@ -39,6 +40,7 @@ on:
     branches:
       - main
 
+# SPEC-3.9.2
 concurrency:
   # Separate from e2e.yml's `e2e-bunyip` group: this job never logs in, so it
   # cannot trip the 5-logins/min/email limit that forces the suite serial.
@@ -47,6 +49,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # SPEC-3.9.3
   classify-diff:
     name: Classify diff
     # MEDIUM: the composite action runs one nu-script over `git diff`; it
@@ -74,6 +77,7 @@ jobs:
         id: classify-diff
         uses: https://dev.a8n.run/psa-systems/common/.forgejo/actions/classify-diff@main
 
+  # SPEC-3.9.4
   e2e-pr:
     # BUNYIP-478: renders as `E2E / PR gate` (workflow `E2E` / job `PR gate`).
     # The credential-free PR gate that branch protection requires on pull
@@ -99,6 +103,7 @@ jobs:
     # The complete credential surface of this job. Adding any other secret here
     # hands it to unreviewed PR code; put the step in e2e.yml instead.
     # scripts/check-workflow-secrets.nu enforces this.
+    # SPEC-3.9.5: complete credential surface of a PR-triggered job
     env:
       E2E_BASE_URL: ${{ secrets.E2E_STAGING_BASE_URL }}
       E2E_OP_BASE_URL: ${{ secrets.OIDC_ISSUER_STAGING }}
@@ -110,6 +115,7 @@ jobs:
       # See e2e.yml for why npm/npx run through corepack and node scripts use
       # the concrete node24 binary. --ignore-scripts: no dependency lifecycle
       # script runs on PR-authored content.
+      # SPEC-3.9.6
       - name: Install dependencies
         run: corepack npm ci --ignore-scripts
 

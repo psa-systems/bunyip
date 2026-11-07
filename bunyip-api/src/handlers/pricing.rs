@@ -38,6 +38,7 @@ use crate::services::StripeService;
 /// dashboard edit surfaces on its own, long enough that a public page cannot
 /// drive Stripe traffic; admin-side edits do not wait for it (see
 /// [`PricingCache::invalidate`]).
+// SPEC-10.30.9: bounds public traffic to Stripe
 pub const PRICING_CACHE_TTL_SECS: u64 = 60;
 
 /// One publicly advertised tier.
@@ -125,6 +126,7 @@ impl PricingCache {
     /// Stripe: the first takes `flight` and loads, the rest queue on it and
     /// re-check the slot. The slot's `RwLock` is never held across an await, and
     /// a failed resolve leaves the previous payload in place.
+    // SPEC-10.30.9: single flight on a miss
     pub async fn get_or_resolve<F, Fut>(&self, load: F) -> Arc<PublicPricingResponse>
     where
         F: FnOnce() -> Fut,
@@ -146,6 +148,7 @@ impl PricingCache {
 
     /// Drop the cached payload so the next read re-resolves. Called whenever an
     /// admin saves tier config, so a price-id or switch change is live at once.
+    // SPEC-10.30.10: admin edits show immediately
     pub fn invalidate(&self) {
         *self.slot.write().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -193,6 +196,7 @@ pub enum UnpublishedReason {
 
 impl UnpublishedReason {
     /// Stable machine key, so a caller can branch without parsing prose.
+    // SPEC-10.30.8: stable machine keys
     pub fn code(&self) -> &'static str {
         match self {
             Self::SwitchOff => "switch_off",
@@ -264,6 +268,7 @@ impl UnpublishedReason {
     /// Log this reason exactly once, where it is produced. The deliberate
     /// states (switch off, nothing mapped) are `info`; everything else means
     /// something is misconfigured and logs at `warn`.
+    // SPEC-10.30.7: every unpublished reason is logged once
     fn log(&self) {
         match self {
             Self::SwitchOff | Self::NoTierMapped => tracing::info!(
@@ -337,6 +342,7 @@ struct MappedTier {
 /// Standard is unlimited (`(true, None)`); Lifetime and Early Adopter are capped
 /// and sell out once usage reaches the cap. `usage` is `(lifetime_used,
 /// early_adopter_used)`, straight from `count_tier_assignments`.
+// SPEC-10.30.6: sold out at the slot cap
 fn tier_availability(tier: &str, cfg: &TierConfig, usage: (i64, i64)) -> (bool, Option<i64>) {
     let (cap, used) = match tier {
         "lifetime" => (cfg.lifetime_slots, usage.0),
@@ -352,6 +358,7 @@ fn tier_availability(tier: &str, cfg: &TierConfig, usage: (i64, i64)) -> (bool, 
 /// mapping order (carrying their trial length and availability), plus one reason
 /// per tier that did not resolve. Pure, so every per-tier outcome is
 /// unit-testable without Stripe.
+// SPEC-10.30.4: one reason per unresolved tier
 fn match_mapped_tiers(
     mapped: &[MappedTier],
     prices: &[StripePriceResponse],
@@ -399,6 +406,7 @@ fn match_mapped_tiers(
 /// page has nothing trustworthy to print, and a 404 is the honest answer. Every
 /// such branch logs once (see [`UnpublishedReason::log`]) and is returned, so
 /// the admin page can show what the public page cannot.
+// SPEC-10.30.2, SPEC-10.30.3, SPEC-10.30.5: unpublished is a 404 for the page, never a 500
 async fn resolve(
     cfg: TierConfig,
     stripe: Arc<StripeService>,
@@ -495,6 +503,7 @@ fn snapshot(tier_config: &web::Data<Arc<RwLock<TierConfig>>>) -> TierConfig {
 }
 
 /// `GET /v1/pricing` - public, unauthenticated, under the rate-limit floor.
+// SPEC-10.30.1, SPEC-10.30.8: public body carries no reasons
 pub async fn public_pricing(
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
     stripe: web::Data<Arc<StripeService>>,
@@ -520,6 +529,7 @@ pub async fn public_pricing(
 /// BUNYIP-526: live `(lifetime_used, early_adopter_used)` for the availability
 /// computation. A count failure degrades to `(0, 0)` - it must not 500 the
 /// public page - which reads as "not sold out" and is logged.
+// SPEC-10.30.11: count failure is logged
 async fn slot_usage(pool: &PgPool) -> (i64, i64) {
     UserRepository::count_tier_assignments(pool)
         .await
@@ -534,6 +544,7 @@ async fn slot_usage(pool: &PgPool) -> (i64, i64) {
 ///
 /// Deliberately bypasses [`PricingCache`]: an admin who just fixed a mapping is
 /// asking what is true now, not what a visitor was served up to a minute ago.
+// SPEC-10.30.12: uncached, with reasons
 pub async fn admin_pricing_status(
     req: HttpRequest,
     _admin: AdminUser,

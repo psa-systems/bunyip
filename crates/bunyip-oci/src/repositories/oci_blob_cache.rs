@@ -23,6 +23,7 @@ impl OciBlobCacheRepository {
         Self { pool }
     }
 
+    // SPEC-6.18.2, SPEC-6.18.6: row or None
     pub async fn find(&self, digest: &str) -> Result<Option<OciBlobCacheRow>, AppError> {
         let row = sqlx::query_as::<_, OciBlobCacheRow>(
             "SELECT content_digest, size_bytes, media_type, created_at, last_accessed_at
@@ -34,6 +35,7 @@ impl OciBlobCacheRepository {
         Ok(row)
     }
 
+    // SPEC-6.18.1, SPEC-6.18.6: keeps an existing media_type when the new one is NULL
     /// Insert or update a cache entry. Bumps `last_accessed_at` on conflict.
     pub async fn upsert(&self, new_blob: &NewCachedBlob) -> Result<(), AppError> {
         sqlx::query(
@@ -52,6 +54,7 @@ impl OciBlobCacheRepository {
         Ok(())
     }
 
+    // SPEC-6.18.2, SPEC-6.18.6: LRU recency bump
     pub async fn touch(&self, digest: &str) -> Result<(), AppError> {
         sqlx::query("UPDATE oci_blob_cache SET last_accessed_at = NOW() WHERE content_digest = $1")
             .bind(digest)
@@ -60,6 +63,7 @@ impl OciBlobCacheRepository {
         Ok(())
     }
 
+    // SPEC-6.18.3, SPEC-6.18.6: SUM(bigint) is NUMERIC; cast back so the row decodes
     pub async fn total_size_bytes(&self) -> Result<i64, AppError> {
         // Postgres `SUM(bigint)` returns NUMERIC (to avoid overflow), which does
         // NOT decode into i64 and made this query fail on every non-empty table
@@ -75,6 +79,7 @@ impl OciBlobCacheRepository {
         Ok(total)
     }
 
+    // SPEC-6.18.4, SPEC-6.18.6: LRU order for eviction
     /// Return rows for LRU eviction in oldest-last-access-first order, up to `limit`.
     pub async fn oldest(&self, limit: i64) -> Result<Vec<OciBlobCacheRow>, AppError> {
         let rows = sqlx::query_as::<_, OciBlobCacheRow>(
@@ -87,6 +92,7 @@ impl OciBlobCacheRepository {
         Ok(rows)
     }
 
+    // SPEC-6.18.5, SPEC-6.18.6: single-digest removal
     pub async fn delete(&self, digest: &str) -> Result<(), AppError> {
         sqlx::query("DELETE FROM oci_blob_cache WHERE content_digest = $1")
             .bind(digest)
@@ -95,6 +101,7 @@ impl OciBlobCacheRepository {
         Ok(())
     }
 
+    // SPEC-6.18.5, SPEC-6.18.6: returns deleted digests so the caller unlinks the files
     /// Delete rows whose digest is NOT in the given set. Returns deleted digests
     /// so the caller can unlink files.
     pub async fn delete_except(&self, keep: &[String]) -> Result<Vec<String>, AppError> {
@@ -109,6 +116,7 @@ impl OciBlobCacheRepository {
     }
 }
 
+// SPEC-6.1.4: adapter from the engine trait to the SQL methods above
 /// Wire the Postgres repository to the engine's storage trait. Each method
 /// simply delegates to the inherent SQL method above.
 #[async_trait]

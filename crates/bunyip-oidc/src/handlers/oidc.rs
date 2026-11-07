@@ -24,6 +24,7 @@ use crate::services::oidc_provider::{sha256_bytes, OAuthClient, OidcProvider};
 
 /// Unwrap `Option<Arc<OidcProvider>>` from `web::Data`, returning 404 when absent.
 /// Yields `&OidcProvider`.
+// SPEC-5.3.1: OIDC disabled means 404 on every endpoint
 macro_rules! require_provider {
     ($opt:expr) => {
         match $opt.as_ref().as_ref() {
@@ -43,6 +44,7 @@ macro_rules! require_provider {
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+// SPEC-5.36.1
 fn oidc_error(error: &str, description: &str) -> HttpResponse {
     HttpResponse::BadRequest().json(serde_json::json!({
         "error": error,
@@ -50,6 +52,7 @@ fn oidc_error(error: &str, description: &str) -> HttpResponse {
     }))
 }
 
+// SPEC-5.15.2: blocks markup injection via client name or URIs
 /// HTML-escape `s` for safe embedding in attribute values and text
 /// nodes. Bunyip does not pull in a template engine for the OIDC
 /// pages, so this hand-rolled escaper is what stops a forged client
@@ -71,6 +74,7 @@ fn html_escape(s: &str) -> String {
     out
 }
 
+// SPEC-5.15.1
 /// Render the tenant picker for the multi-tenant `/authorize` branch
 /// (BUNYIP-62). Returns an HTML page with one radio per assignment;
 /// the form re-submits to `/oauth2/authorize` (GET) with every
@@ -168,6 +172,7 @@ fn render_tenant_picker(
 
 // ── Discovery ─────────────────────────────────────────────────────────────────
 
+// SPEC-5.3.2, SPEC-5.4.1, SPEC-5.4.2, SPEC-5.4.3
 /// GET /.well-known/openid-configuration
 pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpResponse {
     let provider = require_provider!(provider, plain);
@@ -217,6 +222,7 @@ pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpRe
 
 // ── JWKS ──────────────────────────────────────────────────────────────────────
 
+// SPEC-5.5.1
 /// GET /.well-known/jwks.json
 pub async fn jwks(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpResponse {
     let provider = require_provider!(provider, plain);
@@ -239,6 +245,7 @@ pub struct AuthorizeQuery {
     pub nonce: String,
     pub code_challenge: String,
     pub code_challenge_method: String,
+    // SPEC-5.10.4: prompt is parsed but never acted on
     #[serde(default)]
     pub prompt: Option<String>,
     /// BUNYIP-62: when the resolved client gates on
@@ -270,6 +277,7 @@ pub async fn authorize(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // SPEC-5.6.1
     // BUNYIP-264: per-IP rate limit before any DB / discovery work.
     let ip_key = crate::middleware::auth::extract_client_ip(&req)
         .map(|ip| ip.to_string())
@@ -288,6 +296,7 @@ pub async fn authorize(
     // configured correctly" if used as a handler param. Match the
     // existing middleware pattern (`crates/bunyip-domain/src/middleware/auth.rs:160`)
     // and read it out of `app_data` directly.
+    // SPEC-5.7.1
     let jwt_service = req
         .app_data::<Arc<crate::services::JwtService>>()
         .cloned()
@@ -296,6 +305,7 @@ pub async fn authorize(
     // Authentication is gated on a server-validated OP session, NOT on the
     // stateless hub access_token. logout revokes the op_sessions row, so a
     // surviving/replayed access_token cookie can no longer mint a code.
+    // SPEC-5.7.2, SPEC-5.7.3, SPEC-5.7.4: only a server-validated OP session authenticates
     let op_session_cookie = req.cookie(crate::middleware::auth::AuthCookies::OP_SESSION_COOKIE);
     let op_session = match &op_session_cookie {
         Some(c) => provider.load_op_session(c.value()).await?,
@@ -337,6 +347,7 @@ pub async fn authorize(
                 s
             }
             None => {
+                // SPEC-5.9.1
                 let authorize_url = format!("{}{}", provider.issuer(), req.uri());
                 // Distinguish the two failure modes: "no cookie at all" (first
                 // visit, freshly logged out, browser expired the 7-day MaxAge)
@@ -371,6 +382,7 @@ pub async fn authorize(
                 // intact: they may still authenticate the hub session, and
                 // `/login` needs them to know who the user is when offering
                 // the re-login form.
+                // SPEC-5.9.2: a dead sid cookie would loop the login redirect
                 if stale_cookie_present {
                     let secure = config.cookies_secure(&req);
                     // BUNYIP-266: clear at the configured cookie_domain so a
@@ -393,9 +405,11 @@ pub async fn authorize(
         },
     };
 
+    // SPEC-5.10.1: validation runs only after authentication
     let q = &query.0;
 
     // Basic parameter validation
+    // SPEC-5.10.2
     if q.response_type != "code" {
         return Ok(oidc_error(
             "unsupported_response_type",
@@ -422,6 +436,7 @@ pub async fn authorize(
     }
 
     // Parse client_id
+    // SPEC-5.10.3
     let client_id = Uuid::parse_str(&q.client_id)
         .map_err(|_| AppError::bad_request("invalid client_id UUID"))?;
 
@@ -431,6 +446,7 @@ pub async fn authorize(
         .await?
         .ok_or_else(|| AppError::bad_request("unknown client_id"))?;
 
+    // SPEC-5.11.1
     // Validate redirect_uri. Non-loopback clients require an exact match;
     // bare-loopback registrations (RFC 8252) permit a varying port but the
     // request URI's *parsed* host must still be the loopback host.
@@ -446,6 +462,7 @@ pub async fn authorize(
     // them back here with consent=denied. redirect_uri is validated above, so
     // return the OIDC access_denied error to the RP per RFC 6749 4.1.2.1
     // (echoing state), rather than re-rendering the consent gate.
+    // SPEC-5.11.3
     if q.consent.as_deref() == Some("denied") {
         let deny_url = format!(
             "{}?error=access_denied&error_description={}&state={}",
@@ -459,6 +476,7 @@ pub async fn authorize(
     }
 
     // Validate scopes
+    // SPEC-5.12.1
     let requested_scopes: Vec<String> = q
         .scope
         .split_whitespace()
@@ -469,6 +487,7 @@ pub async fn authorize(
     // Refuse to issue a code when none of the requested scopes survive the
     // intersection with the client's allowed set (RFC 6749 §4.1.2.1). Issuing
     // a code for an empty scope grant would mint a token with no scope.
+    // SPEC-5.12.2
     if requested_scopes.is_empty() {
         return Ok(oidc_error(
             "invalid_scope",
@@ -486,6 +505,7 @@ pub async fn authorize(
     // address), offline_access (refresh tokens; client must already be
     // configured for them via allowed_grant_types). Any scope outside this
     // set must reach `granted_scopes` only through `/oauth2/consent`.
+    // SPEC-5.13.1: profile and phone need the consent screen
     const JIT_BASELINE_SCOPES: &[&str] = &["openid", "email", "offline_access"];
     if !provider.has_entitlement(session.user_id, client_id).await? {
         let baseline: Vec<String> = client
@@ -503,6 +523,7 @@ pub async fn authorize(
     // `granted_scopes` triggers the consent screen. Returns the user to
     // bunyip-web's consent page with the original authorize parameters so
     // Allow can resume the dance.
+    // SPEC-5.13.2
     let granted = provider
         .get_granted_scopes(session.user_id, client_id)
         .await?;
@@ -529,6 +550,7 @@ pub async fn authorize(
         "BUNYIP-234: authorize consent-gate evaluation"
     );
     if !missing.is_empty() {
+        // SPEC-5.13.3
         if client.first_party {
             // BUNYIP-342: first-party apps (e.g. Mokosh under Bunyip) skip the
             // consent screen. Record the grant (for /settings visibility), then
@@ -549,6 +571,7 @@ pub async fn authorize(
                 "BUNYIP-342: first-party client, consent skipped and scopes auto-granted"
             );
         } else {
+            // SPEC-5.13.4
             // Third-party client: hand control to bunyip-web's consent page,
             // now carrying the client's display name (BUNYIP-342) and, when set,
             // its logo URL (BUNYIP-406) so the screen can name and picture the
@@ -590,6 +613,7 @@ pub async fn authorize(
     // pre-BUNYIP-61) skip this block entirely and behave exactly as
     // before: no tenant claim, no picker, no assignment check. The
     // gate is opt-in per client.
+    // SPEC-5.14.1, SPEC-5.14.2
     let selected_tenant_id = if client.tenant_claim_name.is_some() {
         let assignments = crate::repositories::OAuthClientUserTenantRepository::assignments_for(
             &provider.pool,
@@ -629,6 +653,7 @@ pub async fn authorize(
 
     // Reuse the existing OP session established at login; auth_time/acr/amr come
     // from that session rather than being re-minted per authorize request.
+    // SPEC-5.16.1
     let acr = session.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd");
     let amr = session
         .amr
@@ -652,6 +677,7 @@ pub async fn authorize(
         )
         .await?;
 
+    // SPEC-5.16.3
     let redirect = format!(
         "{}?code={}&state={}",
         q.redirect_uri,
@@ -671,6 +697,7 @@ pub async fn authorize(
     Ok(response.finish())
 }
 
+// SPEC-5.8.1, SPEC-5.8.2, SPEC-5.8.3, SPEC-5.8.4: two ordered fallbacks, both end in a fresh OP session
 /// Silent-SSO fallback for `/oauth2/authorize` when no `op_session` cookie
 /// resolves. Tries two inputs in order:
 ///
@@ -849,6 +876,7 @@ pub struct TokenResponse {
     pub id_token: Option<String>,
 }
 
+// SPEC-5.19.1
 /// POST /oauth2/token
 pub async fn token(
     req: HttpRequest,
@@ -858,6 +886,7 @@ pub async fn token(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // SPEC-5.6.1
     // BUNYIP-264: per-IP rate limit before any client / credential work.
     // The token endpoint is the canonical brute-force surface for
     // `client_secret_basic`; cap requests well above legitimate refresh
@@ -880,6 +909,7 @@ pub async fn token(
         body.client_id.as_deref(),
         body.client_secret.as_deref(),
     )?;
+    // SPEC-5.17.3
     let client_id = Uuid::parse_str(&client_id_str)
         .map_err(|_| AppError::OidcInvalidClient("invalid client_id format".into()))?;
 
@@ -891,6 +921,7 @@ pub async fn token(
     // Authenticate the client
     authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
+    // SPEC-5.19.2
     // BUNYIP-254: enforce per-client `allowed_grant_types`. The schema
     // already carries the list; the runtime previously ignored it, so a
     // client registered code-only (e.g. lets-chat per migration
@@ -943,6 +974,7 @@ pub async fn token(
             )
             .await
         }
+        // SPEC-5.19.3
         other => Ok(oidc_error(
             "unsupported_grant_type",
             &format!("unsupported grant_type: {other}"),
@@ -950,6 +982,7 @@ pub async fn token(
     }
 }
 
+// SPEC-5.20.1, SPEC-5.20.2, SPEC-5.20.3
 async fn handle_authorization_code_grant(
     provider: &OidcProvider,
     pool: &sqlx::PgPool,
@@ -1053,6 +1086,7 @@ async fn handle_authorization_code_grant(
     }))
 }
 
+// SPEC-5.22.1, SPEC-5.22.2, SPEC-5.22.4
 async fn handle_refresh_grant(
     provider: &OidcProvider,
     pool: &sqlx::PgPool,
@@ -1104,6 +1138,7 @@ async fn handle_refresh_grant(
     // otherwise the rotation would keep minting an at+jwt with a stale tenant
     // claim. Reject with invalid_grant so the client is forced back through
     // /authorize, where the picker re-runs against live assignments.
+    // SPEC-5.22.3: an admin may unassign the tenant after the family began
     if rotated.client.tenant_claim_name.is_some() {
         if let Some(selected) = rotated.selected_tenant_id {
             let assignments =
@@ -1157,6 +1192,7 @@ async fn handle_refresh_grant(
 
 // ── Userinfo endpoint ─────────────────────────────────────────────────────────
 
+// SPEC-5.28.1, SPEC-5.28.2, SPEC-5.28.3
 /// GET /oauth2/userinfo
 ///
 /// Accepts an `Authorization: Bearer <at+jwt>` token.
@@ -1168,6 +1204,7 @@ pub async fn userinfo(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // SPEC-5.6.1
     // BUNYIP-264: per-IP rate limit; silent-SSO + RP profile hydrations
     // call userinfo regularly so 240/min covers multi-app browsers.
     let ip_key = crate::middleware::auth::extract_client_ip(&req)
@@ -1273,6 +1310,7 @@ pub struct RevokeRequest {
     pub client_secret: Option<String>,
 }
 
+// SPEC-5.29.1, SPEC-5.29.2, SPEC-5.29.3
 /// POST /oauth2/revoke (RFC 7009)
 ///
 /// Revokes a refresh token and its entire rotation family. The endpoint does
@@ -1287,6 +1325,7 @@ pub async fn revoke(
 ) -> Result<HttpResponse, AppError> {
     let provider = require_provider!(provider);
 
+    // SPEC-5.6.1
     // BUNYIP-264: per-IP rate limit. Legitimate logout calls /oauth2/revoke
     // once per session; sustained traffic is abuse.
     let ip_key = crate::middleware::auth::extract_client_ip(&req)
@@ -1305,6 +1344,7 @@ pub async fn revoke(
         form.client_id.as_deref(),
         form.client_secret.as_deref(),
     )?;
+    // SPEC-5.17.3
     let client_id = Uuid::parse_str(&client_id_str)
         .map_err(|_| AppError::OidcInvalidClient("invalid client_id format".into()))?;
     let client = provider
@@ -1324,6 +1364,7 @@ pub async fn revoke(
     Ok(HttpResponse::Ok().finish())
 }
 
+// SPEC-5.29.2: client_id predicate stops cross-client revocation
 async fn do_revoke(
     provider: &OidcProvider,
     client_id: Uuid,
@@ -1374,6 +1415,7 @@ pub struct LogoutQuery {
     pub state: Option<String>,
 }
 
+// SPEC-5.30.1
 /// GET /oauth2/logout
 pub async fn logout(
     req: HttpRequest,
@@ -1398,6 +1440,7 @@ pub async fn logout(
     // RP-B. Now: no hint -> no redirect; hint present + URI not in that
     // client's allowlist -> no redirect. Bare /oauth2/logout (no
     // redirect, no hint) still works as a "just sign me out" call.
+    // SPEC-5.30.2, SPEC-5.30.3, SPEC-5.30.4, SPEC-5.30.5: hint-scoped allowlist closes the cross-RP open redirect
     let redirect = match &query.post_logout_redirect_uri {
         Some(uri) if !uri.is_empty() => {
             let hint_client_id: Option<Uuid> = match query.id_token_hint.as_deref() {
@@ -1450,6 +1493,7 @@ pub async fn logout(
         _ => "/".to_string(),
     };
 
+    // SPEC-5.30.6
     if let Some(claims) = user.0 {
         let user_id = claims.sub; // already Uuid
         match provider_arc.revoke_sessions_for_backchannel(user_id).await {
@@ -1458,6 +1502,7 @@ pub async fn logout(
                 // Reuse the single app-state reqwest client (built once at
                 // startup) rather than rebuilding one per logout (BUNYIP-74).
                 let http = http_client.get_ref().clone();
+                // SPEC-5.31.2: fire-and-forget, no retry
                 tokio::spawn(async move {
                     for (client_id, uri, sid) in targets {
                         match provider_arc.mint_logout_token(user_id, &sid, client_id) {
@@ -1519,6 +1564,7 @@ pub async fn logout(
 
 // ── Private helpers ───────────────────────────────────────────────────────────
 
+// SPEC-5.17.1, SPEC-5.17.2
 /// Extract (client_id, client_secret) from either HTTP Basic auth or the form
 /// body's `client_id` / `client_secret` fields. Shared by the token and
 /// revocation endpoints.
@@ -1552,6 +1598,7 @@ fn extract_client_credentials(
     Ok((client_id, form_client_secret.map(|s| s.to_string())))
 }
 
+// SPEC-5.18.1, SPEC-5.18.2, SPEC-5.18.3, SPEC-5.18.4, SPEC-5.18.5
 /// Verify the client authenticates per its registered method.
 ///
 /// BUNYIP-254: previously this returned Ok for any `client_type == "public"`
@@ -1642,6 +1689,7 @@ pub(crate) async fn authenticate_client(
     }
 }
 
+// SPEC-5.28.1
 /// Extract `Authorization: Bearer <token>` from the request.
 fn extract_bearer_token(req: &HttpRequest) -> Option<String> {
     req.headers()
@@ -1650,6 +1698,7 @@ fn extract_bearer_token(req: &HttpRequest) -> Option<String> {
         .and_then(|s| s.strip_prefix("Bearer ").map(|t| t.to_string()))
 }
 
+// SPEC-5.11.2
 /// Does a request `redirect_uri` match a single registered redirect?
 ///
 /// Normal clients require a byte-for-byte exact match. A bare-loopback
@@ -1667,6 +1716,7 @@ fn redirect_uri_matches(registered: &str, requested: &str) -> bool {
     }
 }
 
+// SPEC-5.11.2
 /// True iff `requested` is an `http` URL whose *parsed* host is a loopback
 /// host (`127.0.0.1`, `::1`, or `localhost`) with no userinfo component.
 fn is_loopback_redirect(requested: &str) -> bool {

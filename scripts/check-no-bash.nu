@@ -11,6 +11,7 @@
 #
 # Usage: scripts/check-no-bash.nu [scripts_dir]
 def main [scripts_dir: string = "scripts"] {
+    # SPEC-3.17.4
     mut failed = 0
 
     for file in (^git ls-files $scripts_dir | lines) {

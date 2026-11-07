@@ -18,6 +18,7 @@ const RUST_FILE = "bunyip-web/src/config.rs"
 const ENV_FILE = ".env.example"
 
 # Every uppercase NAME passed to a `var("NAME")` call, sorted and deduplicated.
+# SPEC-3.21.1
 def config-vars [content: string]: nothing -> list<string> {
     $content
     | parse --regex 'var\("([A-Z0-9_]+)"\)'
@@ -37,10 +38,12 @@ def documented-vars [content: string]: nothing -> list<string> {
     | sort
 }
 
+# SPEC-3.21.2
 def undocumented [rust: list<string>, documented: list<string>]: nothing -> list<string> {
     $rust | where {|k| $k not-in $documented }
 }
 
+# SPEC-3.21.5
 def self-test []: nothing -> nothing {
     mut ok = true
 

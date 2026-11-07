@@ -32,6 +32,7 @@ use crate::views::ui::{
 };
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.54.1: fixed tagline set
 const TAGLINES: [&str; 5] = [
     "All access. No clock.",
     "All in. All yours.",
@@ -40,6 +41,7 @@ const TAGLINES: [&str; 5] = [
     "Zero TTL. Infinite access.",
 ];
 
+// SPEC-12.54.1, SPEC-12.54.2, SPEC-12.54.5: concurrent fetches, distinct list states
 pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/dashboard").await {
         Ok(v) => v,
@@ -131,6 +133,7 @@ pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Respon
     dashboard_response(&c, &user, "/dashboard", "Dashboard", content)
 }
 
+// SPEC-12.54.2, SPEC-12.54.3, SPEC-12.54.4: error, empty and populated are separate
 /// The "Your Applications" card grid on /dashboard. Pure so the card container
 /// is unit-testable (BUNYIP-367): `gap-6` is the same 24px rhythm the rest of
 /// the authenticated shells stack their cards on. `reachable` is `false` when
@@ -189,6 +192,7 @@ fn dashboard_apps_grid(
     }
 }
 
+// SPEC-12.54.4: tile must agree with the Community nav entry
 /// BUNYIP-755: the row `BUNYIP-533`'s migration set `subdomain = 'chat'` on
 /// (`20260812000020_fix_lets_chat_subdomain.sql`), so this is the one
 /// application whose tile must agree with the sidebar Community nav entry
@@ -196,6 +200,7 @@ fn dashboard_apps_grid(
 /// `app_domain` happens to resolve a host for it.
 const COMMUNITY_APP_SLUG: &str = "lets-chat";
 
+// SPEC-12.54.4: no link to an unconfigured community
 /// Launch link for one application tile. `None` for the Community app when
 /// `community_enabled()` is false even though it carries a declared
 /// subdomain, so the tile never links to a community that
@@ -209,6 +214,7 @@ fn app_tile_link(app: &Application, domain: &str) -> Option<String> {
     app_launch_link(app, domain)
 }
 
+// SPEC-12.54.8: member, non-member and unconfigured routing
 /// BUNYIP-329: decide where `/community` sends the caller. A member with a
 /// configured Let's Chat URL is redirected into it (authenticated via their
 /// existing OP session); a non-member is sent to the membership upsell; and if
@@ -222,6 +228,7 @@ fn community_redirect_target(community_url: &str, is_member: bool) -> &str {
     }
 }
 
+// SPEC-12.54.8: guarded redirect
 /// GET /community - drop an authenticated member into the team Let's Chat
 /// ("Community") instance (BUNYIP-329). The target URL already runs Let's
 /// Chat's OIDC client against bunyip-api, so the member's existing OP session
@@ -237,6 +244,7 @@ pub async fn community(State(st): State<AppState>, headers: HeaderMap) -> Respon
     redirect_cookies(target, &c.set_cookies)
 }
 
+// SPEC-12.54.6: admin first so no contradictory pill
 pub fn membership_badge(user: &User) -> Markup {
     // Admins have all-access regardless of membership status (mirrors
     // `has_active_membership`, which treats role == Admin as access-granted).
@@ -271,6 +279,7 @@ fn membership_prompt(user: &User) -> Markup {
     }
 }
 
+// SPEC-12.54.7: locked price text only from real data
 /// BUNYIP-590: the currency and period come from the published tiers
 /// (`util::pricing_currency` and the member's own tier's `interval`,
 /// BUNYIP-828), because the per-user locked amount arrives as bare cents. A
@@ -313,19 +322,23 @@ fn membership_status(user: &User, pricing: &PricingResponse) -> Markup {
 // shared formatting
 // ===========================================================================
 
+// SPEC-12.54.20: date format
 fn fmt_ts(ts: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
         .map(|d| d.format("%B %-d, %Y").to_string())
         .unwrap_or_default()
 }
+// SPEC-12.54.20: date format
 fn fmt_date_iso(iso: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(iso)
         .map(|d| d.format("%B %-d, %Y").to_string())
         .unwrap_or_else(|_| iso.to_string())
 }
+// SPEC-12.54.20: currency format
 fn fmt_currency(cents: i64, currency: &str) -> String {
     format!("{} {:.2}", currency.to_uppercase(), cents as f64 / 100.0)
 }
+// SPEC-12.54.20: size format
 fn format_size(bytes: i64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
     if mb >= 1.0 {
@@ -339,6 +352,7 @@ fn format_size(bytes: i64) -> String {
 // Applications
 // ===========================================================================
 
+// SPEC-12.54.4, SPEC-12.54.12: host and launch only for a declared subdomain
 /// One application card on the Applications page. BUNYIP-495: `h-full` plus a
 /// column flex layout makes the card fill its grid cell and `mt-auto` drops the
 /// action block to the bottom, so a card carrying an optional block (downloads,
@@ -405,6 +419,7 @@ fn app_card(
     }
 }
 
+// SPEC-12.54.2, SPEC-12.54.9, SPEC-12.54.10, SPEC-12.54.11: partial failures degrade one part and are logged
 pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/applications").await {
         Ok(v) => v,
@@ -544,6 +559,7 @@ pub async fn applications(State(st): State<AppState>, headers: HeaderMap) -> Res
 // Downloads
 // ===========================================================================
 
+// SPEC-12.54.13: retired page keeps old links working
 /// The standalone Downloads page is retired (BUNYIP-100): downloads now live on
 /// each application card via the per-card Download affordance. Old links and
 /// bookmarks land on the Applications page. The `/downloads/{slug}/{asset}`
@@ -552,6 +568,7 @@ pub async fn downloads(_: State<AppState>, _: HeaderMap) -> Response {
     axum::response::Redirect::permanent("/applications").into_response()
 }
 
+// SPEC-12.54.14, SPEC-12.54.15: never save an error body as the asset
 /// GET /downloads/{slug}/{asset_name}
 ///
 /// BFF download proxy. The browser must never hit bunyip-api directly (separate
@@ -636,6 +653,7 @@ fn instruction_step(n: u32, title: &str, body: Markup) -> Markup {
     }
 }
 
+// SPEC-12.54.18: docker-only instructions
 /// Docker pull-and-run instructions for a product's OCI image: a prerequisite
 /// line plus numbered steps (sign in - the registry is a private proxy, so this
 /// is always required - pull, then
@@ -674,6 +692,7 @@ fn container_instructions(oci: &OciImage) -> Markup {
     }
 }
 
+// SPEC-12.54.18: same-origin download link
 /// Download-and-run instructions for each binary asset. The download uses the
 /// same-origin BFF proxy (`/downloads/...`); the API's `download_url` is not
 /// browser-reachable. No checksum-verify step: the download API exposes no
@@ -708,6 +727,7 @@ fn binary_instructions(g: &AppDownloadGroup) -> Markup {
     }
 }
 
+// SPEC-12.54.16, SPEC-12.54.17: members only; no server value as executable JS
 /// The Download affordance for an application card: a button that opens a
 /// `<dialog>` of step-by-step download/pull instructions - a Docker section when
 /// the product ships an OCI image, and a section per binary asset. Members only;
@@ -758,6 +778,7 @@ fn download_affordance(g: &AppDownloadGroup, is_member: bool) -> Markup {
     }
 }
 
+// SPEC-12.54.19: catalog-only products stay visible
 /// A download-only card for a catalog product that is not a hosted hub tile
 /// (so it has no Launch action). Keeps catalog-only distribution products
 /// visible on the Applications page now that the standalone Downloads page is
@@ -798,6 +819,7 @@ fn upgrade_link() -> Markup {
     }
 }
 
+// SPEC-12.54.17: API values are passive escaped content
 /// A copy-pasteable shell command with a copy-to-clipboard button.
 ///
 /// Trust model: `cmd` may carry API-sourced values (the registry host and
@@ -821,6 +843,7 @@ fn command_block(cmd: &str) -> Markup {
     }
 }
 
+// SPEC-12.54.17: API values are passive escaped content
 /// A copy-pasteable multi-line snippet (e.g. a `compose.yml`) with a copy
 /// button. Like [`command_block`] but preserves newlines instead of forcing a
 /// single line, for block content. Same trust model: the snippet is passive,
@@ -844,6 +867,7 @@ fn compose_block(snippet: &str) -> Markup {
 // Billing
 // ===========================================================================
 
+// SPEC-12.54.13: bookmarks land on /membership
 /// Permanent redirect to `/membership` (HTTP 308). The two pages used to be
 /// separate but rendered the same "no payment history yet" empty state and
 /// confused users navigating between them; the membership page now absorbs the
@@ -857,6 +881,7 @@ pub async fn billing(_: State<AppState>, _: HeaderMap) -> Response {
 // Checkout success
 // ===========================================================================
 
+// SPEC-12.55.1: success copy gated on live status, not tier
 pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) -> Response {
     // authenticate() already refreshed claims via /me; that picks up the new membership.
     let (user, c) = match guard(&st, &headers, "/checkout/success").await {
@@ -953,6 +978,7 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
 // Membership required (error page)
 // ===========================================================================
 
+// SPEC-12.55.2: price only when published
 pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/membership-required").await {
         Ok(v) => v,
@@ -989,6 +1015,7 @@ pub async fn membership_required(State(st): State<AppState>, headers: HeaderMap)
 // Membership (view + actions)
 // ===========================================================================
 
+// SPEC-12.55.12: single plan-name source
 /// Canonical plan-name helper. The Membership card, the Settings "Account
 /// Type" cell, and the public Pricing card all route through this so the
 /// in-app name and the marketing-facing name never disagree. Renaming a tier
@@ -1009,6 +1036,7 @@ fn status_label(s: &MembershipStatus) -> &'static str {
     s.as_str()
 }
 
+// SPEC-12.55.5: names this user's deadline
 /// BUNYIP-590: the past-due banner names THIS user's grace deadline, which
 /// Stripe drives through the webhook that writes `grace_period_end`. It used to
 /// promise a fixed "within 30 days", a number nothing in the system enforces,
@@ -1029,6 +1057,7 @@ fn dunning_banner(grace_period_end: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.55.6: locked price never re-read from the tier
 /// BUNYIP-590: the price on the plan card, from configuration rather than a
 /// compile-time figure. A locked price is the amount the member locked in, so
 /// it is never re-read from the tier's current price; `None` (a locked price
@@ -1053,6 +1082,7 @@ fn plan_price(
     }
 }
 
+// SPEC-12.55.3: flash banner values
 /// BUNYIP-187: flash-banner query for the membership page. Mirrors
 /// `SettingsQuery::{ok, error}`; the values are produced by
 /// `membership_subscribe`, `membership_cancel`, etc., and rendered
@@ -1063,6 +1093,7 @@ pub struct MembershipQuery {
     pub error: Option<String>,
 }
 
+// SPEC-12.55.3, SPEC-12.55.4, SPEC-12.55.6, SPEC-12.55.7: plan card, invoices and payments with distinct states
 pub async fn membership(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1291,6 +1322,7 @@ pub async fn membership(
     dashboard_response(&c, &user, "/membership", "Membership & Billing", content)
 }
 
+// SPEC-12.55.8: only a Stripe checkout URL is followed
 pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
@@ -1326,6 +1358,7 @@ pub async fn membership_subscribe(State(st): State<AppState>, headers: HeaderMap
     }
 }
 
+// SPEC-12.55.9: operator-facing checkout messages
 /// BUNYIP-187: map the api's raw checkout-error message to operator-
 /// friendly copy. The recognised messages come from
 /// `bunyip-api/src/handlers/membership.rs` and the gotchas catalogued
@@ -1354,6 +1387,7 @@ fn humanise_checkout_error(raw: &str) -> String {
     }
     trimmed.to_string()
 }
+// SPEC-12.55.10: cancel at period end
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
@@ -1366,6 +1400,7 @@ pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
+// SPEC-12.55.10: cancel immediately
 pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
@@ -1378,6 +1413,7 @@ pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMa
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
+// SPEC-12.55.10: undo pending cancellation
 pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (_, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
@@ -1391,6 +1427,7 @@ pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMa
     redirect_cookies("/membership", &cookies)
 }
 
+// SPEC-12.55.11: follow the API portal redirect
 /// BUNYIP-760: open the Stripe-hosted billing portal for the member's own
 /// customer record, following the API redirect straight to Stripe rather than
 /// rendering the URL. The API 404s when the caller has no Stripe customer id
@@ -1413,6 +1450,7 @@ pub async fn membership_billing_portal(State(st): State<AppState>, headers: Head
 // Settings (view + actions)
 // ===========================================================================
 
+// SPEC-12.56.1: flash values and 1-indexed pages
 #[derive(Deserialize)]
 pub struct SettingsQuery {
     pub ok: Option<String>,
@@ -1423,6 +1461,7 @@ pub struct SettingsQuery {
     pub device_page: Option<i64>,
 }
 
+// SPEC-12.56.1: page size for sessions and devices
 /// Page size for the Settings sessions / trusted-device lists (BUNYIP-177).
 const SETTINGS_PAGE_SIZE: i64 = 20;
 
@@ -1440,6 +1479,7 @@ fn profile_fields_note(brand_name: &str) -> String {
     )
 }
 
+// SPEC-12.56.6: brand-aware danger copy
 /// BUNYIP-816 (F9): the Danger Zone copy names this app (the admin-managed
 /// brand), not the sibling product it was hardcoded to before.
 fn danger_zone_app_name(brand_name: &str) -> String {
@@ -1450,6 +1490,7 @@ fn danger_zone_app_name(brand_name: &str) -> String {
     }
 }
 
+// SPEC-12.56.1, SPEC-12.56.2, SPEC-12.56.5, SPEC-12.56.6: sessions and devices fetched independently
 pub async fn settings(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1673,6 +1714,7 @@ fn settings_card(icon_name: &str, gradient: &str, title: &str, body: Markup) -> 
     }
 }
 
+// SPEC-12.56.3, SPEC-12.56.4: failed fetch differs from no sessions
 /// Body of the "Active Sessions" card: one row per session with device, IP,
 /// last-active time, a "This device" badge on the current session, a per-row
 /// revoke action for non-current sessions, and a "log out all other devices"
@@ -1732,6 +1774,7 @@ fn sessions_card_body(
     }
 }
 
+// SPEC-12.56.7: revoke one session
 /// POST /settings/sessions/{id}/revoke - revoke one of the user's sessions.
 pub async fn settings_revoke_session(
     State(st): State<AppState>,
@@ -1751,6 +1794,7 @@ pub async fn settings_revoke_session(
     }
 }
 
+// SPEC-12.56.7: revoke all others
 /// POST /settings/sessions/revoke-others - log out all other devices.
 pub async fn settings_revoke_other_sessions(
     State(st): State<AppState>,
@@ -1769,6 +1813,7 @@ pub async fn settings_revoke_other_sessions(
     }
 }
 
+// SPEC-12.56.3: failed fetch differs from no devices
 /// Body of the "Trusted Devices" card (BUNYIP-138): devices that skip the TOTP
 /// prompt at login, each with a revoke action. `None` is a failed fetch
 /// (BUNYIP-546).
@@ -1810,6 +1855,7 @@ fn trusted_devices_card_body(
     }
 }
 
+// SPEC-12.56.8: forget a trusted device
 /// POST /settings/trusted-devices/{id}/revoke - forget a trusted device.
 pub async fn settings_revoke_trusted_device(
     State(st): State<AppState>,
@@ -1850,6 +1896,7 @@ pub struct ProfileForm {
     pub phone: String,
 }
 
+// SPEC-12.56.9: empty value clears the field
 /// BUNYIP-139: POST /settings/profile. Persists optional first_name /
 /// last_name / phone via `auth_api::update_profile`. Every field is sent on
 /// every submit (trimmed at the API edge) so a user can clear a value by
@@ -1880,11 +1927,13 @@ pub async fn settings_profile(
     }
 }
 
+// SPEC-12.56.10: matches the API ceiling
 /// BUNYIP-408: 2 MiB avatar upload ceiling on the BFF, matching the API's
 /// `MAX_AVATAR_SIZE`. The API re-validates type/size/dimensions; rejecting an
 /// oversized body here avoids relaying it upstream.
 const MAX_AVATAR_UPLOAD_BYTES: usize = 2 * 1024 * 1024;
 
+// SPEC-12.56.10: edge guards before relaying upstream
 /// Read the single uploaded `avatar` file (filename, declared content-type,
 /// bytes) from a multipart body. Mirrors `admin::read_backup_upload`'s field
 /// loop. The declared MIME is advisory - bunyip-api sniffs the real type from
@@ -1922,6 +1971,7 @@ async fn read_avatar_upload(
     }
 }
 
+// SPEC-12.56.11: XHR vs no-JS form
 /// BUNYIP-408: does the caller want a JSON reply (the avatar picker's XHR) rather
 /// than a redirect (the no-JS form fallback)? Keyed on the `Accept` header the
 /// XHR sets explicitly, so a normal form submit still gets the redirect + toast.
@@ -1933,6 +1983,7 @@ fn wants_json(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+// SPEC-12.56.11: JSON reply still relays rotated cookies
 /// Build a JSON response that still relays any rotated auth cookies the guard
 /// captured (so an in-flight refresh is not dropped on the XHR path).
 fn json_cookies(status: StatusCode, body: serde_json::Value, set_cookies: &[String]) -> Response {
@@ -1947,6 +1998,7 @@ fn json_cookies(status: StatusCode, body: serde_json::Value, set_cookies: &[Stri
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+// SPEC-12.56.10, SPEC-12.56.11: upload via API
 /// POST /settings/avatar - upload (or replace) the profile photo. Parses the
 /// multipart body and relays the bytes to `POST /v1/users/me/avatar`. The avatar
 /// picker's XHR (Accept: application/json) gets a JSON `{ok}` / `{error}` so it
@@ -1996,6 +2048,7 @@ pub async fn settings_avatar(
     }
 }
 
+// SPEC-12.56.11: idempotent removal
 /// POST /settings/avatar/remove - clear the profile photo (idempotent). JSON for
 /// the picker's XHR, redirect + toast for the no-JS form.
 pub async fn settings_avatar_remove(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -2023,6 +2076,7 @@ pub async fn settings_avatar_remove(State(st): State<AppState>, headers: HeaderM
     }
 }
 
+// SPEC-12.56.12: 404 not redirect so <img> never navigates
 /// GET /me/avatar - same-origin proxy of the signed-in user's avatar bytes so an
 /// `<img src="/me/avatar?v=...">` loads with the session cookie. Mirrors the
 /// `download_asset` streaming relay. On any non-2xx (no avatar set, expired
@@ -2052,6 +2106,7 @@ pub async fn me_avatar(State(st): State<AppState>, headers: HeaderMap) -> Respon
     }
 }
 
+// SPEC-12.56.13, SPEC-12.56.14: edge validation then API
 pub async fn settings_email(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -2112,6 +2167,7 @@ pub struct PasswordChangeForm {
     #[serde(default)]
     pub totp_code: String,
 }
+// SPEC-12.56.15: mismatch before policy
 pub async fn settings_password(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -2152,6 +2208,7 @@ pub struct DisableForm {
     #[serde(default)]
     pub totp_code: String,
 }
+// SPEC-12.56.16: password and code to the API
 pub async fn settings_disable_2fa(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -2170,6 +2227,7 @@ pub async fn settings_disable_2fa(
     }
 }
 
+// SPEC-12.56.17: feedback returns to the originating page
 /// Resend the email-verification message for the signed-in user. The domain
 /// layer rate-limits issuance (3 per hour) and rejects an already-verified
 /// account; both surface here as the API error message.
@@ -2220,6 +2278,7 @@ pub struct DeleteForm {
     #[serde(default)]
     pub totp_code: String,
 }
+// SPEC-12.56.18: irreversible: require a password at the edge
 pub async fn settings_delete(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -2262,6 +2321,7 @@ pub async fn settings_delete(
 // 2FA setup (QR + verify -> recovery codes)
 // ===========================================================================
 
+// SPEC-12.57.4: QR for the authenticator setup
 fn qr_svg(uri: &str) -> String {
     qrcode::QrCode::new(uri.as_bytes())
         .map(|code| {
@@ -2273,6 +2333,7 @@ fn qr_svg(uri: &str) -> String {
         .unwrap_or_default()
 }
 
+// SPEC-12.57.6: shared by enrollment and regeneration
 /// BUNYIP-371: wrap a rendered secret (the TOTP key + QR, or recovery codes) so
 /// it is heavily blurred by default and revealed only on an explicit toggle, so
 /// a casual screen share does not expose it. CSS-only: a hidden checkbox toggled
@@ -2399,6 +2460,7 @@ fn recovery_codes_panel(
     }
 }
 
+// SPEC-12.57.4: blur by default, JS-free reveal
 fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
     html! {
         div data-sensitive {
@@ -2419,6 +2481,7 @@ fn sensitive_reveal(id: &str, label: &str, content: Markup) -> Markup {
     }
 }
 
+// SPEC-12.57.4: single renderer so a retry keeps the QR
 /// Single Maud renderer for the 2FA enrollment view: QR + manual key + the
 /// verification-code form. Used by BOTH the first render (no error) and the
 /// confirm error path (error banner above the code input). Keeping a single
@@ -2481,6 +2544,7 @@ fn twofa_qr_view(
 const TWOFA_SETUP_HEADING: &str = "Set Up Two-Factor Authentication";
 const TWOFA_SETUP_SUBTITLE: &str = "Scan the QR code, then enter a code to confirm.";
 
+// SPEC-12.57.2, SPEC-12.57.3: key shown only after the password step
 /// Password step that starts setup (BUNYIP-886): the key is shown only after it.
 /// `field_err` renders under the password; `general_err` (not about it) above the card.
 fn twofa_setup_password_form(field_err: Option<&str>, general_err: Option<&str>) -> Markup {
@@ -2508,6 +2572,7 @@ fn twofa_setup_password_form(field_err: Option<&str>, general_err: Option<&str>)
     }
 }
 
+// SPEC-12.57.3: setup would be refused; point to re-key
 /// Shown instead of the password step when two-factor is already on: setup
 /// would be refused, and changing the app is the re-key flow (BUNYIP-886).
 fn twofa_setup_already_on() -> Markup {
@@ -2522,6 +2587,7 @@ fn twofa_setup_already_on() -> Markup {
     }
 }
 
+// SPEC-12.57.1: no setup call on GET
 /// GET /settings/2fa/setup - the password step only. Makes no setup call, so
 /// loading the URL can never touch an enrollment (BUNYIP-886).
 pub async fn twofa_setup_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -2550,6 +2616,7 @@ pub struct TwoFactorSetupStartForm {
     pub current_password: String,
 }
 
+// SPEC-12.57.2, SPEC-12.57.3: password check then QR with setup token
 /// POST /settings/2fa/setup - check the password via the API, then show the QR
 /// code with the setup token carried in a hidden field (BUNYIP-886).
 pub async fn twofa_setup_post(
@@ -2592,6 +2659,7 @@ pub struct TwoFactorSetupConfirmForm {
     pub setup_token: String,
 }
 
+// SPEC-12.57.5: wrong code redraws the same key
 /// POST /settings/2fa/setup/confirm - confirm with the code and the setup
 /// token. A wrong code redraws the SAME key via resume, never a new setup.
 pub async fn twofa_setup_confirm_post(
@@ -2638,6 +2706,7 @@ pub async fn twofa_setup_confirm_post(
     dashboard_response(&c, &user, "/settings", "Two-factor setup", content)
 }
 
+// SPEC-12.57.7: password gate
 /// Password-confirm form for regenerating recovery codes (BUNYIP-355). Mirrors
 /// the API's password gate on `POST /auth/2fa/recovery-codes`.
 fn twofa_recovery_form(err: Option<&str>) -> Markup {
@@ -2662,6 +2731,7 @@ fn twofa_recovery_form(err: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.57.6, SPEC-12.57.7: codes shown once
 /// Show the freshly-generated recovery codes exactly once, matching the setup
 /// flow's codes panel (BUNYIP-355) and its Copy / Download / gated-Done shape
 /// (BUNYIP-801). Delegates to [`recovery_codes_panel`] so the two cannot drift
@@ -2676,6 +2746,7 @@ fn twofa_recovery_result(codes: &[String]) -> Markup {
     )
 }
 
+// SPEC-12.57.7: password form
 /// GET /settings/2fa/recovery-codes - render the password-confirm form.
 pub async fn twofa_recovery_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/settings/2fa/recovery-codes").await {
@@ -2696,6 +2767,7 @@ pub struct TwoFactorRecoveryForm {
     pub password: String,
 }
 
+// SPEC-12.57.7: regenerate invalidates old codes
 /// POST /settings/2fa/recovery-codes - confirm the password, regenerate via the
 /// API, and show the new codes once (or re-render the form on error).
 pub async fn twofa_recovery_post(
@@ -2716,6 +2788,7 @@ pub async fn twofa_recovery_post(
     dashboard_response(&c, &user, "/settings", "Recovery codes", content)
 }
 
+// SPEC-12.57.8: password plus current code
 /// Step-up form that starts an authenticator re-key (BUNYIP-355): password + a
 /// current code, matching the API gate on `POST /auth/2fa/rekey`.
 fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
@@ -2741,6 +2814,7 @@ fn twofa_rekey_stepup_form(err: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.57.9: code-only retry
 /// Bare code-entry form for finishing a re-key after the QR was already shown
 /// (the pending secret is still staged, so no need to re-scan) (BUNYIP-355).
 fn twofa_rekey_code_form(err: Option<&str>) -> Markup {
@@ -2761,6 +2835,7 @@ fn twofa_rekey_code_form(err: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.57.8: step-up form
 /// GET /settings/2fa/rekey - the re-key step-up form.
 pub async fn twofa_rekey_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match guard(&st, &headers, "/settings/2fa/rekey").await {
@@ -2783,6 +2858,7 @@ pub struct TwoFactorRekeyForm {
     pub totp_code: String,
 }
 
+// SPEC-12.57.8: stage the new secret
 /// POST /settings/2fa/rekey - step-up, then stage the new secret and show its QR.
 pub async fn twofa_rekey_post(
     State(st): State<AppState>,
@@ -2815,6 +2891,7 @@ pub async fn twofa_rekey_post(
     dashboard_response(&c, &user, "/settings", "Reset authenticator", content)
 }
 
+// SPEC-12.57.9: promote the new authenticator
 /// POST /settings/2fa/rekey/confirm - verify a code from the new authenticator,
 /// promote it, and show the fresh recovery codes.
 pub async fn twofa_rekey_confirm_post(

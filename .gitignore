@@ -5,6 +5,7 @@
 data
 For AI/
 
+# SPEC-14.38.1: file configuration layer state is never committed
 # The file configuration layer (BUNYIP-643/644): /app/config, which
 # compose.dev.yml bind-mounts to the repo, so the dev api reads it here and the
 # admin System page writes one file per setting into it. Local operator state
@@ -121,6 +122,7 @@ web_modules/
 # Yarn Integrity file
 .yarn-integrity
 
+# SPEC-14.38.1: real env files ignored; the examples stay tracked
 # dotenv environment variable files: ignore local env files by pattern, keep the tracked examples (governance GOV-56)
 .env*
 !.env.example

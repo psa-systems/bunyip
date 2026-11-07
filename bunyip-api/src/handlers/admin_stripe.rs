@@ -50,6 +50,7 @@ pub(crate) struct PlanScope {
     pub(crate) price_ids: Vec<String>,
 }
 
+// SPEC-10.19.2: lifetime matches by product id only.
 /// Every `tier_config` mapping as `(tier name, price-id column, product-id
 /// column)`. Reads every price/product column bunyip stores (BUNYIP-512 AC), so
 /// tier resolution is not limited to the columns the admin catalog form exposes.
@@ -72,6 +73,7 @@ fn tier_mappings(t: &TierConfigRow) -> [(&'static str, Option<&str>, Option<&str
     ]
 }
 
+// SPEC-10.19.2: product scope covers tiers by product id or any of its price ids.
 /// Resolve the plan for a product archive: every tier whose product id is this
 /// product, or whose price id is one of the product's prices, plus the product's
 /// full price set (which the whole tier is archived against at once).
@@ -94,6 +96,7 @@ fn plan_for_product(
     }
 }
 
+// SPEC-10.19.2: price scope covers tiers by that price id only.
 /// Resolve the plan for a single-price archive: every tier whose price id is
 /// this price, and this one price id. A lone price has nothing to cascade to.
 pub(crate) fn plan_for_price(t: &TierConfigRow, price_id: &str) -> PlanScope {
@@ -108,6 +111,7 @@ pub(crate) fn plan_for_price(t: &TierConfigRow, price_id: &str) -> PlanScope {
     }
 }
 
+// SPEC-10.19.6, SPEC-10.19.13: exact refusal text and singular/plural grammar.
 /// The 409 an archive is refused with while members remain. `kind` is `"product"`
 /// or `"price"`.
 fn refuse_archive(kind: &str, members: i64) -> AppError {
@@ -133,6 +137,7 @@ fn refuse_archive(kind: &str, members: i64) -> AppError {
 // exempt because it archives the price it supersedes in the same operation.
 // =============================================================================
 
+// SPEC-10.19.10: key for the duplicate active price guard.
 /// The identity two active prices on one product must not share. `interval` is
 /// `month`/`year`/... or `None` for a one-time price, which forms its own
 /// bucket. Currency is lowercased so `USD` and `usd` compare equal.
@@ -163,6 +168,7 @@ impl ActivePriceKey {
     }
 }
 
+// SPEC-10.19.11, SPEC-10.19.14: the price being restored never conflicts with itself.
 /// The first ACTIVE price in `existing` whose key matches `key`, skipping
 /// `ignore` (the price being restored, so it never conflicts with itself).
 /// Returns `None` when no active price holds the key.
@@ -176,6 +182,7 @@ fn find_active_conflict<'a>(
         .find(|p| p.active && Some(p.id.as_str()) != ignore && ActivePriceKey::of(p) == *key)
 }
 
+// SPEC-10.19.12: amount text used in the refusal message.
 /// Format a price amount for a message: "$9.00" / "€9.00" / "£9.00", else
 /// "9.00 XXX". Mirrors `bunyip-web`'s `format_stripe_amount` so the admin sees
 /// one amount format across the page and the refusal it triggers.
@@ -195,6 +202,7 @@ pub(crate) fn format_price_amount(unit_amount: Option<i64>, currency: &str) -> S
     }
 }
 
+// SPEC-10.19.11: exact duplicate-price refusal text.
 /// The 409 a create/unarchive is refused with when `existing` already holds the
 /// requested key. Names the conflicting price and its amount and points at the
 /// two ways forward (Archive, or Replace to change the amount).
@@ -275,6 +283,7 @@ pub struct CreateStripeWebhookRequest {
 // Products
 // =============================================================================
 
+// SPEC-10.19.1, SPEC-10.19.3: one grouped member-count query for the page.
 /// GET /v1/admin/stripe/products
 ///
 /// BUNYIP-512: each product carries a `member_count` (members on its plan),
@@ -319,6 +328,7 @@ pub async fn list_stripe_products(
     Ok(success(wrapped, request_id))
 }
 
+// SPEC-10.19.5: product create.
 /// POST /v1/admin/stripe/products
 pub async fn create_stripe_product(
     req: HttpRequest,
@@ -338,6 +348,7 @@ pub async fn create_stripe_product(
     Ok(success(product, request_id))
 }
 
+// SPEC-10.19.5: product patch; absent fields stay unchanged.
 /// PUT /v1/admin/stripe/products/{id}
 pub async fn update_stripe_product(
     req: HttpRequest,
@@ -361,6 +372,7 @@ pub async fn update_stripe_product(
     Ok(success(product, request_id))
 }
 
+// SPEC-10.19.6, SPEC-10.19.7, SPEC-10.19.8, SPEC-10.19.19: member guard, prices first, audit, cache drop.
 /// DELETE /v1/admin/stripe/products/{id}
 ///
 /// BUNYIP-512: archiving a product is all-or-nothing. Refused with 409 while the
@@ -442,6 +454,7 @@ pub async fn archive_stripe_product(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.19.9, SPEC-10.19.19: restore the product only; prices are restored one by one.
 /// POST /v1/admin/stripe/products/{id}/unarchive
 ///
 /// BUNYIP-513: the reverse of archive - set the Stripe product `active = true`.
@@ -483,6 +496,7 @@ pub async fn unarchive_stripe_product(
 // Prices
 // =============================================================================
 
+// SPEC-10.19.4: one grouped member-count query for the page.
 /// GET /v1/admin/stripe/prices
 ///
 /// BUNYIP-512: each price carries a `member_count` (members on the tier that
@@ -515,6 +529,7 @@ pub async fn list_stripe_prices(
     Ok(success(wrapped, request_id))
 }
 
+// SPEC-10.19.11, SPEC-10.19.19: duplicate check runs before the Stripe write.
 /// POST /v1/admin/stripe/prices
 pub async fn create_stripe_price(
     req: HttpRequest,
@@ -558,6 +573,7 @@ pub async fn create_stripe_price(
     Ok(success(price, request_id))
 }
 
+// SPEC-10.19.13, SPEC-10.19.19: member guard, audit, cache drop.
 /// DELETE /v1/admin/stripe/prices/{id}
 ///
 /// BUNYIP-512: refused with 409 (no Stripe call) while the price's plan has
@@ -603,6 +619,7 @@ pub async fn archive_stripe_price(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.19.14, SPEC-10.19.19: restoring runs the same duplicate check as create.
 /// POST /v1/admin/stripe/prices/{id}/unarchive
 ///
 /// BUNYIP-513: restore a single archived price (`active = true`) via
@@ -652,6 +669,7 @@ pub async fn unarchive_stripe_price(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.19.15, SPEC-10.19.16, SPEC-10.19.17, SPEC-10.19.18, SPEC-10.19.19: references move first.
 /// POST /v1/admin/stripe/prices/{id}/replace
 ///
 /// BUNYIP-511: change what a plan costs. A Stripe price is immutable in amount,
@@ -841,6 +859,7 @@ pub async fn replace_stripe_price(
 // Webhooks
 // =============================================================================
 
+// SPEC-10.19.20: list webhook endpoints.
 /// GET /v1/admin/stripe/webhooks
 pub async fn list_stripe_webhooks(
     req: HttpRequest,
@@ -855,6 +874,7 @@ pub async fn list_stripe_webhooks(
     Ok(success(webhooks, request_id))
 }
 
+// SPEC-10.19.21, SPEC-10.19.22: the signing secret is stored, or reported when no provider is writable.
 /// POST /v1/admin/stripe/webhooks
 ///
 /// Creates a Stripe webhook endpoint and auto-saves the returned signing secret
@@ -920,6 +940,7 @@ pub async fn create_stripe_webhook(
     Ok(success(webhook, request_id))
 }
 
+// SPEC-10.19.20: delete a webhook endpoint.
 /// DELETE /v1/admin/stripe/webhooks/{id}
 pub async fn delete_stripe_webhook(
     req: HttpRequest,
@@ -950,6 +971,7 @@ pub async fn delete_stripe_webhook(
 // cannot be told from a 404. Classifying those is a separate dunite change.
 // =============================================================================
 
+// SPEC-10.19.24: shape of one checklist row.
 /// One permission bunyip needs, and (for the live-tested three) how the saved
 /// key fared against it.
 #[derive(Debug, serde::Serialize)]
@@ -976,6 +998,7 @@ pub struct StripePermissionReport {
     pub checks: Vec<StripePermissionCheck>,
 }
 
+// SPEC-10.19.24: single source for the live test and the checklist.
 /// The permissions bunyip's Stripe calls need, with the access level and where
 /// each is exercised. Single source of truth for both the live test and the
 /// checklist. `Subscriptions` needs Write (bunyip creates free subscriptions and
@@ -990,6 +1013,7 @@ const REQUIRED_PERMISSIONS: [(StripePermission, &str, &str); 7] = [
     (StripePermission::Invoices, "Read", "checkout"),
 ];
 
+// SPEC-10.19.24: key_status is rejected if any probe was key-rejected.
 /// Assemble the report from the three live probe outcomes (products, prices,
 /// webhook endpoints), or `None` when no key is saved. Pure, so the mapping is
 /// unit-tested without a live Stripe.
@@ -1030,6 +1054,7 @@ fn build_permission_report(
     }
 }
 
+// SPEC-10.19.23: read-only probe of the saved key.
 /// GET /v1/admin/stripe/permissions
 ///
 /// Probe the saved restricted key with harmless list reads and report which

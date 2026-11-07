@@ -22,6 +22,7 @@ impl EntitlementRepository {
     /// non-admin runs the entitlement lookup. This is the single decision point
     /// every distribution surface (OCI, downloads, web, catalog metadata)
     /// calls so the rule cannot drift between them.
+    // SPEC-7.3.91
     pub async fn is_allowed(
         pool: &PgPool,
         user_id: Uuid,
@@ -44,6 +45,7 @@ impl EntitlementRepository {
     /// BUNYIP-945 F7: takes a generic executor so the handler can run this
     /// and `set_requires_entitlement` in one transaction, atomic against a
     /// backfill failure or a crash between the two statements.
+    // SPEC-7.3.93
     pub async fn backfill_for_application<'e, E>(
         executor: E,
         application_id: Uuid,
@@ -76,6 +78,7 @@ impl EntitlementRepository {
     /// Whether the user has an ACTIVE entitlement for the product. Prefer
     /// [`Self::is_allowed`] at gates (it short-circuits open products/admins);
     /// this is the raw grant lookup.
+    // SPEC-7.3.92
     pub async fn is_entitled(
         pool: &PgPool,
         user_id: Uuid,
@@ -98,6 +101,7 @@ impl EntitlementRepository {
 
     /// Grant (or re-activate) an entitlement. Idempotent: a second grant for an
     /// already-active row just refreshes `granted_at`/`granted_by`/`source`.
+    // SPEC-7.3.94
     pub async fn grant(
         pool: &PgPool,
         user_id: Uuid,
@@ -128,6 +132,7 @@ impl EntitlementRepository {
 
     /// Revoke an active entitlement (no-op if none active). Returns whether a
     /// row was actually revoked, so callers can audit only real revocations.
+    // SPEC-7.3.95
     pub async fn revoke(
         pool: &PgPool,
         user_id: Uuid,
@@ -152,6 +157,7 @@ impl EntitlementRepository {
     /// (used by the Stripe webhook: cancelling a subscription revokes only the
     /// Stripe-sourced grants, never an admin's manual grant). Returns the set
     /// of application ids that were revoked, for auditing.
+    // SPEC-7.3.96
     pub async fn revoke_all_for_user_by_source(
         pool: &PgPool,
         user_id: Uuid,
@@ -174,6 +180,7 @@ impl EntitlementRepository {
 
     /// Active entitlements for a user, joined to product display fields, for the
     /// admin "what can this user access" view.
+    // SPEC-7.3.97
     pub async fn list_for_user(
         pool: &PgPool,
         user_id: Uuid,
@@ -201,6 +208,7 @@ impl EntitlementRepository {
     /// gate can run it inside a `begin_with_user` transaction under per-user RLS
     /// (BUNYIP-344). A `&PgPool` still satisfies the bound, so existing callers
     /// are unaffected.
+    // SPEC-7.3.98
     pub async fn active_application_ids(
         executor: impl sqlx::PgExecutor<'_>,
         user_id: Uuid,
@@ -218,6 +226,7 @@ impl EntitlementRepository {
     }
 
     /// The product ids a Stripe price grants (via the price->product mapping).
+    // SPEC-7.3.99
     pub async fn applications_for_price(
         pool: &PgPool,
         stripe_price_id: &str,
@@ -237,6 +246,7 @@ impl EntitlementRepository {
     }
 
     /// Map a Stripe price to a product (admin-managed). Idempotent.
+    // SPEC-7.3.100
     pub async fn add_price_mapping(
         pool: &PgPool,
         stripe_price_id: &str,
@@ -257,6 +267,7 @@ impl EntitlementRepository {
     }
 
     /// Remove a Stripe price->product mapping.
+    // SPEC-7.3.100
     pub async fn remove_price_mapping(
         pool: &PgPool,
         stripe_price_id: &str,

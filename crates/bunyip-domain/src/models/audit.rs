@@ -7,6 +7,7 @@ use serde_json::Value as JsonValue;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.70: serde snake_case must equal as_str for every variant.
 /// Audit action types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,6 +119,7 @@ pub enum AuditAction {
     /// Metadata carries host/port/tls and the `ok` result, never the recipient
     /// address (BUNYIP-265: no raw email addresses in logs).
     AdminTestEmailSent,
+    // SPEC-7.2.77: metadata never carries the token.
     /// BUNYIP-997: an admin saved the Mirzam integration settings. Metadata
     /// carries the four settings (public addresses and slugs, not secrets) and
     /// whether the API token changed and to which provider, never the token.
@@ -232,6 +234,7 @@ pub enum AuditAction {
 }
 
 impl AuditAction {
+    // SPEC-7.2.70: exhaustive, one unique string per variant.
     pub fn as_str(&self) -> &'static str {
         match self {
             AuditAction::UserLogin => "user_login",
@@ -345,6 +348,7 @@ impl AuditAction {
         }
     }
 
+    // SPEC-7.2.71, SPEC-7.2.72: exact admin set; keep in step with new Admin* variants.
     pub fn is_admin_action(&self) -> bool {
         matches!(
             self,
@@ -408,6 +412,7 @@ impl AuditAction {
     }
 }
 
+// SPEC-7.2.73: four levels, default Info.
 /// Audit severity levels
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -429,6 +434,7 @@ impl AuditSeverity {
         }
     }
 
+    // SPEC-7.2.74: case-insensitive, unknown is None.
     /// BUNYIP-936: parse the stored spelling back. Case-insensitive on the
     /// enum variants' lowercase form.
     pub fn parse(raw: &str) -> Option<Self> {
@@ -450,6 +456,7 @@ impl AuditSeverity {
     ];
 }
 
+// SPEC-7.2.76: nullable actor and resource for system events.
 /// Audit log database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AuditLog {
@@ -469,6 +476,7 @@ pub struct AuditLog {
     pub created_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.75: builder defaults to Info severity, all else unset.
 /// Data for creating a new audit log entry
 #[derive(Debug, Clone)]
 pub struct CreateAuditLog {
@@ -541,6 +549,7 @@ impl CreateAuditLog {
     }
 }
 
+// SPEC-7.2.78: snake_case wire and stored spelling.
 /// Admin notification types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -566,6 +575,7 @@ impl NotificationType {
     }
 }
 
+// SPEC-7.2.79: notification_type maps to column "type".
 /// Admin notification database model
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AdminNotification {

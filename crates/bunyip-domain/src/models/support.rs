@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.131: stored as lowercase strings.
 /// Lifecycle of a support ticket, stored as the lowercase VARCHAR in
 /// `support_tickets.status`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +34,7 @@ impl TicketStatus {
         }
     }
 
+    // SPEC-7.2.132: unknown value reads as Open.
     /// Parse a stored value; an unknown string falls back to `Open` so a row is
     /// never undisplayable.
     pub fn from_str_lenient(s: &str) -> Self {
@@ -44,6 +46,7 @@ impl TicketStatus {
     }
 }
 
+// SPEC-7.2.133: inbound or outbound.
 /// Which way a message flowed: an inbound reply from the requester, or an
 /// outbound reply composed in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +65,7 @@ impl MessageDirection {
     }
 }
 
+// SPEC-7.2.134: status is the raw column.
 /// One support conversation with an external sender. `status` is the raw
 /// column; interpret it through [`TicketStatus::from_str_lenient`].
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -76,6 +80,7 @@ pub struct SupportTicket {
     pub last_message_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.134: threaded by mail Message-ID.
 /// One message in a ticket thread (an inbound reply or an app-composed reply).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct SupportMessage {
@@ -92,6 +97,7 @@ pub struct SupportMessage {
     pub created_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.135: references is the split chain.
 /// A parsed inbound message ready to ingest, produced by the IMAP poller
 /// (slice 3). `references` is the split References chain; the repository joins
 /// it for storage and uses it (with `in_reply_to`) to thread onto a ticket.
@@ -108,6 +114,7 @@ pub struct NewInboundMessage {
     pub references: Vec<String>,
 }
 
+// SPEC-7.2.135: mail_references already joined.
 /// Fields for inserting one message onto an existing ticket. Built by the
 /// ingest path from a [`NewInboundMessage`], and by the reply endpoint
 /// (slice 4) for an outbound message.

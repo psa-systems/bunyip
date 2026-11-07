@@ -18,6 +18,7 @@ use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::views::ui::{badge, error_box_for};
 
+// SPEC-12.22.8: state badge colours
 /// The badge for one integration state, reusing the dashboard's colour language:
 /// success (green) configured, outline (muted) unconfigured, destructive (red)
 /// failing. An unrecognised wire value renders muted and asserts nothing.
@@ -30,6 +31,7 @@ fn state_badge(state: &IntegrationState) -> Markup {
     }
 }
 
+// SPEC-12.22.8: one integration row
 /// One integration row: name and state badge on one line, the reason below, and
 /// the remedy (present only when it is not already configured) below that.
 fn integration_row(s: &IntegrationStatus) -> Markup {
@@ -49,6 +51,7 @@ fn integration_row(s: &IntegrationStatus) -> Markup {
     }
 }
 
+// SPEC-12.22.7: a failed fetch is stated in the card
 /// The Integrations card. Renders on every load (BUNYIP-546): a failed fetch is
 /// stated inside the card rather than hidden, because hiding it makes a broken
 /// status page look like a healthy one. The list is never empty (the API always
@@ -71,6 +74,7 @@ fn integrations_card(integrations: &[IntegrationStatus], fetch_error: Option<&Ap
     }
 }
 
+// SPEC-12.22.5: build identity card
 /// BUNYIP-931: identity of the running build. Short hash (first 12 chars) plus
 /// the git-describe tag plus the UTC build date, so a hotfix patch between
 /// tagged releases is distinguishable from the release itself.
@@ -92,6 +96,7 @@ fn build_card(h: &SystemHealth) -> Markup {
     }
 }
 
+// SPEC-12.22.5: process stats card
 /// BUNYIP-931: live process stats. Uptime formatted for a glance; pool numbers
 /// raw so an admin can match them against the configured ceiling.
 fn stats_card(h: &SystemHealth) -> Markup {
@@ -109,6 +114,7 @@ fn stats_card(h: &SystemHealth) -> Markup {
     }
 }
 
+// SPEC-12.22.6: two largest non-zero units
 /// Days / hours / minutes / seconds, trimmed to the largest two non-zero units;
 /// a two-week uptime reads `14d 3h`, a sub-minute one `42s`.
 fn format_uptime(secs: u64) -> String {
@@ -127,6 +133,7 @@ fn format_uptime(secs: u64) -> String {
     }
 }
 
+// SPEC-12.22.4: upgrade hint only when available is true
 /// Short-form summary of the API's update-check block. The payload is opaque
 /// JSON here (its full shape lives in a dunite crate), so this reads the
 /// bits the operator cares about ("a newer version is available: X") and
@@ -151,6 +158,7 @@ fn update_summary(update: Option<&serde_json::Value>) -> Option<String> {
     }
 }
 
+// SPEC-12.22.2, SPEC-12.22.3: API and web version sides
 /// Version card: the API's version/revision alongside bunyip-web's own, so
 /// an admin can tell what is deployed without `curl /version` by hand and
 /// can also catch a half-deploy where one half of the pair fell behind.
@@ -228,8 +236,10 @@ fn status_content(
     }
 }
 
+// SPEC-12.22.1: three independent fetches
 /// GET /admin/status
 pub async fn system_status(State(st): State<crate::web::AppState>, headers: HeaderMap) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -244,6 +254,7 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
     // BUNYIP-963: none of the three fetches consumes another's result, so they
     // run concurrently via `join!`, not `try_join!`: each keeps its own
     // fallback below.
+    // SPEC-12.22.1: concurrent fetches, each with its own fallback
     let (fetched, fetched_health, fetched_api_version) = tokio::join!(
         admin_api::integration_status(&st.api, c.forward.as_deref()),
         admin_api::system_health(&st.api, c.forward.as_deref()),

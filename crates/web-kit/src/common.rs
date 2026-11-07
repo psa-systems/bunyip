@@ -4,6 +4,7 @@ use maud::{html, Markup};
 
 use crate::ui::icon;
 
+// SPEC-13.12.1: icon bubble variant
 /// Centered auth/token card (icon bubble + title + subtitle + body). The caller
 /// wraps this in `public_shell`.
 pub fn auth_card(
@@ -16,6 +17,7 @@ pub fn auth_card(
     auth_card_shell(Some((icon_name, icon_class)), title, subtitle, body)
 }
 
+// SPEC-13.12.2: same card without the icon bubble
 /// Like [`auth_card`] but without the icon bubble, for headers that are just
 /// title + subtitle (e.g. the login page). Keeps those pages from
 /// re-implementing the card shell (BUNYIP-467 F14).
@@ -23,6 +25,7 @@ pub fn auth_card_plain(title: &str, subtitle: &str, body: Markup) -> Markup {
     auth_card_shell(None, title, subtitle, body)
 }
 
+// SPEC-13.12.3: shared shell; empty subtitle is omitted
 /// Shared shell behind [`auth_card`] / [`auth_card_plain`]. The icon bubble
 /// renders only when `icon` is `Some((name, class))`.
 fn auth_card_shell(

@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+// SPEC-7.2.50, SPEC-7.2.52: NULL defers to next provider; passwords are ciphertext + nonce.
 /// Database row for the `email_config` singleton table.
 ///
 /// Every tunable column is nullable: a NULL means this row's provider does not
@@ -40,6 +41,7 @@ pub struct EmailConfigRow {
     pub updated_by: Option<Uuid>,
 }
 
+// SPEC-7.2.53, SPEC-7.2.54, SPEC-7.2.55, SPEC-7.2.56: no password in any form.
 /// API response for email configuration. The SMTP password is never returned in
 /// plaintext: only a masked hint and a `has_smtp_password` flag are surfaced,
 /// mirroring the Stripe secret masking.

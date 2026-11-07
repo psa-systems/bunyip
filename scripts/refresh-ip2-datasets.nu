@@ -26,6 +26,7 @@
 # a half-written .BIN.
 
 # Map a short dataset id to its download-file code and installed filename.
+# SPEC-3.35.6
 def resolve [id: string]: nothing -> record {
     match $id {
         "PX11" => { code: "PX11LITEBIN", name: "IP2PROXY-LITE-PX11.BIN" }
@@ -44,6 +45,7 @@ def refresh-one [id: string, token: string, dataset_dir: string, tmp: string]: n
     print $"refresh: fetching ($id) -> ($spec.name)"
 
     let zip = $"($tmp)/($id).zip"
+    # SPEC-3.35.7
     # The token rides in a curl config file fed on stdin (`--config -`) rather
     # than as a URL argv element, so it never appears in this process's argv
     # (readable via /proc/<pid>/cmdline by any co-resident process) or in
@@ -74,6 +76,7 @@ def refresh-one [id: string, token: string, dataset_dir: string, tmp: string]: n
     }
     let bin = ($bins | first)
 
+    # SPEC-3.35.8
     # Extract into a fresh per-id subdir (no existing files, so no overwrite),
     # then stage in the destination directory and rename into place atomically.
     let outdir = $"($tmp)/($id)"
@@ -87,6 +90,7 @@ def refresh-one [id: string, token: string, dataset_dir: string, tmp: string]: n
 }
 
 def main [] {
+    # SPEC-3.35.5
     let token = ($env.IP2LOCATION_TOKEN? | default "")
     if ($token | is-empty) {
         print --stderr "IP2LOCATION_TOKEN is required (free IP2Location account token)"
@@ -115,6 +119,7 @@ def main [] {
     })
     try { rm --recursive $tmp }
 
+    # SPEC-3.35.9
     if ($results | any {|ok| not $ok }) {
         print --stderr "refresh: one or more datasets failed"
         exit 1

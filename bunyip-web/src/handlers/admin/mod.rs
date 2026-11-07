@@ -6,6 +6,8 @@
 //! DEV-517: the handlers are split one module per admin section, mirroring
 //! a8n-tools' layout. The route wiring lives in `crate::routes::admin`.
 
+// SPEC-12.1.1, SPEC-12.1.2, SPEC-12.1.8:
+// every handler below opens with admin_guard, relays cookies, shows fetch failures
 mod application_groups;
 mod applications;
 mod audit;
@@ -70,6 +72,7 @@ use crate::api::types::User;
 use crate::auth::AuthCtx;
 use crate::web::redirect_cookies;
 
+// SPEC-12.1.4: names the owning provider so a read-only save is not mistaken for a write
 /// BUNYIP-542: the help line under a governed secret field.
 ///
 /// In a writable provider (`database`, `infisical`) it is the usual "leave blank
@@ -105,6 +108,7 @@ pub(super) fn secret_field_note(
     }
 }
 
+// SPEC-12.1.7
 /// Page number plus the tier filter, shared by every paginated admin list
 /// (BUNYIP-291 AC4).
 #[derive(Deserialize)]
@@ -115,6 +119,7 @@ pub struct PageQuery {
     pub tier: Option<String>,
 }
 
+// SPEC-12.1.3: friendly refusal only; the API is the security boundary
 /// BUNYIP-413: refuse a super-admin-only form to everybody else, as a redirect
 /// back to `back` carrying a refusal toast. The API enforces the same gate, so
 /// this is a friendlier message rather than the security boundary.
@@ -128,6 +133,7 @@ fn refuse_non_super_admin(user: &User, c: &AuthCtx, back: &str) -> Option<Respon
     ))
 }
 
+// SPEC-12.1.5: neuters HTML-ish bodies and keeps attachment URLs out of Referer
 /// Apply the BUNYIP-90 hardening header triple to any binary-proxy
 /// response (attachment download, CSV export, backup bundle). Lives here
 /// rather than beside one caller so future binary-serving routes in any
@@ -170,6 +176,7 @@ const WORD_CASING: &[(&str, &str)] = &[
     ("oauth", "OAuth"),
 ];
 
+// SPEC-12.1.6
 fn title_case(action: &str) -> String {
     action
         .split('_')

@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// SPEC-7.2.108: secret is ciphertext + nonce under key_version.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct MokoshConfigRow {
     pub id: i32,
@@ -31,6 +32,7 @@ pub struct MokoshConfigRow {
 }
 
 impl MokoshConfigRow {
+    // SPEC-7.2.108: undecryptable secret logs at error and reads as absent.
     /// Decrypt the client secret held by the `database` provider, mirroring
     /// [`MirzamConfigRow::db_api_token`]. A ciphertext no key decrypts is
     /// reported at `error` and treated as absent, so a stale row never blocks
@@ -63,6 +65,7 @@ impl MokoshConfigRow {
     }
 }
 
+// SPEC-7.2.109: id change needs explicit confirmation.
 /// `PUT /v1/admin/mokosh`. The client id is replaced whole; `client_secret`
 /// empty or absent leaves the stored secret unchanged, so an admin correcting
 /// a mistyped id does not have to re-enter the secret.
@@ -79,6 +82,7 @@ pub struct UpdateMokoshConfigRequest {
     pub confirm_client_id_change: bool,
 }
 
+// SPEC-7.2.110, SPEC-7.2.55: secret never returned.
 /// The admin read model. The secret is never sent back, not even masked:
 /// `has_google_client_secret` is the only fact about it that leaves the server.
 #[derive(Debug, Clone, Serialize)]
@@ -117,6 +121,7 @@ pub struct MokoshFieldError {
     pub message: String,
 }
 
+// SPEC-7.2.111: shape check, loose on the middle token on purpose.
 /// Google's own shape for an OAuth client id, which is what a mistyped value
 /// fails on: `<digits>-<token>.apps.googleusercontent.com`.
 ///
@@ -158,6 +163,7 @@ pub fn validate_google_client_id(raw: &str) -> Result<String, MokoshFieldError> 
     Ok(id.to_string())
 }
 
+// SPEC-7.2.112: length only.
 /// Length only, like every other secret field: a client secret has no shape
 /// worth asserting and a rule invented here would reject a value Google issued.
 pub fn validate_google_client_secret(raw: &str) -> Result<String, MokoshFieldError> {

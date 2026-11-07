@@ -23,6 +23,7 @@ impl OciPullDailyCountRepository {
         Self { pool }
     }
 
+    // SPEC-6.19.1: atomic upsert on (user, UTC day)
     /// Atomically increment today's count for a user. Returns the new count.
     pub async fn increment(&self, user_id: Uuid, day_utc: NaiveDate) -> Result<i32, AppError> {
         let (count,): (i32,) = sqlx::query_as(
@@ -39,6 +40,7 @@ impl OciPullDailyCountRepository {
         Ok(count)
     }
 
+    // SPEC-6.19.2: floor at zero; no-op without a row
     /// Decrement today's count by 1 (best-effort rollback). Never goes below 0.
     pub async fn decrement(&self, user_id: Uuid, day_utc: NaiveDate) -> Result<(), AppError> {
         sqlx::query(
@@ -52,6 +54,7 @@ impl OciPullDailyCountRepository {
         Ok(())
     }
 
+    // SPEC-6.19.3: no row means zero pulls that day (absent by contract)
     pub async fn current(&self, user_id: Uuid, day_utc: NaiveDate) -> Result<i32, AppError> {
         let row: Option<(i32,)> = sqlx::query_as(
             "SELECT count FROM oci_pull_daily_counts WHERE user_id = $1 AND day_utc = $2",
@@ -64,6 +67,7 @@ impl OciPullDailyCountRepository {
     }
 }
 
+// SPEC-6.1.4: adapter from the engine trait to the SQL methods above
 /// Wire the Postgres repository to the engine's counter trait.
 ///
 /// `PullCounter` is dunite-core's generic `UsageCounter` (re-exported by

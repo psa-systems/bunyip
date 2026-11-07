@@ -21,6 +21,7 @@
 //! a request is abuse. BUNYIP-437 was explicit that a VPN must not auto-classify
 //! a submission as spam.
 
+// SPEC-8.22.1, SPEC-8.22.2: seam only; advisory types, no verdict
 pub use dunite_ipenrich::{
     IpEnrichError, IpEnrichService, IpEnrichment, NetworkCategory, VpnLikelihood,
 };

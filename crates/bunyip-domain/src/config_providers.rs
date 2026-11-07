@@ -98,6 +98,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 use crate::config::ConfigFailure;
 use crate::models::rate_limit_vars;
 
+// SPEC-7.1.84: database > file > environment
 /// A configuration provider, in priority order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConfigProviderKind {
@@ -111,6 +112,7 @@ pub enum ConfigProviderKind {
 }
 
 impl ConfigProviderKind {
+    // SPEC-7.1.84: the one declaration of precedence
     /// Every provider, highest priority first. The declaration this whole
     /// module exists to make.
     pub const BY_PRIORITY: [Self; 3] = [Self::Database, Self::File, Self::Environment];
@@ -124,6 +126,7 @@ impl ConfigProviderKind {
         }
     }
 
+    // SPEC-7.1.84: 1 is highest
     /// 1 is highest. Used to order holders in a report.
     pub fn priority(self) -> u8 {
         match self {
@@ -140,6 +143,7 @@ impl std::fmt::Display for ConfigProviderKind {
     }
 }
 
+// SPEC-7.1.85: Unsupported is not an empty list
 /// What a provider can say about the keys it holds.
 ///
 /// [`Enumeration::Unsupported`] is NOT an empty list: it is "I cannot tell you",
@@ -154,6 +158,7 @@ pub enum Enumeration {
     Unsupported,
 }
 
+// SPEC-7.1.85: default methods are the least-informative answers
 /// One source of configuration values.
 pub trait ConfigProvider: Send + Sync + std::fmt::Debug {
     /// Which provider this is; also its priority.
@@ -190,6 +195,7 @@ pub trait ConfigProvider: Send + Sync + std::fmt::Debug {
 // The key registry
 // =============================================================================
 
+// SPEC-7.1.86: source_var must name an inventory variable
 /// One configuration setting resolved through the provider stack.
 #[derive(Clone, Copy)]
 pub struct ConfigKeySpec {
@@ -207,14 +213,17 @@ pub struct ConfigKeySpec {
     pub derive: fn(&str) -> Option<String>,
 }
 
+// SPEC-7.1.88: identity derivation
 fn verbatim(raw: &str) -> Option<String> {
     Some(raw.to_string())
 }
 
+// SPEC-7.1.88: SMTP_FROM address half
 fn from_address(raw: &str) -> Option<String> {
     Some(crate::config::parse_smtp_from_email(raw))
 }
 
+// SPEC-7.1.88: SMTP_FROM name half
 fn from_display_name(raw: &str) -> Option<String> {
     Some(crate::config::parse_smtp_from_name(raw))
 }
@@ -228,6 +237,7 @@ const fn spec(key: &'static str, setting: &'static str) -> ConfigKeySpec {
     }
 }
 
+// SPEC-7.1.87: only settings with more than one provider are declared
 /// The settings written down one line each: every declared key except the
 /// generated `RATE_LIMIT_*` family (see [`CONFIG_KEYS`], which is the registry).
 ///
@@ -321,6 +331,7 @@ static WRITTEN_CONFIG_KEYS: &[ConfigKeySpec] = &[
     ),
 ];
 
+// SPEC-7.1.86: generated from the preset list so it cannot drift
 /// The generated `RATE_LIMIT_{ACTION}_{MAX_REQUESTS,WINDOW_SECONDS}` family
 /// (BUNYIP-645), one pair per rate-limit preset.
 ///
@@ -353,6 +364,7 @@ static RATE_LIMIT_CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
         .collect()
 });
 
+// SPEC-7.1.86: written keys plus the generated family
 /// Every configuration setting with more than one possible provider: the
 /// written-down [`WRITTEN_CONFIG_KEYS`] plus the generated rate-limit family.
 pub static CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
@@ -363,11 +375,13 @@ pub static CONFIG_KEYS: LazyLock<Vec<ConfigKeySpec>> = LazyLock::new(|| {
         .collect()
 });
 
+// SPEC-7.1.86: None for an undeclared key
 /// The spec for `key`, or `None` when it is not a declared configuration key.
 pub fn config_key(key: &str) -> Option<&'static ConfigKeySpec> {
     CONFIG_KEYS.iter().find(|spec| spec.key == key)
 }
 
+// SPEC-7.1.89: section key list
 /// The keys of the `email_config` section, for the admin page's source label.
 pub const EMAIL_KEYS: &[&str] = &[
     "SMTP_HOST",
@@ -385,6 +399,7 @@ pub const EMAIL_KEYS: &[&str] = &[
     "SUPPORT_IMAP_ENABLED",
 ];
 
+// SPEC-7.1.89: section key list
 /// The keys of the `auto_ban_config` section.
 pub const AUTO_BAN_KEYS: &[&str] = &[
     "AUTO_BAN_ENABLED",
@@ -393,6 +408,7 @@ pub const AUTO_BAN_KEYS: &[&str] = &[
     "AUTO_BAN_DURATION_SECS",
 ];
 
+// SPEC-7.1.89: section key list
 /// The keys of the `tier_config` section that have more than one provider. The
 /// price ids and the feature switches are database-only and not declared keys.
 pub const TIER_KEYS: &[&str] = &[
@@ -402,6 +418,7 @@ pub const TIER_KEYS: &[&str] = &[
     "TIER_STANDARD_TRIAL_DAYS",
 ];
 
+// SPEC-7.1.89: the only keys anything writes into the file layer
 /// The keys the admin System settings page reads and writes (BUNYIP-644): the
 /// application-level deployment toggles that were the YAML layer's whole
 /// content. They are the ONLY keys anything in bunyip writes into the file
@@ -414,11 +431,13 @@ pub const SYSTEM_SETTINGS_KEYS: &[&str] = &[
     "COUNTRY_DENY",
 ];
 
+// SPEC-7.1.89: generated section key list
 /// The keys of the `rate_limit_configs` section (BUNYIP-645), generated like
 /// the specs themselves so the section can never lag the preset list.
 pub static RATE_LIMIT_KEYS: LazyLock<Vec<&'static str>> =
     LazyLock::new(|| RATE_LIMIT_CONFIG_KEYS.iter().map(|spec| spec.key).collect());
 
+// SPEC-7.1.90: the database cannot hold the credential used to reach it
 /// The Group-1 startup values: environment-and-file only, never the database.
 ///
 /// The reason `CLAUDE.md` already gives: the database cannot hold the credential
@@ -442,6 +461,7 @@ pub const GROUP_ONE_KEYS: &[&str] = &[
     "INFISICAL_ENVIRONMENT",
 ];
 
+// SPEC-7.1.90: exact membership
 /// Whether `key` is a Group-1 startup value.
 pub fn is_group_one(key: &str) -> bool {
     GROUP_ONE_KEYS.contains(&key)
@@ -461,6 +481,7 @@ pub fn is_group_one(key: &str) -> bool {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct EnvironmentProvider;
 
+// SPEC-7.1.91: an empty variable is a value; _FILE is not consulted
 impl ConfigProvider for EnvironmentProvider {
     fn kind(&self) -> ConfigProviderKind {
         ConfigProviderKind::Environment
@@ -483,16 +504,19 @@ impl ConfigProvider for EnvironmentProvider {
     }
 }
 
+// SPEC-7.1.92: names the file layer directory
 /// The env var naming the file layer's directory. Unset means
 /// [`DEFAULT_CONFIG_DIR`], the operator-writable directory the image already
 /// creates and the reference deployment already mounts.
 pub const CONFIG_DIR_ENV: &str = "BUNYIP_CONFIG_DIR";
 
+// SPEC-7.1.92: where the legacy YAML file already sat
 /// Where the file layer lives when `BUNYIP_CONFIG_DIR` is unset. It is the
 /// directory the legacy YAML file already sat in, so an existing deployment's
 /// volume is already the right one (BUNYIP-644).
 pub const DEFAULT_CONFIG_DIR: &str = "/app/config";
 
+// SPEC-7.1.92: override, else the default
 /// The file layer's directory: `BUNYIP_CONFIG_DIR`, else [`DEFAULT_CONFIG_DIR`].
 pub fn file_layer_dir() -> PathBuf {
     match config_dir_override() {
@@ -501,6 +525,7 @@ pub fn file_layer_dir() -> PathBuf {
     }
 }
 
+// SPEC-7.1.92: trimmed, non-empty
 /// The explicitly configured directory, when there is one. An explicit
 /// directory that cannot be read is an error the operator meant to avoid; the
 /// default one simply being absent is not (a deployment with no file layer).
@@ -529,6 +554,7 @@ pub struct FileProvider {
 }
 
 impl FileProvider {
+    // SPEC-7.1.93: no file layer when nothing is there
     /// Load [`file_layer_dir`], migrating a legacy YAML file into it first
     /// (BUNYIP-644). `None` when the directory is the default one, is absent,
     /// and has no legacy file to migrate: this deployment has no file layer, so
@@ -551,6 +577,7 @@ impl FileProvider {
         Some(provider)
     }
 
+    // SPEC-7.1.94, SPEC-7.1.95: unreadable directory never reads as empty
     /// Load one directory. Public so the tests drive it without the environment.
     pub fn load(dir: PathBuf) -> Self {
         let mut values = BTreeMap::new();
@@ -633,6 +660,7 @@ impl FileProvider {
     }
 }
 
+// SPEC-7.1.96: key-named file wins over variable-named file
 impl ConfigProvider for FileProvider {
     fn kind(&self) -> ConfigProviderKind {
         ConfigProviderKind::File
@@ -650,6 +678,7 @@ impl ConfigProvider for FileProvider {
         (spec.derive)(raw).filter(|v| !v.is_empty())
     }
 
+    // SPEC-7.1.95: unreadable directory enumerates as Unsupported
     fn enumerate(&self) -> Enumeration {
         if self.error.is_some() {
             return Enumeration::Unsupported;
@@ -689,6 +718,7 @@ impl DatabaseProvider {
         Self::default()
     }
 
+    // SPEC-7.1.97: Group-1 and undeclared keys are refused loudly
     /// Hold `value` for `key`.
     ///
     /// REFUSES a Group-1 startup value and an undeclared key, both as a
@@ -727,6 +757,7 @@ impl DatabaseProvider {
         Ok(())
     }
 
+    // SPEC-7.1.98: None holds nothing
     /// [`Self::set`] for a nullable column: `None` holds nothing.
     pub fn set_opt(
         &mut self,
@@ -739,6 +770,7 @@ impl DatabaseProvider {
         }
     }
 
+    // SPEC-7.1.98: empty string holds nothing
     /// [`Self::set_opt`] that also drops an empty string, for the columns whose
     /// old fallback filtered one (`smtp_host`, `from_email`, `imap_mailbox`, ...).
     pub fn set_non_empty(
@@ -749,11 +781,13 @@ impl DatabaseProvider {
         self.set_opt(key, value.filter(|v| !v.is_empty()))
     }
 
+    // SPEC-7.1.98: answers what has_db_overrides answered
     /// Whether this provider holds nothing. Replaces `has_db_overrides`.
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
 
+    // SPEC-7.1.98: used by config-status
     /// Merge another provider's keys in. Used by `config-status`, which surveys
     /// every singleton row at once.
     pub fn merge(&mut self, other: Self) {
@@ -761,6 +795,7 @@ impl DatabaseProvider {
     }
 }
 
+// SPEC-7.1.98: held keys only
 impl ConfigProvider for DatabaseProvider {
     fn kind(&self) -> ConfigProviderKind {
         ConfigProviderKind::Database
@@ -786,6 +821,7 @@ pub struct ConfigStack {
 }
 
 impl ConfigStack {
+    // SPEC-7.1.99: order never depends on the call site
     /// Build a stack from providers in any order; they are sorted by priority
     /// here so the order can never be an accident of the call site, which is the
     /// defect this module removes.
@@ -795,6 +831,7 @@ impl ConfigStack {
         Self { providers }
     }
 
+    // SPEC-7.1.100: no file, no database
     /// The environment provider alone: no file, no database. What
     /// `EmailConfig::from_env` and its siblings resolve through, so a caller
     /// that wants only what the process environment declares can say so.
@@ -802,6 +839,7 @@ impl ConfigStack {
         Self::new(vec![Arc::new(EnvironmentProvider)])
     }
 
+    // SPEC-7.1.100: file when enabled, then environment
     /// The deployment providers: file (when enabled) then environment. No
     /// database, for the readers that run before or without a pool.
     pub fn deployment() -> Self {
@@ -812,6 +850,7 @@ impl ConfigStack {
         Self::new(providers)
     }
 
+    // SPEC-7.1.101: hot paths must not rebuild the file provider
     /// [`Self::deployment`], loaded once per process.
     ///
     /// The file provider reads a directory, so a caller on a hot path must not
@@ -824,11 +863,13 @@ impl ConfigStack {
         STACK.get_or_init(Self::deployment)
     }
 
+    // SPEC-7.1.102: database provider on top
     /// [`Self::deployment`] with the database provider on top.
     pub fn with_database(database: DatabaseProvider) -> Self {
         Self::database_over(database, &Self::deployment())
     }
 
+    // SPEC-7.1.102: re-sorted so the order is never accidental
     /// [`Self::with_database`] over an ALREADY-LOADED lower stack, so a caller
     /// that layers a fresh database provider repeatedly (the rate-limit
     /// snapshot, once per TTL window) pays for the file provider once.
@@ -845,11 +886,13 @@ impl ConfigStack {
         &self.providers
     }
 
+    // SPEC-7.1.105: pivot for classify
     /// The highest-priority provider in this stack. The pivot [`classify`] uses.
     pub fn top(&self) -> Option<ConfigProviderKind> {
         self.providers.first().map(|provider| provider.kind())
     }
 
+    // SPEC-7.1.105: highest priority first
     /// Every provider holding `key`, highest priority first.
     pub fn holders(&self, key: &str) -> Vec<ConfigProviderKind> {
         self.providers
@@ -859,12 +902,14 @@ impl ConfigStack {
             .collect()
     }
 
+    // SPEC-7.1.103: highest-priority holder wins
     /// The value the highest-priority holder supplies, or `None` when no
     /// provider holds `key` and the caller's built-in default stands.
     pub fn get(&self, key: &str) -> Option<String> {
         self.providers.iter().find_map(|provider| provider.get(key))
     }
 
+    // SPEC-7.1.103: strictly higher priority only
     /// [`Self::get`] restricted to providers ABOVE `kind`.
     pub fn get_above(&self, kind: ConfigProviderKind, key: &str) -> Option<String> {
         self.providers
@@ -873,6 +918,7 @@ impl ConfigStack {
             .find_map(|provider| provider.get(key))
     }
 
+    // SPEC-7.1.103: strictly lower priority only
     /// [`Self::get`] restricted to providers BELOW `kind`.
     pub fn get_below(&self, kind: ConfigProviderKind, key: &str) -> Option<String> {
         self.providers
@@ -881,6 +927,7 @@ impl ConfigStack {
             .find_map(|provider| provider.get(key))
     }
 
+    // SPEC-7.1.104: a bad value is warned about, never silently substituted
     /// [`Self::get`], parsed. A held value that does not parse is logged at
     /// `warn` naming the key and the provider that holds it, then treated as
     /// absent so the caller's default stands: the substitution is never silent.
@@ -888,6 +935,7 @@ impl ConfigStack {
         self.get_parsed_where(key, |_| true)
     }
 
+    // SPEC-7.1.104: invalid value is treated like an unparseable one
     /// [`Self::get_parsed`] with a validity rule, for a key whose type admits
     /// values it cannot use (a rate-limit cap of zero would refuse every
     /// request for the action). A value that fails `valid` is treated exactly
@@ -927,11 +975,13 @@ impl ConfigStack {
         None
     }
 
+    // SPEC-7.1.107: verdict for one key
     /// Which provider supplied `key`, and what the stack made of the holders.
     pub fn resolve(&self, key: &str) -> ConfigVerdict {
         classify(self.top(), &self.holders(key))
     }
 
+    // SPEC-7.1.105: section source label
     /// The highest-priority provider holding ANY of `keys`, which is the
     /// one-word source label the admin pages show for a section. `None` means no
     /// provider holds any of them, so the built-in defaults stand.
@@ -942,6 +992,7 @@ impl ConfigStack {
             .map(|provider| provider.kind())
     }
 
+    // SPEC-7.1.106: stale lower copy is dead until the higher one is cleared
     /// One `warn!` per ignored provider, for every key the database provider
     /// holds that a lower provider also holds. Mirrors the `Duplicated` arm of
     /// the secrets boot enforcement: the lower copy is dead today and becomes
@@ -967,6 +1018,7 @@ impl ConfigStack {
     }
 }
 
+// SPEC-7.1.107: four outcomes of the 2x2
 /// What the provider stack decides for one key.
 ///
 /// The same 2x2 as `bunyip_api::secrets::classify`; see the module docs for the
@@ -997,6 +1049,7 @@ pub enum ConfigVerdict {
 }
 
 impl ConfigVerdict {
+    // SPEC-7.1.108: per-key provenance
     /// The provider that supplied the value: the per-key provenance. `None`
     /// means the built-in default.
     pub fn serving(&self) -> Option<ConfigProviderKind> {
@@ -1007,6 +1060,7 @@ impl ConfigVerdict {
         }
     }
 
+    // SPEC-7.1.108: names used in the status contract
     /// The short condition name used in the status contract.
     pub fn condition(&self) -> &'static str {
         match self {
@@ -1018,6 +1072,7 @@ impl ConfigVerdict {
     }
 }
 
+// SPEC-7.1.107: pure, no IO
 /// The pure classification: which provider is highest priority, which hold a
 /// value. Kept free of IO so every cell of the table is unit-tested, exactly as
 /// the secrets `classify` is.
@@ -1049,6 +1104,7 @@ pub fn classify(top: Option<ConfigProviderKind>, holders: &[ConfigProviderKind])
 // The status contract
 // =============================================================================
 
+// SPEC-7.1.109: membership only, never a value
 /// The `config-status` report: per-key provenance and provider membership.
 ///
 /// Carries no VALUE, for the same reason the secrets report carries none: the
@@ -1067,6 +1123,7 @@ pub struct ConfigStatusReport {
     pub keys: Vec<ConfigKeyStatus>,
 }
 
+// SPEC-7.1.109: unreadable provider report
 /// One provider that could not be read.
 #[derive(Debug, serde::Serialize)]
 pub struct ProviderError {
@@ -1074,6 +1131,7 @@ pub struct ProviderError {
     pub error: String,
 }
 
+// SPEC-7.1.109: per-key status row
 /// One configuration key's status.
 #[derive(Debug, serde::Serialize)]
 pub struct ConfigKeyStatus {
@@ -1091,6 +1149,7 @@ pub struct ConfigKeyStatus {
     pub note: String,
 }
 
+// SPEC-7.1.109: pure; mutates no provider
 /// Build the status report from a stack. Pure, so the report shapes are testable
 /// and nothing here can mutate a provider.
 pub fn status_report(stack: &ConfigStack) -> ConfigStatusReport {
@@ -1135,6 +1194,7 @@ pub fn status_report(stack: &ConfigStack) -> ConfigStatusReport {
     }
 }
 
+// SPEC-7.1.110: operator-facing sentence per verdict
 /// The operator-facing sentence for one verdict, mirroring the four secrets
 /// enforcement messages.
 fn verdict_note(spec: &ConfigKeySpec, verdict: &ConfigVerdict) -> String {
@@ -1168,6 +1228,7 @@ fn verdict_note(spec: &ConfigKeySpec, verdict: &ConfigVerdict) -> String {
     }
 }
 
+// SPEC-7.1.110: human list rendering
 /// Render a provider list for an operator message ("file and environment").
 fn provider_list(providers: &[ConfigProviderKind]) -> String {
     let names: Vec<&str> = providers.iter().map(|kind| kind.as_str()).collect();
@@ -1178,6 +1239,7 @@ fn provider_list(providers: &[ConfigProviderKind]) -> String {
     }
 }
 
+// SPEC-7.1.111: mirrors the JSON and never prints a value
 /// Render the status report as the operator-facing table. Mirrors the JSON
 /// exactly, and like it never prints a value.
 pub fn render_status(report: &ConfigStatusReport) -> String {

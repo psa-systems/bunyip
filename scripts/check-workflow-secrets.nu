@@ -67,6 +67,7 @@ const REUSABLE_WORKFLOW_PATTERN = '^\s*uses:\s*(?<target>[A-Za-z0-9_.-]+/[A-Za-z
 # which bunyip's release caller does not (a pure `uses:` job whose reusable
 # workflow checks out `main`). Do not fold `pull_request_target` into this
 # pattern: it would flag the safe release trigger and force a false exemption.
+# SPEC-3.18.6
 const PR_TRIGGER_PATTERN = '^\s{0,4}pull_request:'
 
 const COMMIT_SHA_PATTERN = '^[0-9a-f]{40}$'
@@ -80,6 +81,7 @@ def exempt [lines: list<string>, idx: int]: nothing -> bool {
 }
 
 # Properties 4 and 5, for one workflow file.
+# SPEC-3.18.4, SPEC-3.18.5
 def check-workflow-scope [path: string]: nothing -> list<string> {
     let lines = (read-lines $path)
     mut problems = []
@@ -113,6 +115,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
 
     mut status = 0
 
+    # SPEC-3.18.1
     # 1. The full suite must not run on PR-authored content. Match the trigger
     # key only (a `pull_request` word inside a comment or an expression is fine).
     # Stronger than property 2: e2e.yml gets no allowlist at all.
@@ -125,6 +128,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         $status = 1
     }
 
+    # SPEC-3.18.2
     # 2. Every workflow that declares a `pull_request` trigger may reference
     # nothing but the allowlisted base URLs (BUNYIP-721: scanned per file, not
     # by name, so a new PR-triggered workflow cannot hold a credential).
@@ -152,6 +156,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         }
     }
 
+    # SPEC-3.18.3
     # 3. Dependency lifecycle scripts are attacker-authored too: never run them.
     let npm_hits = (
         grep-tree $workflows_dir 'npm ci( |$)'

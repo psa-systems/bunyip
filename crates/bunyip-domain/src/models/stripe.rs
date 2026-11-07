@@ -11,11 +11,13 @@ use crate::services::EncryptionKeySet;
 // `crate::models::stripe::*` / `crate::models::*` path is unchanged across
 // bunyip-domain and bunyip-api. The DB `StripeConfig` model, the secret
 // encryption helpers, and `StripeConfigResponse` stay here (app-specific).
+// SPEC-7.2.4: shared DTOs re-exported for stable paths.
 pub use dunite_stripe::models::{
     StripeCheckoutPrice, StripeInvoiceResponse, StripePriceResponse, StripeProductResponse,
     StripeSubscriptionItemResponse, StripeSubscriptionResponse, StripeWebhookEndpointResponse,
 };
 
+// SPEC-7.2.113: secrets are ciphertext + nonce under key_version.
 #[derive(Debug, Clone, FromRow)]
 pub struct StripeConfig {
     pub id: i32,
@@ -36,6 +38,7 @@ pub struct StripeConfig {
     pub trial_period_days: Option<i32>,
 }
 
+// SPEC-7.2.114: fresh nonce per call.
 /// Encrypt plaintext with the current key. Returns (ciphertext, nonce, key_version).
 pub fn encrypt_secret(
     key_set: &EncryptionKeySet,
@@ -44,6 +47,7 @@ pub fn encrypt_secret(
     key_set.encrypt(plaintext.as_bytes())
 }
 
+// SPEC-7.2.114: failure and non-UTF-8 plaintext are errors.
 /// Decrypt ciphertext using the key set (with fallback). Returns plaintext string.
 pub fn decrypt_secret(
     key_set: &EncryptionKeySet,
@@ -56,6 +60,7 @@ pub fn decrypt_secret(
         .map_err(|e| AppError::internal(format!("Invalid UTF-8 in decrypted secret: {e}")))
 }
 
+// SPEC-7.2.115: prefix through last underscore, then ***, then last 4.
 /// Returns a masked version of a secret showing the prefix (e.g. `sk_live_`)
 /// and the last 4 characters, so admins can identify the key type and mode.
 pub fn mask_secret(s: &str) -> String {
@@ -73,6 +78,7 @@ pub fn mask_secret(s: &str) -> String {
     }
 }
 
+// SPEC-7.2.116, SPEC-7.2.55: only a masked hint leaves the server.
 #[derive(Debug, Serialize)]
 pub struct StripeConfigResponse {
     /// BUNYIP-443: the Stripe secret key and webhook secret are returned to the
@@ -111,6 +117,7 @@ pub struct StripeConfigResponse {
 }
 
 impl StripeConfigResponse {
+    // SPEC-7.2.117, SPEC-7.2.118: describes the secrets the declared provider holds.
     /// BUNYIP-542: the admin read model built from the row's NON-SECRET columns
     /// plus the two secret values as the DECLARED provider holds them.
     ///
@@ -152,6 +159,7 @@ impl StripeConfigResponse {
         }
     }
 
+    // SPEC-7.2.119: database-provider form; decrypt errors propagate.
     /// The `SECRETS_STORAGE=database` form of [`Self::from_provider`]: decrypt
     /// the row's own ciphertext columns. Only correct when the database IS the
     /// declared provider, so handlers go through `from_provider`.
@@ -199,6 +207,7 @@ impl StripeConfigResponse {
         })
     }
 
+    // SPEC-7.2.120: nothing saved, derived defaults.
     /// BUNYIP-482: the admin read model for a deployment with nothing saved in
     /// `stripe_config`. No secret is set and the checkout knobs show the derived
     /// defaults the runtime would use.

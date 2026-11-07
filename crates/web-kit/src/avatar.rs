@@ -18,6 +18,7 @@ use maud::{html, Markup};
 
 use crate::ui::{button_class, icon};
 
+// SPEC-13.18.1: what the picker needs from a consumer user type
 /// The two values the picker needs from whatever the consumer calls a user: the
 /// current avatar image URL (if any) and the letter fallback shown when none is
 /// set.
@@ -28,6 +29,7 @@ pub trait Avatar {
     fn avatar_initial(&self) -> String;
 }
 
+// SPEC-13.18.7: inline in the head so a stale cached stylesheet cannot break layout
 /// Component CSS, mounted INLINE in the document head rather than compiled into
 /// the built stylesheet.
 ///
@@ -45,6 +47,7 @@ pub trait Avatar {
 /// which therefore only that page ships.
 pub const AVATAR_SLOT_CSS: &str = ".avatar-slot__img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:9999px}";
 
+// SPEC-13.18.7: shipped only by the page that renders the picker
 /// The picker's own rules. Shipped by the consumer's avatar-picker-carrying page
 /// response only, alongside its controller. See `AVATAR_SLOT_CSS`.
 pub const AVATAR_PICKER_CSS: &str = r#".avatar-picker{display:flex;align-items:center;gap:1rem}
@@ -68,6 +71,8 @@ pub const AVATAR_PICKER_CSS: &str = r#".avatar-picker{display:flex;align-items:c
 .avatar-picker[data-enhanced] .avatar-picker__enhanced{display:inline-flex}
 .avatar-picker[data-enhanced] .avatar-picker__nojs{display:none}"#;
 
+// SPEC-13.18.2, SPEC-13.18.3, SPEC-13.18.4, SPEC-13.18.5, SPEC-13.18.6:
+//  works without JS; limits ride on data attributes
 /// Render the avatar picker for `user`. Reusable: it carries its own endpoints
 /// (`upload_action` / `remove_action`) and limits via `data-*` attributes, so
 /// the controller wires it with no per-instance config. The letter fallback

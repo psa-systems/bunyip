@@ -6,6 +6,7 @@
 # (https://dev.a8n.run/psa-systems/dunite); it is anonymously readable, so
 # builds need no token, but an optional DUNITE_GIT_TOKEN is honoured.
 
+# SPEC-14.13.1: shared recipes come from the common submodule
 # The hook, release and tree-ownership recipes come from psa-systems/common,
 # vendored as the `common` submodule; run `git submodule update --init` in a
 # fresh clone or the import below is a parse error. Configure the shared
@@ -20,6 +21,7 @@ app := "bunyip"
 # the shared pre-commit runs its cargo steps there rather than in `app`.
 compose_service := "api"
 
+# SPEC-14.13.1: host-owned bind sources
 # Directories the daemon would create root-owned while resolving a dev-stack
 # mount, which then fails check-tree-ownership (DEV-371). Two shapes here: the
 # ./secrets/oidc bind SOURCE (Cause 1), and the ./target and
@@ -46,11 +48,13 @@ test_args := "--workspace --all-targets"
 # Migrations live under bunyip-api, not the repo root common defaults to.
 migrations_dir := "bunyip-api/migrations"
 
+# SPEC-14.13.1, SPEC-14.14.6: 14-digit migration prefix
 # bunyip stamps every migration with a 14-digit `yyyyMMddHHmmss` prefix
 # (BUNYIP-79). Pass the width to the shared `check-migration-versions` recipe
 # so it also fails a shorter prefix, not just a duplicate (PC-79, BUNYIP-870).
 migration_version_width := "14"
 
+# SPEC-14.13.2: non-Rust files read by include_str in tests
 # Non-Rust files Rust tests read with `include_str!` so a commit that only
 # touches these runs the full cargo legs rather than skipping under GOV-55's
 # staged-path guard. The CSS token / asset guards in `bunyip-web/src/views/ui.rs`
@@ -61,6 +65,7 @@ migration_version_width := "14"
 # includes the JSON seeds under `bunyip-api/seed/`.
 pre_commit_extra_paths := "bunyip-web/assets/ bunyip-web/input.css bunyip-web/src/skin/docs/ crates/bunyip-domain/templates/ bunyip-api/seed/"
 
+# SPEC-14.13.1, SPEC-14.39.3, SPEC-14.1.2: version lives at workspace.package
 # The root manifest is virtual and the single version lives at
 # [workspace.package] version, inherited by every member with
 # `version.workspace = true`; release_manifest stays the root default.
@@ -68,16 +73,19 @@ release_layout := "virtual-workspace"
 
 import 'common/common.just'
 
+# SPEC-14.13.3: must stay the first recipe
 # List available recipes. Keep FIRST: just picks the default recipe by source order.
 default:
     @just --list
 
 # -- Checks ----------------------------------------------------------------------
 
+# SPEC-14.14.1: umbrella gate, order matters
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
 check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
+# SPEC-14.14.6: alias of the shared recipe
 # Gate migration version numbers: unique + uniform width (BUNYIP-79). Delegates
 # to the shared `check-migration-versions` recipe (PC-79, BUNYIP-870); the old
 # "strictly increasing" rule is subsumed because a pinned 14-digit width makes
@@ -86,12 +94,14 @@ check: check-justfile check-migrations check-migration-immutability check-workfl
 [group: 'checks']
 check-migrations: check-migration-versions
 
+# SPEC-14.14.3: negative fixture must fail first
 # Gate the secret scope of pull_request-triggered workflows (BUNYIP-425).
 [group: 'checks']
 check-workflows:
     ! ./scripts/check-workflow-secrets.nu scripts/fixtures/workflow-secrets-bad 2>/dev/null
     ./scripts/check-workflow-secrets.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that every workflow step runs under Nushell: each job declares the
 # Nushell shell under `defaults.run` and no step opts out (BUNYIP-489).
 [group: 'checks']
@@ -99,6 +109,7 @@ check-workflow-shell:
     ./scripts/check-workflow-shell.nu --self-test
     ./scripts/check-workflow-shell.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that every field of a Deserialize response struct in
 # bunyip-web/src/api/types.rs defaults unless it is declared essential, so a
 # field renamed or added by a newer bunyip-api degrades instead of breaking
@@ -108,6 +119,7 @@ check-serde-compat:
     ./scripts/check-serde-compat.nu --self-test
     ./scripts/check-serde-compat.nu
 
+# SPEC-14.14.4: a non-zero exit fails the recipe
 # Gate the runner labels: the native cargo job stays on the HEAVY label, every
 # label carries its reason, no workflow installs at run time what the image
 # provides (C toolchain, BUNYIP-444; browser system libraries, BUNYIP-446).
@@ -115,6 +127,7 @@ check-serde-compat:
 check-runners:
     ./scripts/check-runner-labels.nu
 
+# SPEC-14.14.4: a non-zero exit fails the recipe
 # Gate the security shapes the BUNYIP-426 audit sweep removed (transport-derived
 # cookie Secure, rev-pinned dunite, no signup enumeration oracle, digest-pinned
 # base images). Grep-only, so it runs without a toolchain.
@@ -122,18 +135,21 @@ check-runners:
 check-security:
     ./scripts/check-security-invariants.nu
 
+# SPEC-14.14.4: a non-zero exit fails the recipe
 # Gate that Stripe config stays DB-only: no STRIPE_* env surface outside the
 # e2e harness (BUNYIP-482).
 [group: 'checks']
 check-stripe-env:
     ./scripts/check-no-stripe-env.nu
 
+# SPEC-14.14.4: a non-zero exit fails the recipe
 # Gate the retired env names: the per-consumer encryption keys (BUNYIP-483) and
 # the dead BUNYIP_OIDC_* relying-party variables (BUNYIP-539).
 [group: 'checks']
 check-key-env:
     ./scripts/check-no-retired-env.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that every env var bunyip-web/src/config.rs reads has a .env.example
 # entry, so a deployer can discover it exists (BUNYIP-720).
 [group: 'checks']
@@ -141,6 +157,7 @@ check-env-parity:
     ./scripts/check-env-parity.nu --self-test
     ./scripts/check-env-parity.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that every compose file running bunyip-api sets APP_URL and
 # BUNYIP_WEB_ORIGIN explicitly, instead of silently falling back to
 # CORS_ORIGIN's first entry (BUNYIP-749).
@@ -149,6 +166,7 @@ check-compose-env-parity:
     ./scripts/check-compose-env-parity.nu --self-test
     ./scripts/check-compose-env-parity.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that Argon2 never runs on an actix worker: every hash and verify goes
 # through services::argon2_offload (BUNYIP-553).
 [group: 'checks']
@@ -156,12 +174,14 @@ check-argon2-offload:
     ./scripts/check-argon2-offload.nu --self-test
     ./scripts/check-argon2-offload.nu
 
+# SPEC-14.14.4: a non-zero exit fails the recipe
 # Gate that scripts/ stays Nushell: no .sh file and no POSIX-shell shebang
 # (BUNYIP-490).
 [group: 'checks']
 check-no-bash:
     ./scripts/check-no-bash.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate the auto-hiding scrollbar contract in the authored and built CSS plus the
 # app.js idle hold (BUNYIP-848, superseding BUNYIP-509's always-visible rule).
 [group: 'checks']
@@ -169,6 +189,7 @@ check-scrollbars:
     ./scripts/check-scrollbars.nu --self-test
     ./scripts/check-scrollbars.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate the committed Tailwind output: it must equal a fresh `bun run build:css`,
 # and every crates/*/src directory that emits markup must be named by an
 # `@source` line in bunyip-web/input.css (BUNYIP-598).
@@ -177,6 +198,7 @@ check-css-current:
     ./scripts/check-css-current.nu --self-test
     ./scripts/check-css-current.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate user-facing copy: no three-dot ellipsis, no emoticon and no internal
 # issue key in any string literal under bunyip-web/src (BUNYIP-551, BUNYIP-624).
 [group: 'checks']
@@ -184,6 +206,7 @@ check-ui-copy:
     ./scripts/check-ui-copy.nu --self-test
     ./scripts/check-ui-copy.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate prices and deadlines: no price per period and no fixed day count in any
 # string literal under bunyip-web/src (BUNYIP-590).
 [group: 'checks']
@@ -191,6 +214,7 @@ check-price-literals:
     ./scripts/check-price-literals.nu --self-test
     ./scripts/check-price-literals.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that no product name is compiled into bunyip-web: the brand is an
 # admin-managed database record, not a literal (BUNYIP-561).
 [group: 'checks']
@@ -198,12 +222,14 @@ check-brand-literals:
     ./scripts/check-brand-literals.nu --self-test
     ./scripts/check-brand-literals.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate the em-dash ban: no U+2014 in any tracked file (BUNYIP-694).
 [group: 'checks']
 check-em-dash:
     ./scripts/check-em-dash.nu --self-test
     ./scripts/check-em-dash.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate the theme tokens: no unmapped stock Tailwind scale in the client-side
 # scripts and no colour literal in the framework shell (BUNYIP-549).
 [group: 'checks']
@@ -211,6 +237,7 @@ check-theme-colors:
     ./scripts/check-theme-colors.nu --self-test
     ./scripts/check-theme-colors.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that ENV_INVENTORY, SYSTEM_LEVEL_ENV_KEYS and GovernedSecret::ALL each
 # name the same set of variables as their table in docs/configuration.md
 # (BUNYIP-783, absorbing BUNYIP-734's system-level-only check-system-level-keys.nu).
@@ -219,6 +246,7 @@ check-doc-surface:
     ./scripts/check-doc-surface.nu --self-test
     ./scripts/check-doc-surface.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate that docs/configuration.md's "Recently added" and "All variables"
 # sections match the per-variable facts in crates/bunyip-domain/config/variables.toml.
 [group: 'checks']
@@ -241,6 +269,7 @@ config-since version:
 config-release-notes version:
     nu scripts/config-docs.nu release-notes {{ version }}
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate CLAUDE.md as an index: at most 20,000 bytes, no unfenced line over 400
 # characters, and every docs/ link and anchor resolves (BUNYIP-854).
 [group: 'checks']
@@ -248,6 +277,7 @@ check-claude-md:
     ./scripts/check-claude-md.nu --self-test
     ./scripts/check-claude-md.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate the buildkit cargo cache mounts: every `type=cache` mount carries a
 # per-image `id=` and `sharing=locked`, so concurrent builds cannot unpack
 # crates into one registry directory (BUNYIP-534).
@@ -256,6 +286,7 @@ check-cache-mounts:
     ./scripts/check-cache-mount-sharing.nu --self-test
     ./scripts/check-cache-mount-sharing.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # A RUN's buildkit cache key includes its exec env, so a per-build ENV above the
 # cargo-chef cook makes that layer uncacheable forever (BUNYIP-519).
 [group: 'checks']
@@ -263,6 +294,7 @@ check-cache-keys:
     ./scripts/check-build-cache-keys.nu --self-test
     ./scripts/check-build-cache-keys.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Both publish workflows must fire on the same pushes, and the e2e deploy gate
 # must replay the same filter, so the two :latest tags stay a pair (BUNYIP-519).
 [group: 'checks']
@@ -270,6 +302,7 @@ check-publish-triggers:
     ./scripts/check-publish-triggers.nu --self-test
     ./scripts/check-publish-triggers.nu
 
+# SPEC-14.14.2: self-test runs before the real gate
 # Gate Cargo.lock against the RustSec advisory database: an uncovered
 # vulnerability fails, a warning is reported only, and an EXCEPTIONS row
 # suppresses one advisory until its dated review (BUNYIP-905).
@@ -278,26 +311,31 @@ check-dependency-audit:
     ./scripts/check-dependency-audit.nu --self-test
     ./scripts/check-dependency-audit.nu
 
+# SPEC-14.14.5: exact command is part of the contract
 # Build every target in the workspace.
 [group: 'checks']
 check-build:
     cargo build --workspace --all-targets
 
+# SPEC-14.14.5: exact command is part of the contract
 # Clippy across the workspace with warnings denied.
 [group: 'checks']
 check-clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# SPEC-14.14.5: exact command is part of the contract
 # Formatting check.
 [group: 'checks']
 check-fmt:
     cargo fmt --all --check
 
+# SPEC-14.14.5: exact command is part of the contract
 # Build the api image's builder stage only - catches Docker-build drift cheaply.
 [group: 'checks']
 check-docker:
     docker build --file bunyip-api/oci-build/Dockerfile --target builder --output type=cacheonly --provenance=false .
 
+# SPEC-14.15.1, SPEC-14.2.2: cache volume outside the bind mount; builder tag tracks the pin
 # Run fmt + clippy + workspace tests (--all-targets: unit, integration, and
 # doc tests) inside the pinned rust-builder image.
 # For dev boxes with no local Rust toolchain; named volumes keep repeat runs incremental.
@@ -317,27 +355,32 @@ check-container:
         ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie \
         bash -c "cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --all-targets"
 
+# SPEC-14.15.2: exact cargo command
 # Type-check the workspace.
 [group: 'checks']
 typecheck:
     cargo check --workspace
 
+# SPEC-14.15.2: exact cargo command
 # Lint the workspace (clippy).
 [group: 'checks']
 lint:
     cargo clippy --workspace --all-targets -- -D warnings
 
+# SPEC-14.15.2: exact cargo command
 # Format the workspace.
 [group: 'checks']
 fmt:
     cargo fmt --all
 
+# SPEC-14.15.2: exact cargo command
 # Run unit tests. --all-targets (not --lib) so binary-crate tests run too:
 # bunyip-web is bin-only and `--lib` skips its whole suite (BUNYIP-271).
 [group: 'checks']
 test:
     cargo test --workspace --all-targets
 
+# SPEC-14.16.1: compose interpolates exactly these names
 # docker compose reads HOST_UID/HOST_GID for the `user:` mapping + dev-image
 # build args on shared dev hosts (where the developer's uid is not 1000). These
 # MUST be named HOST_UID/HOST_GID - compose.dev.yml interpolates exactly those,
@@ -349,6 +392,7 @@ export HOST_GID := `id -g`
 # resolve them against the committed .sqlx cache so local cargo commands need no
 # database.
 export SQLX_OFFLINE := "true"
+# SPEC-14.16.2: per-worktree target volume
 # BUNYIP-856: isolate `/app/target` per git worktree so two worktrees building
 # at once do not corrupt each other's incremental state. The main checkout
 # (`.git/` is a directory) keeps the plain volume name so its warm cache
@@ -356,11 +400,13 @@ export SQLX_OFFLINE := "true"
 # from the worktree's absolute path. Registry and git caches stay shared.
 export WORKTREE_SUFFIX := `if [ -d .git ]; then echo ""; else printf -- "-%s" "$(git rev-parse --show-toplevel | sha1sum | cut -c1-7)"; fi`
 
+# SPEC-14.16.3: dev stack compose command
 compose := "docker compose -f compose.dev.yml "
 compose_sso := "docker compose -f compose.dev.yml -f compose.dev-sso.yml "
 
 # -- Development --------------------------------------------------------------
 
+# SPEC-14.17.1, SPEC-14.17.2, SPEC-14.17.3: generates .env; both keys must be active in the example
 # Create .env from the example if missing, generating the dev secrets that would
 # otherwise be empty (the encryption keys must be 32-byte hex or the api panics
 # at startup). Existing .env is left untouched.
@@ -391,6 +437,7 @@ ensure-env:
     | save .env
     print "Wrote .env (generated APP_ENCRYPTION_KEY, JWT_SECRET)."
 
+# SPEC-14.18.1, SPEC-14.18.2: idempotent dev signing key
 # Generate the dev OIDC signing keypair (Ed25519, kid dev-2026) into ./secrets/oidc
 # if missing. bunyip-api IS the OIDC issuer and loads these at startup
 # (OIDC_JWT_PRIVATE_KEY_PATH); without them it fails to boot. ./secrets/oidc is
@@ -414,17 +461,20 @@ ensure-oidc-keys: ensure-bind-sources
     ^openssl pkey --in secrets/oidc/dev-2026.pem --pubout --out secrets/oidc/dev-2026.pub.pem
     print "Generated secrets/oidc/dev-2026.pem (Ed25519 OIDC signing key, kid dev-2026)."
 
+# SPEC-14.18.3: wraps the production secrets creator
 # Create/migrate the production secret files under ./secrets (BUNYIP-38).
 # Idempotent wrapper around scripts/init-secrets.nu; see compose.yml quick start.
 [group: 'dev']
 init-secrets:
     ./scripts/init-secrets.nu
 
+# SPEC-14.19.1: foreground dev stack
 # Start the full dev stack (postgres + api + web) in the foreground.
 [group: 'dev']
 dev: ensure-env ensure-oidc-keys
     {{ compose }}up --build
 
+# SPEC-14.19.1: detached dev stack
 # Start the full dev stack detached.
 [group: 'dev']
 dev-detach: ensure-env ensure-oidc-keys
@@ -433,6 +483,7 @@ dev-detach: ensure-env ensure-oidc-keys
     @echo "  web (frontend): http://localhost:4400"
     @echo "  api (backend):  http://localhost:4401"
 
+# SPEC-14.19.2, SPEC-14.17.1: network must exist before compose up
 # Start the Traefik-routed stack on *.a8n.run (detached, for SSO/remote testing).
 [group: 'dev']
 dev-sso: ensure-env ensure-oidc-keys
@@ -450,6 +501,7 @@ dev-sso: ensure-env ensure-oidc-keys
     print $"  bunyip hub:   https://($user_name)-bunyip.a8n.run"
     print $"  OCI registry: https://($user_name)-bunyip-registry.a8n.run  \(when OCI_REGISTRY_ENABLED=true in .env)"
 
+# SPEC-14.20.1, SPEC-14.20.2: idempotent upsert of the dev SPA client
 # Register the per-developer mokosh SPA OIDC client in bunyip-api.
 # The committed seed migration registers the static staging hosts; dev hosts
 # carry ${USER} in their redirect URIs and cannot live in a migration, so this
@@ -492,16 +544,19 @@ register-dev-clients:
     print ""
     print $"  SPA  \(MOKOSH_OIDC_CLIENT_ID in mokosh-apps/.env\):   ($spa_id)"
 
+# SPEC-14.19.3: stop dev stack
 # Stop the dev stack.
 [group: 'dev']
 dev-stop: ensure-env
     {{ compose }}down
 
+# SPEC-14.19.3: stop SSO stack and orphans
 # Stop the Traefik-routed stack.
 [group: 'dev']
 dev-stop-sso: ensure-env
     {{ compose_sso }}down --remove-orphans
 
+# SPEC-14.21.1, SPEC-14.21.2, SPEC-14.21.3, SPEC-14.21.4: stops at the first failing check
 # Automated OCI registry verification against the running dev stack (BUNYIP-31).
 # Prerequisites: `just dev-detach` already up with the distribution proxy enabled
 # in .env (FORGEJO_BASE_URL, FORGEJO_API_TOKEN, OCI_REGISTRY_ENABLED=true) and a
@@ -581,21 +636,25 @@ verify-oci slug="bunyip-api" owner="psa-systems-private" image="bunyip-api" tag=
     print ""
     print "== All OCI verification checks passed =="
 
+# SPEC-14.19.4: exact service targeted
 # Tail all logs.
 [group: 'dev']
 dev-logs: ensure-env
     {{ compose }}logs --follow
 
+# SPEC-14.19.4: exact service targeted
 # Tail api logs only.
 [group: 'dev']
 logs-api: ensure-env
     {{ compose }}logs --follow api
 
+# SPEC-14.19.4: exact service targeted
 # Tail web logs only.
 [group: 'dev']
 logs-web: ensure-env
     {{ compose }}logs --follow web
 
+# SPEC-14.19.4: exact service targeted
 # PostgreSQL shell.
 [group: 'dev']
 db-shell: ensure-env
@@ -603,16 +662,19 @@ db-shell: ensure-env
 
 # -- Local (cargo, no Docker) ---------------------------------------------------
 
+# SPEC-14.15.3: exact cargo command
 # Run the api backend locally.
 [group: 'local']
 run:
     cargo run -p bunyip-api
 
+# SPEC-14.15.3: exact cargo command
 # Run the web frontend locally (from the crate dir so ServeDir("assets") resolves).
 [group: 'local']
 run-web:
     cd bunyip-web && cargo run -p bunyip-web
 
+# SPEC-14.15.3: exact cargo command
 # Build the whole workspace.
 [group: 'local']
 build:
@@ -620,16 +682,19 @@ build:
 
 # -- Database --------------------------------------------------------------------
 
+# SPEC-14.19.5: runs where the contract says
 # Run pending migrations (also applied automatically on api startup).
 [group: 'database']
 migrate: ensure-env
     {{ compose }}exec api cargo sqlx migrate run --source bunyip-api/migrations
 
+# SPEC-14.19.5: runs where the contract says
 # Revert the last applied migration.
 [group: 'database']
 migrate-revert: ensure-env
     {{ compose }}exec api cargo sqlx migrate revert --source bunyip-api/migrations
 
+# SPEC-14.19.5: runs where the contract says
 # Seed the BUNYIP-52 E2E test accounts (e2e-user@a8n.run, e2e-admin@a8n.run).
 # Idempotent; runs inside the api container against the dev database. Requires
 # BUNYIP_E2E_BOOTSTRAP_ALLOW=true and BUNYIP_E2E_TEST_USER_PASSWORD in the
@@ -639,6 +704,7 @@ migrate-revert: ensure-env
 e2e-bootstrap *args: ensure-env
     {{ compose }}exec api cargo run --bin bunyip-e2e-bootstrap -- {{ args }}
 
+# SPEC-14.19.5: runs where the contract says
 # Run the Playwright E2E suite on the HOST against a deployed bunyip instance
 # (NOT in a container). Requires e2e/.env filled from e2e/.env.example; runs
 # against E2E_BASE_URL. Pass flags through, e.g. `just e2e --headed` or
@@ -649,10 +715,12 @@ e2e *args:
 
 # -- Images ----------------------------------------------------------------------
 
+# SPEC-14.22.1: both images
 # Build both production images.
 [group: 'images']
 build-docker: build-api-image build-web-image
 
+# SPEC-14.22.2: repo-root context, stamped build args, optional token
 # Build the production api image (dunite is anonymous; DUNITE_GIT_TOKEN optional).
 [group: 'images']
 build-api-image tag="latest":
@@ -664,6 +732,7 @@ build-api-image tag="latest":
         --tag bunyip-api:{{ tag }} \
         .
 
+# SPEC-14.22.2: repo-root context, stamped build args
 # Build the production web image (context = repo root).
 [group: 'images']
 build-web-image tag="latest":
@@ -674,6 +743,7 @@ build-web-image tag="latest":
         --tag bunyip-web:{{ tag }} \
         .
 
+# SPEC-14.22.3: export stage writes the static binary
 # Export the api static binary to ./dist via the Dockerfile's `export` stage.
 [group: 'images']
 build-docker-export:
@@ -688,6 +758,7 @@ build-docker-export:
 
 # -- Cleanup ------------------------------------------------------------------
 
+# SPEC-14.23.1: scoped to this repo, never host-global
 # Tear down this repo's dev footprint: stop the compose.dev.yml stack (drops the default network and orphans), remove this repo's per-developer named volumes (postgres data, cargo-target, web node_modules, download/oci caches) plus the bunyip-specific check-container target cache, delete local build artifacts (target/, bunyip-web/node_modules/), and remove the generated dev .env (ensure-env recreates it). Scoped to this repo; safe on a shared host (no host-global prune; shared dunite registry cache left intact).
 [group: 'cleanup']
 dev-clean:
@@ -723,6 +794,7 @@ dev-clean:
     }
     print "dev-clean: done"
 
+# SPEC-14.23.2: also drops images and buildx cache
 # Everything dev-clean does, plus remove the Docker images this repo builds and prune its buildx cache. Run for a from-scratch rebuild.
 [group: 'cleanup']
 dev-clean-all: dev-clean

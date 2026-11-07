@@ -4,5 +4,6 @@
 //! dashboard / admin handlers) so a second app supplies its own skin without
 //! forking the framework. The framework carries no marketing copy; this module
 //! carries no generic app logic.
+// SPEC-11.20.1: skin holds app-specific pages only
 pub mod content;
 pub mod public;

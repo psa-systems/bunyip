@@ -65,6 +65,7 @@ pub type WhitelistSet = Arc<HashSet<(String, String)>>;
 /// `RATE_LIMIT_CONFIG_CACHE_TTL_SECS`. It bounds only how long a SECOND api
 /// process keeps enforcing the previous snapshot; the process that took the
 /// admin write invalidates its own snapshot.
+// SPEC-7.3.210
 pub const RATE_LIMIT_WHITELIST_CACHE_TTL_SECS: u64 = 30;
 
 /// Single-slot TTL cache for the whole `rate_limit_whitelist` table
@@ -98,6 +99,7 @@ impl WhitelistCache {
     /// (stale, but the set the admin actually set), and with no snapshot at
     /// all it propagates the error to the caller, which is the same failure
     /// the point lookup beside it would raise anyway.
+    // SPEC-7.3.210
     pub async fn get_or_load<F, Fut>(&self, load: F) -> Result<WhitelistSet, AppError>
     where
         F: FnOnce() -> Fut,
@@ -161,6 +163,7 @@ pub struct RateLimitWhitelistRepository;
 impl RateLimitWhitelistRepository {
     /// Every whitelist row, newest first. The admin page renders this list
     /// in full (small by construction, no pagination).
+    // SPEC-7.3.206
     pub async fn list(pool: &PgPool) -> Result<Vec<RateLimitWhitelistRow>, AppError> {
         let rows = sqlx::query_as::<_, RateLimitWhitelistRow>(
             "SELECT id, kind, value, reason, added_by, added_at \
@@ -175,6 +178,7 @@ impl RateLimitWhitelistRepository {
     /// Insert one `(kind, value)` pair. The unique index on `(kind, value)`
     /// makes a repeat insert a no-op; `ON CONFLICT DO NOTHING` keeps the
     /// endpoint idempotent (two admins pressing Add race-free).
+    // SPEC-7.3.207
     pub async fn insert(
         pool: &PgPool,
         kind: WhitelistKind,
@@ -199,6 +203,7 @@ impl RateLimitWhitelistRepository {
     }
 
     /// Delete one row by id. Returns `true` when a row was deleted.
+    // SPEC-7.3.208
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
         let affected = sqlx::query("DELETE FROM rate_limit_whitelist WHERE id = $1")
             .bind(id)
@@ -217,6 +222,7 @@ impl RateLimitWhitelistRepository {
     /// BUNYIP-962: reads the cached snapshot (`WhitelistCache`, TTL
     /// [`RATE_LIMIT_WHITELIST_CACHE_TTL_SECS`]) rather than issuing a
     /// per-call `SELECT`, mirroring `RateLimitConfigCache` (BUNYIP-556).
+    // SPEC-7.3.209
     pub async fn is_whitelisted(pool: &PgPool, key: &str) -> Result<bool, AppError> {
         let Some((kind_str, value)) = key.split_once(':') else {
             return Ok(false);

@@ -12,6 +12,7 @@ import type { APIRequestContext } from '@playwright/test';
 
 export const API_V1 = '/v1';
 
+// SPEC-3.38.9
 export const routes = {
   // Health / version. `version` is the deploy-sync gate target: its `commit`
   // field carries the short git hash baked in via the GIT_COMMIT build arg.
@@ -57,6 +58,7 @@ export interface Pkce {
 }
 
 // RFC 7636 PKCE pair (S256). Verifier is 43-128 chars of base64url.
+// SPEC-3.38.9
 export function makePkce(): Pkce {
   const verifier = base64url(randomBytes(48));
   const challenge = base64url(createHash('sha256').update(verifier).digest());

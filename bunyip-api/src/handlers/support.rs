@@ -31,6 +31,7 @@ pub struct ListSupportTicketsQuery {
 /// The support queue, most recent activity first (BUNYIP-725): the read half
 /// of the mailbox the poller ingests into, so a successfully ingested message
 /// is reachable in the product before it is marked seen.
+// SPEC-10.36.1: offset cannot overflow
 pub async fn list_support_tickets(
     req: HttpRequest,
     _admin: AdminUser,
@@ -55,6 +56,7 @@ pub async fn list_support_tickets(
 ///
 /// A ticket and its full message thread, oldest first, so the reply route's
 /// ticket id is obtainable from a caller path (BUNYIP-725).
+// SPEC-10.36.2: thread, oldest first
 pub async fn get_support_ticket(
     req: HttpRequest,
     _admin: AdminUser,
@@ -77,6 +79,7 @@ pub async fn get_support_ticket(
 
 /// Strip the angle brackets from stored Message-IDs (they are kept bare so
 /// inbound, header and sent ids all compare in one form).
+// SPEC-10.36.6: stored ids are bare
 fn strip_brackets(id: &str) -> String {
     id.trim()
         .trim_start_matches('<')
@@ -89,6 +92,7 @@ fn strip_brackets(id: &str) -> String {
 /// Send an app-composed reply to the ticket's requester, threaded onto the
 /// latest message via In-Reply-To / References, and record it as an outbound
 /// support message. Moves the ticket to `pending` (awaiting the requester).
+// SPEC-10.36.3, SPEC-10.36.4, SPEC-10.36.5, SPEC-10.36.6, SPEC-10.36.7: threaded reply
 pub async fn reply_to_support_ticket(
     req: HttpRequest,
     _admin: AdminUser,

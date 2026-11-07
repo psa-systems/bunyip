@@ -24,6 +24,7 @@ use crate::web::{redirect_cookies, AppState};
 
 use super::refuse_non_super_admin;
 
+// SPEC-12.19.1
 /// Who changed the toggle and when, or that nobody has.
 fn last_changed(t: &AdminFeatureToggle) -> Markup {
     html! {
@@ -37,6 +38,7 @@ fn last_changed(t: &AdminFeatureToggle) -> Markup {
     }
 }
 
+// SPEC-12.19.2
 fn feature_toggle_row(t: &AdminFeatureToggle, editable: bool) -> Markup {
     let id = format!("feature-{}", t.key);
     admin_block(
@@ -63,6 +65,7 @@ fn feature_toggle_row(t: &AdminFeatureToggle, editable: bool) -> Markup {
     )
 }
 
+// SPEC-12.19.1
 pub(super) fn feature_toggles_content(
     toggles: &[AdminFeatureToggle],
     fetch_error: Option<&ApiError>,
@@ -85,6 +88,7 @@ pub(super) fn feature_toggles_content(
     }
 }
 
+// SPEC-12.19.1
 pub async fn feature_toggles(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -105,6 +109,7 @@ pub async fn feature_toggles(State(st): State<AppState>, headers: HeaderMap) -> 
     admin_response(&c, &user, "/admin/features", "Feature Toggles", content)
 }
 
+// SPEC-12.19.3: an unticked switch is absent from the body and means off
 /// One row's submission. An unticked switch is absent from the body, which is
 /// a real "off" because every row form renders the control.
 #[derive(Deserialize)]
@@ -114,6 +119,7 @@ pub struct FeatureToggleForm {
     pub enabled: Option<String>,
 }
 
+// SPEC-12.19.3
 pub async fn feature_toggle_save(
     State(st): State<AppState>,
     headers: HeaderMap,

@@ -18,6 +18,7 @@ use crate::util::urlenc;
 use crate::views::ui::{button_class, error_box, icon, success_box};
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.46.3: send-once guard; the send mints a token each call
 /// Set after the onboarding page auto-sends the verification email so a refresh
 /// (or the POST-name redirect back here) does not fire a second mail.
 /// `request_email_verification` is NOT idempotent: it mints a new token and
@@ -46,6 +47,7 @@ pub struct OnboardingForm {
     pub phone: String,
 }
 
+// SPEC-12.46.1, SPEC-12.46.2, SPEC-12.46.3, SPEC-12.46.4: forwarder, one-time auto-send, 429 surfaced
 pub async fn onboarding_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -105,6 +107,7 @@ pub async fn onboarding_get(
     dashboard_response(&c, &user, "/onboarding", "Welcome", content)
 }
 
+// SPEC-12.46.1, SPEC-12.46.5, SPEC-12.46.6: name save then session rotation
 pub async fn onboarding_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -169,6 +172,7 @@ fn name_present(v: &Option<String>) -> bool {
     matches!(v.as_deref().map(str::trim), Some(s) if !s.is_empty())
 }
 
+// SPEC-12.46.7: brand from the admin-managed record
 /// BUNYIP-561: the welcome heading names the brand from the admin-managed
 /// record. An unbranded deployment gets the bare greeting rather than a
 /// compiled-in product name.
@@ -180,6 +184,7 @@ fn welcome_heading(brand_name: &str) -> String {
     }
 }
 
+// SPEC-12.46.7: two-step page
 fn onboarding_content(user: &User, error: Option<&str>, ok: Option<&str>) -> Markup {
     let name_done = name_present(&user.first_name) && name_present(&user.last_name);
     html! {

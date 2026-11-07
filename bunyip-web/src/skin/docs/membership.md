@@ -1,3 +1,5 @@
+<!-- SPEC-11.34.1, SPEC-11.34.3: embedded guide; relative links only -->
+
 # Membership & access
 
 Some apps are open to anyone with an account; others need an active membership. This page explains how membership works and how to start one.

@@ -63,6 +63,7 @@ const hubIsProdApex = (() => {
 
 // Hard probe for the API /health host (status-only: /health is JSON
 // `{status,version}` and exists everywhere, so a 200 is sufficient).
+// SPEC-3.37.6
 async function probe(url) {
   console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
   const controller = new AbortController();
@@ -101,6 +102,7 @@ async function probe(url) {
 //   (post-merge deploy) path uses `wait-for-deploy.mjs` instead of this
 //   script, so post-merge staging-broken alerting is unchanged. A production
 //   `workflow_dispatch` stays hard: it does not set E2E_HUB_SOFT.
+// SPEC-3.37.7
 async function probeHub(url, { soft = false } = {}) {
   console.log(`PR mode: probing ${url} (timeout ${TIMEOUT_MS / 1000}s)...`);
   const controller = new AbortController();

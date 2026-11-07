@@ -42,6 +42,7 @@ interface SinkConnection {
 
 // Split E2E_MAIL_SINK_URL into a credential-free base URL, the mailbox address
 // (the basicAuth username, e.g. e2e@a8n.run), and a Basic auth header.
+// SPEC-3.39.7
 function sinkConnection(): SinkConnection {
   const raw = env.mailSinkURL;
   if (!raw) {
@@ -65,6 +66,7 @@ function sinkConnection(): SinkConnection {
 // Build a plus-subaddress of the sink mailbox, e.g. mailbox `e2e@a8n.run` +
 // tag `e2e-...-1` -> `e2e+e2e-...-1@a8n.run`. Stalwart delivers this into the
 // mailbox, and the unique tag isolates one test's mail from every other's.
+// SPEC-3.39.7
 export function subaddress(tag: string): string {
   const { mailbox } = sinkConnection();
   const at = mailbox.lastIndexOf('@');
@@ -162,6 +164,7 @@ export interface WaitForLinkOptions {
 // destroy that message. Filtering by the link pattern ignores the async
 // `send_account_created` welcome mail that also arrives for the address. Throws
 // on timeout so a never-delivered mail fails the spec clearly.
+// SPEC-3.39.8, SPEC-3.39.9
 export async function waitForLink(
   toAddress: string,
   linkRe: RegExp,
@@ -234,6 +237,7 @@ export async function waitForLink(
 }
 
 // Pull the `token` query param out of a matched token-link URL.
+// SPEC-3.39.9
 export function tokenFromLink(link: string): string {
   const token = new URL(link).searchParams.get('token');
   if (!token) throw new Error(`no ?token= in mail link: ${link}`);

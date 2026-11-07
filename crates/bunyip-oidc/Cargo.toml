@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 bunyip-domain = { path = "../bunyip-domain" }
+# SPEC-5.1.3: both dunite crates pinned by rev, never a branch
 # Generic OIDC key/JWKS helpers (Ed25519 PEM loading + JWKS publishing).
 # Wave 1 bump: moves with dunite-core so the whole graph pins one rev and
 # `dunite_oidc` + `dunite_core` + `dunite_oci` all share the same AppError.

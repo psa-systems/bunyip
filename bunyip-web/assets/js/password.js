@@ -14,6 +14,7 @@
 // the static rules list still renders and the server-side `password_ok()`
 // remains the final backstop.
 (function () {
+  // SPEC-11.39.4
   var pw = document.getElementById('password');
   var cf = document.getElementById('confirm');
   if (!pw || pw.dataset.pwInit === '1') return;
@@ -41,6 +42,7 @@
     var next = row.dataset[key];
     if (typeof next === 'string' && next.length > 0) lbl.textContent = next;
   }
+  // SPEC-11.39.6
   function setState(row, state) {
     if (!row) return;
     var s = STATES[state];
@@ -70,6 +72,7 @@
   var submit    = pw.form ? pw.form.querySelector('button[type="submit"]') : null;
   var confirmMsg = document.getElementById('pw-confirm-msg');
 
+  // SPEC-11.39.4
   // Mirror the server-side `password_ok()` rules verbatim (handlers/mod.rs).
   function checkLocal(v) {
     setState(rowLen,   v.length >= 12 ? 'pass' : (v.length > 0 ? 'fail' : 'pending'));
@@ -102,6 +105,7 @@
   // superseded request must not open the gate while a fresh check is pending.
   var breachSeq = 0;
 
+  // SPEC-11.39.7: falling open on an outage is logged, not silent
   function breachUnavailable(why, err) {
     breachAvailable = false;
     // Falling open on an outage is still a hole in the check, so say so out
@@ -113,6 +117,7 @@
     refreshSubmit();
   }
 
+  // SPEC-11.39.5, SPEC-11.39.6: only a 5-char hash prefix leaves the browser
   async function checkBreach(v, seq) {
     if (seq !== breachSeq) return;
     if (!v) {
@@ -158,6 +163,7 @@
     }
   }
 
+  // SPEC-11.39.5
   // Debounce the breach check: avoid hammering HIBP on every keystroke. The
   // local rules update immediately; the breach check waits for 500ms of
   // typing-silence.
@@ -174,6 +180,7 @@
     breachTimer = setTimeout(function () { checkBreach(v, seq); }, 500);
   }
 
+  // SPEC-11.39.8
   function refreshSubmit() {
     if (!submit) return;
     var local = ['pw-len','pw-case','pw-digit']
@@ -188,6 +195,7 @@
     var match = cf && cf.value.length > 0 && cf.value === pw.value;
     submit.disabled = !(local && breachOk && match);
   }
+  // SPEC-11.39.9
   function refreshConfirm() {
     if (!cf || !confirmMsg) return;
     if (cf.value.length === 0) {

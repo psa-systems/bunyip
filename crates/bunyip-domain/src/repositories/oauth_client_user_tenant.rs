@@ -21,6 +21,7 @@ impl OAuthClientUserTenantRepository {
     /// first. The order is stable so the tenant picker UI renders
     /// deterministically across reloads. Empty vec is a meaningful
     /// result, not an error.
+    // SPEC-7.3.151
     pub async fn assignments_for(
         pool: &PgPool,
         oauth_client_id: Uuid,
@@ -44,6 +45,7 @@ impl OAuthClientUserTenantRepository {
     /// Every assignment for the given client, regardless of user.
     /// Powers the admin list view; no pagination in v1 since the
     /// realistic order of magnitude is tens to low hundreds per client.
+    // SPEC-7.3.151
     pub async fn list_for_client(
         pool: &PgPool,
         oauth_client_id: Uuid,
@@ -68,6 +70,7 @@ impl OAuthClientUserTenantRepository {
     /// `created_by` may be `None` for system-issued assignments
     /// (migrations, scripts) and `Some(admin_user_id)` for admin-API
     /// calls.
+    // SPEC-7.3.152
     pub async fn assign(
         pool: &PgPool,
         oauth_client_id: Uuid,
@@ -104,6 +107,7 @@ impl OAuthClientUserTenantRepository {
     /// does not 500. On a real delete it returns the removed row so the
     /// caller can act on the freed `(user, tenant)` pair (BUNYIP-200:
     /// revoke that user's refresh-token families for the client).
+    // SPEC-7.3.153
     pub async fn unassign(
         pool: &PgPool,
         oauth_client_id: Uuid,

@@ -7,18 +7,22 @@
 # the build needs no credentials, but an optional DUNITE_GIT_TOKEN (passed
 # through by compose.dev.yml) is honoured for mirrors that require auth.
 
+# SPEC-9.2.1, SPEC-2.1.5: image rust version must match rust-toolchain.toml
 FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie
 
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
+# SPEC-9.2.4
 ARG CARGO_BUILD_JOBS=default
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 
+# SPEC-9.2.2
 # Fetch the dunite git dep with the git CLI (honours the optional injected
 # token) and resolve the bunyip-oidc sqlx::query! macros against the committed
 # .sqlx cache instead of a live DB.
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true \
     SQLX_OFFLINE=true
 
+# SPEC-9.2.3
 # Run as the host user (per governance CHECKLIST) so bind-mounted source and the
 # target volume stay writable. CARGO_HOME moves to the user's home so the
 # registry cache is writable without chowning the whole base image.
@@ -36,8 +40,10 @@ RUN groupadd --gid ${HOST_GID} app 2>/dev/null || true \
 WORKDIR /app
 USER ${HOST_UID}:${HOST_GID}
 
+# SPEC-9.2.4
 EXPOSE 4401
 
+# SPEC-9.2.5
 # working_dir is /app (the workspace root) in compose. Configure git auth to the
 # dunite repo when a token is provided, then rebuild on changes to the api crate
 # and the library crates. cargo-watch ships in the builder image.

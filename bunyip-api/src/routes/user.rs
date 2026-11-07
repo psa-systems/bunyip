@@ -4,6 +4,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.23.5, SPEC-9.23.6, SPEC-9.23.7, SPEC-9.23.8: /me route inventory
 /// Configure user routes
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(

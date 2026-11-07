@@ -50,6 +50,7 @@ export function disposableEmail(): string {
 const CHALLENGE_MAX_RETRIES = 3;
 const PER_WAIT_CAP_MS = 10_000;
 
+// SPEC-3.39.5
 async function fetchRegisterChallenge(ctx: APIRequestContext): Promise<APIResponse> {
   for (let attempt = 0; ; attempt += 1) {
     const res = await ctx.get(routes.registerChallenge);
@@ -77,6 +78,7 @@ async function fetchRegisterChallenge(ctx: APIRequestContext): Promise<APIRespon
 // Register a fresh account on `ctx`. On success `ctx` holds the new account's
 // session cookies (register logs the user in), so the caller can reuse it for
 // authenticated calls and for the eventual self-delete.
+// SPEC-3.39.4
 export async function registerDisposable(ctx: APIRequestContext): Promise<DisposableAccount> {
   const account: DisposableAccount = { email: disposableEmail(), password: DISPOSABLE_PASSWORD };
   // BUNYIP-384: satisfy the BUNYIP-377 signup bot guard the same way the real
@@ -116,6 +118,7 @@ export async function registerDisposable(ctx: APIRequestContext): Promise<Dispos
 // requires the same ownership proof as a normal delete, so the caller passes
 // the account's current password (disposable accounts never enable 2FA, so the
 // password alone suffices). The reaper sweeps anything this misses.
+// SPEC-3.39.6
 export async function deleteMe(ctx: APIRequestContext, password: string): Promise<void> {
   try {
     await ctx.delete(`${routes.userMe}?purge=1`, { data: { password } });
@@ -131,6 +134,7 @@ export async function deleteMe(ctx: APIRequestContext, password: string): Promis
 // so a run that crashes mid-spec doesn't leave a permanently reserved email
 // behind on staging; when the spec succeeds the tombstoned row is exactly
 // what we want to leave in place for the reservation assertion.
+// SPEC-3.39.6
 export async function softDeleteMe(ctx: APIRequestContext, password: string): Promise<void> {
   try {
     await ctx.delete(routes.userMe, { data: { password } });

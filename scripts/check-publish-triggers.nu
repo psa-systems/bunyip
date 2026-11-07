@@ -38,6 +38,7 @@ def push-trigger [path: string]: nothing -> any {
 
 # The path list the e2e deploy gate replays, or null when it cannot be read.
 # Comments are stripped first so an apostrophe in prose cannot look like a quote.
+# SPEC-3.15.3
 def deploy-gate-paths [path: string]: nothing -> any {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null { return null }
@@ -54,6 +55,7 @@ def as-pathspec []: list<string> -> list<string> {
 }
 
 # Problems across the publish workflows and the deploy gate, as readable lines.
+# SPEC-3.15.1, SPEC-3.15.2
 def check-parity [workflows: list<string>, deploy_gate: string]: nothing -> list<string> {
     mut problems = []
     let triggers = ($workflows | each {|w| { file: $w, push: (push-trigger $w) } })
@@ -98,6 +100,7 @@ def check-parity [workflows: list<string>, deploy_gate: string]: nothing -> list
     $problems
 }
 
+# SPEC-3.15.4
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 
@@ -156,6 +159,7 @@ def self-test []: nothing -> nothing {
 def main [
     --self-test # prove the gate rejects a drifted filter and passes a matching one, then exit
 ]: nothing -> nothing {
+    # SPEC-3.15.4
     if $self_test {
         self-test
         return

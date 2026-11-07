@@ -19,6 +19,7 @@ const RUN_STARTED_AT = Date.now();
 // run-start timestamp for local runs. Forgejo Actions sets GITHUB_* for
 // compat, but GITEA_* is the native name - try it first so the logs read
 // naturally on Forgejo.
+// SPEC-3.39.1
 export const RUN_ID = (
   process.env.GITEA_RUN_ID ??
   process.env.GITHUB_RUN_ID ??
@@ -33,6 +34,7 @@ let counter = 0;
 // Unique suffix for a single record, e.g. `e2e-1717545600000-1234567890-3`.
 // Shape: <prefix>-<epochMs>-<runId>-<n>. The epoch is what the stale sweep
 // parses; the runId is what same-run teardown matches on.
+// SPEC-3.39.1
 export function runSuffix(): string {
   counter += 1;
   return `${E2E_PREFIX}-${RUN_STARTED_AT}-${RUN_ID}-${counter}`;
@@ -43,6 +45,7 @@ export function runSuffix(): string {
 const TAG_RE = new RegExp(`${E2E_PREFIX}-(\\d{10,})-([a-zA-Z0-9]+)-(\\d+)`);
 
 // True when `name` carries a tag created by THIS run.
+// SPEC-3.39.2
 export function isOwnedByThisRun(name: string | null | undefined): boolean {
   if (!name) return false;
   const m = TAG_RE.exec(name);

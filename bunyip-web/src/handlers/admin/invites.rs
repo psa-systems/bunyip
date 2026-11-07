@@ -22,6 +22,7 @@ use crate::views::ui::{
 };
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.11.2
 /// The invite's current state, derived the same way the API model does
 /// (`AdminInvite::is_revoked` / `is_accepted` / `is_expired`), since the wire
 /// type carries the raw timestamps rather than a precomputed label.
@@ -43,6 +44,7 @@ fn chrono_now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+// SPEC-12.11.2
 /// Render one invite row: email, status badge, who invited and when, plus a
 /// Revoke button for a still-pending invite.
 fn invite_row(inv: &AdminInvite) -> Markup {
@@ -89,6 +91,7 @@ fn invite_create_card() -> Markup {
     }
 }
 
+// SPEC-12.11.1
 /// Admin invites view (BUNYIP-760): send an invite, and see pending / accepted
 /// / revoked / expired invites with a Revoke action on pending ones.
 /// AdminUser-guarded like the other admin pages; no super-admin restriction.
@@ -128,6 +131,7 @@ fn invites_pager_base(q: &InvitesQuery) -> String {
     }
 }
 
+// SPEC-12.11.1
 pub async fn invites(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -196,6 +200,7 @@ pub struct CreateInviteForm {
     pub email: String,
 }
 
+// SPEC-12.11.3
 /// Send an admin invite (BUNYIP-760), then redirect back to the list with a
 /// success/error toast.
 pub async fn invite_create(
@@ -218,6 +223,7 @@ pub async fn invite_create(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.11.4
 /// Revoke a pending admin invite (BUNYIP-760), then redirect back to the list
 /// with a success/error toast.
 pub async fn invite_revoke(

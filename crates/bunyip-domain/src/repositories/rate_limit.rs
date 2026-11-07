@@ -17,6 +17,7 @@ impl RateLimitRepository {
     /// effective config (`RateLimit::active_retry_after`), so the cap/window
     /// stay sourced from `RateLimitConfig` and are never re-encoded in SQL.
     /// Newest window first.
+    // SPEC-7.3.190
     pub async fn list_active(pool: &PgPool) -> Result<Vec<RateLimit>, AppError> {
         let horizon = Utc::now() - Duration::seconds(Self::max_window_seconds(pool).await?);
         let rows = sqlx::query_as::<_, RateLimit>(
@@ -39,6 +40,7 @@ impl RateLimitRepository {
     /// Close to the Limit section reads this; rows strictly over the cap are
     /// the active-throttles view and are excluded here. Ordered by `count DESC`
     /// so the first row is the one about to trip.
+    // SPEC-7.3.191
     pub async fn list_approaching(
         pool: &PgPool,
         action: &str,
@@ -87,6 +89,7 @@ impl RateLimitRepository {
     /// `limit` per action in memory. Ordered by `count DESC, window_start
     /// DESC` within the fetch, matching `list_approaching`'s order, so a
     /// per-action `take(limit)` after filtering reproduces the same rows.
+    // SPEC-7.3.192
     pub async fn list_approaching_batch(
         pool: &PgPool,
         actions: &[&str],
@@ -115,6 +118,7 @@ impl RateLimitRepository {
     /// horizon for the `rate_limits` table: a row older than this cannot belong
     /// to an open window. Previously a hard-coded hour, which a
     /// super-admin-configured longer window would have silently invalidated.
+    // SPEC-7.3.189
     pub async fn max_window_seconds(pool: &PgPool) -> Result<i64, AppError> {
         let snapshot = RateLimitConfigRepository::overrides(pool).await?;
         let longest = RateLimitConfig::ALL
@@ -132,6 +136,7 @@ impl RateLimitRepository {
     /// when over. Mirrors the bunyip-api private `check_rate_limit` that
     /// every auth handler uses; lifted here so bunyip-oidc handlers can
     /// share it without crossing the dependency direction.
+    // SPEC-7.3.186
     pub async fn check_rate_limit(
         pool: &PgPool,
         key: &str,
@@ -151,6 +156,7 @@ impl RateLimitRepository {
     /// BUNYIP-413: `config` is the caller's bootstrap preset; the cap/window
     /// actually enforced are resolved here, so a persisted override applies at
     /// every enforcement site without touching any of them.
+    // SPEC-7.3.182
     pub async fn check_and_increment(
         pool: &PgPool,
         key: &str,
@@ -161,6 +167,7 @@ impl RateLimitRepository {
         // record, no traffic rollup. The check is one indexed point lookup
         // and only runs for a (kind:value) shaped key, so the common path
         // for a non-whitelisted request pays nothing it did not already.
+        // SPEC-7.3.181
         if super::rate_limit_whitelist::RateLimitWhitelistRepository::is_whitelisted(pool, key)
             .await?
         {
@@ -209,6 +216,7 @@ impl RateLimitRepository {
         // unconditional, awaited round-trip in the function, doubling its
         // DB latency on every call; detaching it costs the caller nothing
         // since the result was already discarded.
+        // SPEC-7.3.183: detached so the record is off the request path; its failure is only logged
         {
             let pool = pool.clone();
             let action = config.action;
@@ -236,6 +244,7 @@ impl RateLimitRepository {
         // incrementing `count` but add no row, so a burst does not inflate
         // the admin page's past-throttles list. Best-effort: a failed INSERT
         // is logged and swallowed so the 429 still fires.
+        // SPEC-7.3.184: first request over the cap only
         if count == config.max_requests + 1 {
             if let Err(e) = super::rate_limit_history::RateLimitHistoryRepository::record(
                 pool,
@@ -260,6 +269,7 @@ impl RateLimitRepository {
 
     /// Check rate limit without incrementing. Resolves the effective config the
     /// same way [`check_and_increment`](Self::check_and_increment) does.
+    // SPEC-7.3.185
     pub async fn check(
         pool: &PgPool,
         key: &str,
@@ -290,6 +300,7 @@ impl RateLimitRepository {
     }
 
     /// Reset rate limit for a specific key and action
+    // SPEC-7.3.188
     pub async fn reset(pool: &PgPool, key: &str, action: &str) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -307,6 +318,7 @@ impl RateLimitRepository {
     /// Cleanup expired rate limit entries: anything older than the longest
     /// window currently in force, so a super-admin-configured long window is
     /// never swept out from under an open throttle (BUNYIP-413).
+    // SPEC-7.3.189
     pub async fn cleanup_expired(pool: &PgPool) -> Result<u64, AppError> {
         let horizon = Utc::now() - Duration::seconds(Self::max_window_seconds(pool).await?);
         let result = sqlx::query(
@@ -325,6 +337,7 @@ impl RateLimitRepository {
     /// Get time until rate limit resets. Resolves the effective window the same
     /// way the enforcement path does, so the `retry_after` a client is told
     /// matches the window actually in force.
+    // SPEC-7.3.187
     pub async fn get_retry_after(
         pool: &PgPool,
         key: &str,

@@ -1,3 +1,4 @@
+# SPEC-14.38.4: paths excluded from secret scanning
 /.env.example
 /.forgejo/workflows/check.yml
 /bunyip-api/migrations/20260721000020_seed_mokosh_setup_docs.sql

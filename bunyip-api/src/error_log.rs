@@ -10,4 +10,5 @@
 //! category / route / client fields pulled out of the structured tracing
 //! fields for the admin log view. Entries are lost on restart (accepted).
 
+// SPEC-9.14.5
 pub use dunite_core::error_log::{ErrorLogBuffer, ErrorLogEntry, ErrorLogLayer, DEFAULT_CAPACITY};

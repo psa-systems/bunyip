@@ -15,6 +15,7 @@ use crate::web::AppState;
 
 use super::title_case;
 
+// SPEC-12.2.5
 /// One dataset-freshness row (BUNYIP-474). The four states are visually
 /// distinct: not configured (muted), configured-but-missing (destructive),
 /// stale (warning), and fresh (success), so an admin can tell "we chose not to
@@ -45,6 +46,7 @@ pub(super) fn dataset_row(d: &DatasetHealth) -> maud::Markup {
     }
 }
 
+// SPEC-12.2.4: failed, empty and populated stay distinct
 /// The dashboard "Datasets" card: freshness of the offline IP `.BIN` files.
 /// BUNYIP-546: the card renders on every load. Hiding it when the list was
 /// empty erased the very distinction `dataset_row`'s four badges exist to draw,
@@ -73,6 +75,7 @@ pub(super) fn datasets_card(
     }
 }
 
+// SPEC-12.2.2
 /// The four platform-stat tiles. Pure so the card container is unit-testable
 /// (like `datasets_card` above). BUNYIP-367: the grid was `gap-4` while every
 /// other card grid in the authenticated shells is `gap-6`, so the tiles sat a
@@ -98,6 +101,7 @@ pub(super) fn stats_grid(s: &AdminStatsResponse) -> maud::Markup {
     }
 }
 
+// SPEC-12.2.1, SPEC-12.2.2, SPEC-12.2.3, SPEC-12.2.6: join! not try_join!, so each fetch keeps its own failure state
 pub async fn dashboard(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,

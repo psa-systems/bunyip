@@ -54,6 +54,7 @@ def drop-comments []: table -> table {
 }
 
 def main [workflows_dir: string = ".forgejo/workflows"] {
+    # SPEC-3.16.1
     let check_workflow = $"($workflows_dir)/check.yml"
 
     if ($check_workflow | path type) != "file" {
@@ -63,6 +64,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
 
     mut status = 0
 
+    # SPEC-3.16.2
     # 1. The native Rust job needs the dev image, which the HEAVY label serves.
     let heavy_label = 'runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}'
     if not (read-lines $check_workflow | any {|l| $l | str contains $heavy_label }) {
@@ -70,12 +72,14 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         $status = 1
     }
 
+    # SPEC-3.16.3
     # 1b. The unsized *_LATEST labels are retired.
     for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST' | drop-comments) {
         print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_BASE_HEAVY or RUNS_ON_OPENSUSE_BASE_MEDIUM \(DEV-769)"
         $status = 1
     }
 
+    # SPEC-3.16.4
     # 2. No run-time toolchain install anywhere: that is the workaround, not the fix.
     let toolchain_hits = (
         grep-tree $workflows_dir '(zypper|apt-get|dnf|yum).*(install).*( gcc| clang| binutils|libopenssl-devel|openssl-devel|build-essential)'
@@ -99,6 +103,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         $status = 1
     }
 
+    # SPEC-3.16.5
     # 3. Every label is annotated with its reason.
     for hit in (grep-tree $workflows_dir '^\s*runs-on:') {
         let above = (

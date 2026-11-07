@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.46: member-facing membership shape.
 /// Membership response for API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MembershipResponse {
@@ -16,6 +17,7 @@ pub struct MembershipResponse {
     pub grace_period_end: Option<DateTime<Utc>>,
 }
 
+// SPEC-7.2.47: admin membership row.
 /// Admin membership response (sourced from users table, Stripe data fetched on demand)
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct AdminMembershipResponse {

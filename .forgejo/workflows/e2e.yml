@@ -40,6 +40,7 @@
 # Serialise across ALL triggers via a single group and do NOT cancel in
 # progress, so post-merge runs always complete. Slow throughput is the
 # trade-off; for an auth-rate-limited gate, correctness beats throughput.
+# SPEC-3.10.1: no pull_request trigger: this job holds credentials
 name: E2E
 
 on:
@@ -56,11 +57,13 @@ on:
           - staging
           - production
 
+# SPEC-3.10.2
 concurrency:
   group: e2e-bunyip
   cancel-in-progress: false
 
 jobs:
+  # SPEC-3.10.3
   e2e:
     # BUNYIP-478: Forgejo publishes the check as `<workflow name> / <job name>`,
     # so with workflow `E2E` above this renders `E2E / deployment`. One `E2E /*`
@@ -84,6 +87,7 @@ jobs:
     # `inputs` context is empty, so `inputs.environment == 'production'` is
     # false and every var resolves to its staging secret; a manual dispatch
     # lets the operator pick.
+    # SPEC-3.10.4
     env:
       E2E_BASE_URL: ${{ inputs.environment == 'production' && secrets.E2E_PRODUCTION_BASE_URL || secrets.E2E_STAGING_BASE_URL }}
       E2E_OP_BASE_URL: ${{ inputs.environment == 'production' && secrets.OIDC_ISSUER_PRODUCTION || secrets.OIDC_ISSUER_STAGING }}
@@ -121,6 +125,7 @@ jobs:
       # fsevents (darwin-only, optional), so nothing on the Linux runner needs
       # one; Playwright browsers come from the explicit `playwright install`
       # step below, not from a postinstall.
+      # SPEC-3.10.5
       - name: Install dependencies
         run: corepack npm ci --ignore-scripts
 
@@ -137,6 +142,7 @@ jobs:
       # commit is unlikely to be what prod currently serves, so the version
       # poll would time out. Version-sync runs on push and on a staging
       # dispatch; reachability runs on a production dispatch.
+      # SPEC-3.10.6
       - name: Wait for deploy to serve this commit (push / staging dispatch)
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
         run: node24 scripts/wait-for-deploy.mjs
@@ -153,6 +159,7 @@ jobs:
       # fail-open (always exits 0). When staging is not seeded the suite is
       # skipped below and the job still SUCCEEDS, so `e2e` can be a required
       # check without a merge lockout on a missing/removed bootstrap.
+      # SPEC-3.10.7
       - name: Check staging is bootstrapped
         id: bootstrap_check
         run: node24 scripts/check-bootstrapped.mjs
@@ -168,6 +175,7 @@ jobs:
         if: steps.bootstrap_check.outputs.bootstrapped != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
         run: print "staging not bootstrapped; skipping E2E suite - run 'just e2e-bootstrap' to enable coverage."
 
+      # SPEC-3.10.8
       - name: Upload Playwright report and traces
         if: failure()
         uses: https://code.forgejo.org/forgejo/upload-artifact@v4

@@ -25,6 +25,7 @@ use crate::services::{stripe_err, EmailService, StripeService};
 /// revoke-all-then-grant-current, a retry is idempotent and converges, so a
 /// transient mid-sync failure self-heals on the next delivery rather than
 /// silently leaving a paying member under-granted.
+// SPEC-10.31.16, SPEC-10.31.17: revoke-all-then-grant converges on retry
 async fn sync_stripe_entitlements(
     pool: &PgPool,
     user_id: uuid::Uuid,
@@ -62,6 +63,7 @@ async fn sync_stripe_entitlements(
 /// Revoke all of a user's Stripe-sourced entitlements (subscription canceled /
 /// deleted or moved to a non-active status). Admin grants are preserved. Errors
 /// propagate so Stripe retries.
+// SPEC-10.31.16: admin grants are preserved
 async fn revoke_stripe_entitlements(pool: &PgPool, user_id: uuid::Uuid) -> Result<(), AppError> {
     EntitlementRepository::revoke_all_for_user_by_source(pool, user_id, entitlement_source::STRIPE)
         .await?;
@@ -91,6 +93,7 @@ enum EventClaim {
 /// of being swallowed with a bare `200`. Factored out of `claim_webhook_event`
 /// so it can be unit-tested without a live database (CI runs `--lib` tests with
 /// no Postgres).
+// SPEC-10.31.4: only a done row may short-circuit a redelivery
 fn classify_claim(won_claim: bool, existing_status: Option<&str>) -> EventClaim {
     if won_claim {
         return EventClaim::Owned;
@@ -116,6 +119,7 @@ fn classify_claim(won_claim: bool, existing_status: Option<&str>) -> EventClaim 
 /// This replaces the old insert-then-process fence, which marked an event
 /// processed up front and so silently dropped the side effect whenever the
 /// handler failed (Stripe's retry saw the row and returned 200 without re-running).
+// SPEC-10.31.3: 15-minute lease on a stale claim
 async fn claim_webhook_event(
     pool: &PgPool,
     event_id: &str,
@@ -161,6 +165,7 @@ async fn claim_webhook_event(
 
 /// Promote a claimed webhook event to `done` after its handler succeeded
 /// (BUNYIP-210). Only now is the event safe to treat as already processed.
+// SPEC-10.31.5: done only after the handler succeeded
 async fn finalize_webhook_event(pool: &PgPool, event_id: &str) -> Result<(), AppError> {
     sqlx::query("UPDATE stripe_webhook_events SET status = 'done' WHERE event_id = $1")
         .bind(event_id)
@@ -173,6 +178,7 @@ async fn finalize_webhook_event(pool: &PgPool, event_id: &str) -> Result<(), App
 /// Release a claimed webhook event after its handler FAILED so Stripe's retry
 /// reprocesses it (BUNYIP-210). Best-effort: if the delete itself fails, the
 /// lease in `claim_webhook_event` still lets a later delivery reclaim the row.
+// SPEC-10.31.5: failed handler releases the claim
 async fn release_webhook_event(pool: &PgPool, event_id: &str) {
     if let Err(e) = sqlx::query(
         "DELETE FROM stripe_webhook_events WHERE event_id = $1 AND status = 'processing'",
@@ -187,6 +193,7 @@ async fn release_webhook_event(pool: &PgPool, event_id: &str) {
 
 /// POST /v1/webhooks/stripe
 /// Handle Stripe webhook events
+// SPEC-10.31.1, SPEC-10.31.2, SPEC-10.31.4, SPEC-10.31.5, SPEC-10.31.6, SPEC-10.31.7: fails closed without a secret
 pub async fn stripe_webhook(
     req: HttpRequest,
     body: web::Bytes,
@@ -320,6 +327,7 @@ pub async fn stripe_webhook(
     }
 }
 
+// SPEC-10.31.10, SPEC-10.31.11, SPEC-10.31.12, SPEC-10.31.13: price comes from the Stripe API
 async fn handle_checkout_completed(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -435,6 +443,7 @@ async fn handle_checkout_completed(
     Ok(())
 }
 
+// SPEC-10.31.14, SPEC-10.31.15, SPEC-10.31.16, SPEC-10.31.18: status gates access and tier
 async fn handle_subscription_created(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -525,6 +534,7 @@ async fn handle_subscription_created(
     Ok(())
 }
 
+// SPEC-10.31.15, SPEC-10.31.16, SPEC-10.31.18, SPEC-10.31.19: status gates access and tier
 async fn handle_subscription_updated(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -616,6 +626,7 @@ async fn handle_subscription_updated(
     Ok(())
 }
 
+// SPEC-10.31.20, SPEC-10.31.21, SPEC-10.31.22: a sibling subscription keeps access
 async fn handle_subscription_deleted(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -723,6 +734,7 @@ async fn handle_subscription_deleted(
     Ok(())
 }
 
+// SPEC-10.31.23, SPEC-10.31.24, SPEC-10.31.25: clears the grace period
 async fn handle_payment_succeeded(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -801,6 +813,7 @@ async fn handle_payment_succeeded(
     Ok(())
 }
 
+// SPEC-10.31.23, SPEC-10.31.26, SPEC-10.31.27: starts a 30-day grace period once
 async fn handle_payment_failed(
     event: &serde_json::Value,
     pool: &PgPool,
@@ -891,6 +904,7 @@ async fn handle_payment_failed(
 /// drift apart again. A status that does not pay never maps to an
 /// access-granting variant, and an unrecognised status is treated as
 /// non-paying rather than defaulting to `Active`.
+// SPEC-10.31.8: unknown status is non-paying, never Active
 fn membership_status_for(stripe_status: &str) -> MembershipStatus {
     match stripe_status {
         "active" | "trialing" => MembershipStatus::Active,
@@ -911,6 +925,7 @@ fn membership_status_for(stripe_status: &str) -> MembershipStatus {
 /// Map a Stripe product ID to its corresponding `MembershipTier` using the current tier config.
 /// Returns `None` if the product ID does not match any configured mapping, meaning tier is left
 /// unchanged and only `membership_status` is updated by the caller.
+// SPEC-10.31.9: no match leaves the tier unchanged
 fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<MembershipTier> {
     if tc.lifetime_product_id.as_deref() == Some(product_id) {
         return Some(MembershipTier::Lifetime);
@@ -933,6 +948,7 @@ fn resolve_tier_for_product(product_id: &str, tc: &TierConfig) -> Option<Members
 /// `membership_status_for(status).has_access()` for the row-write path, so
 /// reusing it keeps one source of truth for "did this event preserve
 /// access" instead of two.
+// SPEC-10.31.18: access-based, not a literal active check
 fn subscription_updated_audit_action(
     cancel_at_period_end: bool,
     grants_access: bool,

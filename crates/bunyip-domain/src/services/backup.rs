@@ -39,6 +39,7 @@ use crate::AppError;
 /// Wire format version of the account bundle. Bumped only on a
 /// backwards-incompatible change to [`AccountBackup`]; restore refuses a bundle
 /// whose version it does not understand.
+// SPEC-8.5.1, SPEC-8.6.1
 pub const BACKUP_FORMAT_VERSION: u32 = 1;
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ pub const BACKUP_FORMAT_VERSION: u32 = 1;
 
 /// One account backup bundle: the whole thing an admin downloads and later
 /// uploads to restore. Serialized as a single JSON document.
+// SPEC-8.5.1
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountBackup {
     pub format_version: u32,
@@ -174,6 +176,7 @@ pub trait AppBackupAdapter: Send + Sync {
 /// nothing else in the orchestration changes.
 pub struct MokoshBackupAdapter;
 
+// SPEC-8.5.6
 const MOKOSH_PENDING: &str = "Mokosh backup API not yet available";
 
 #[async_trait]
@@ -243,6 +246,7 @@ impl PgAccountBackupStore {
     }
 }
 
+// SPEC-8.5.7
 #[async_trait]
 impl AccountBackupStore for PgAccountBackupStore {
     async fn load_profile(&self, user_id: Uuid) -> Result<StoredProfile, AppError> {
@@ -319,6 +323,7 @@ pub struct BackupService {
 
 impl BackupService {
     /// Build a service from a set of adapters, keyed by each adapter's slug.
+    // SPEC-8.5.5
     pub fn new(adapters: Vec<Arc<dyn AppBackupAdapter>>) -> Self {
         let adapters = adapters
             .into_iter()
@@ -329,6 +334,7 @@ impl BackupService {
 
     /// Capture an account backup: profile + entitled app slugs, plus a per-app
     /// section for each entitled app.
+    // SPEC-8.5.2
     pub async fn create_backup(
         &self,
         store: &dyn AccountBackupStore,
@@ -342,6 +348,7 @@ impl BackupService {
 
         let mut apps = Vec::with_capacity(slugs.len());
         for slug in &slugs {
+            // SPEC-8.5.3, SPEC-8.5.4
             let section = match self.adapters.get(slug) {
                 None => AppBackupSection {
                     slug: slug.clone(),
@@ -385,6 +392,7 @@ impl BackupService {
     /// Re-apply a bundle to the account: restore the profile, re-grant listed
     /// entitlements (only for apps that still exist), then dispatch each app
     /// bundle to its adapter, but only for apps the account is entitled to.
+    // SPEC-8.6.5, SPEC-8.6.6: no rollback: errors abort after earlier writes
     pub async fn restore_backup(
         &self,
         store: &dyn AccountBackupStore,
@@ -393,6 +401,7 @@ impl BackupService {
         acting_admin: Uuid,
         backup: AccountBackup,
     ) -> Result<RestoreReport, AppError> {
+        // SPEC-8.6.1: rejected before any write
         if backup.format_version != BACKUP_FORMAT_VERSION {
             return Err(AppError::validation(
                 "format_version",
@@ -405,6 +414,7 @@ impl BackupService {
 
         // 1. Restore the account owner profile. Email is intentionally left
         //    unchanged; it moves through the verified email-change flow.
+        // SPEC-8.6.2: email is never re-applied
         let profile = &backup.account.profile;
         store
             .save_profile(
@@ -417,6 +427,7 @@ impl BackupService {
 
         // 2. Re-grant entitlements listed in the bundle, skipping any app slug
         //    that no longer exists.
+        // SPEC-8.6.3
         let mut entitlements_granted = Vec::new();
         for slug in &backup.account.entitlements {
             if store.app_exists(slug).await? {
@@ -446,6 +457,7 @@ impl BackupService {
         })
     }
 
+    // SPEC-8.6.4
     async fn restore_one_app(
         &self,
         ctx: &AppBackupContext,

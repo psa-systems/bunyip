@@ -7,6 +7,7 @@ use actix_web::web;
 
 use crate::handlers::oidc::{authorize, discovery, jwks, logout, revoke, token, userinfo};
 
+// SPEC-5.2.1
 /// Configure OIDC well-known discovery and JWKS endpoints.
 /// These are registered at the root level (not under `/v1`).
 pub fn configure_well_known(cfg: &mut web::ServiceConfig) {
@@ -17,6 +18,7 @@ pub fn configure_well_known(cfg: &mut web::ServiceConfig) {
     );
 }
 
+// SPEC-5.2.2, SPEC-1.3: no registration or introspection route exists
 /// Configure OAuth 2.1 / OIDC endpoints under `/oauth2`.
 pub fn configure_oauth2(cfg: &mut web::ServiceConfig) {
     cfg.service(

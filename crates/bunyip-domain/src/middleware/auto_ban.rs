@@ -38,6 +38,7 @@ pub(crate) struct SuspiciousPatterns {
 }
 
 impl SuspiciousPatterns {
+    // SPEC-7.4.23
     /// Build the default set of suspicious patterns.
     pub(crate) fn default_patterns() -> Self {
         Self {
@@ -117,6 +118,7 @@ impl SuspiciousPatterns {
         }
     }
 
+    // SPEC-7.4.23
     /// Returns `true` if the path matches any suspicious pattern.
     pub(crate) fn matches(&self, path: &str) -> bool {
         // Normalise: lowercase for extension matching only
@@ -152,6 +154,7 @@ struct BanEntry {
     expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.4.30
 /// A currently-active IP ban as surfaced by [`AutoBanService::list_bans`].
 ///
 /// Serializes directly as the `GET /v1/admin/ip-bans` response element
@@ -206,6 +209,7 @@ impl AutoBanService {
         *self.config.read().expect("AutoBanConfig lock poisoned")
     }
 
+    // SPEC-7.4.32
     /// Hot-reload the auto-ban configuration (e.g. after an admin update).
     /// Takes effect on the next request/strike; already-active bans are
     /// unaffected until they expire.
@@ -214,6 +218,7 @@ impl AutoBanService {
         *c = config;
     }
 
+    // SPEC-7.4.24
     /// Returns `true` if the given IP is currently banned.
     ///
     /// Expired entries are evicted on read so the map stays bounded by the live
@@ -248,6 +253,7 @@ impl AutoBanService {
         self.patterns.matches(path)
     }
 
+    // SPEC-7.4.25
     /// Record a strike for the IP. Returns `true` if the IP was **newly** banned.
     pub async fn record_strike(&self, ip: &IpAddr, path: &str) -> bool {
         let now = Utc::now();
@@ -292,6 +298,7 @@ impl AutoBanService {
                 );
             }
 
+            // SPEC-7.4.26: memory is authoritative; a failed persist is logged
             // Persist ban to DB asynchronously
             let pool = self.pool.clone();
             let ip_owned = *ip;
@@ -312,6 +319,7 @@ impl AutoBanService {
         false
     }
 
+    // SPEC-7.4.32
     /// Remove expired bans and stale strike entries.
     pub async fn cleanup_expired(&self) {
         let now = Utc::now();
@@ -330,6 +338,7 @@ impl AutoBanService {
         }
     }
 
+    // SPEC-7.4.31
     /// Populate in-memory ban map from database rows.
     pub async fn load_bans(&self, bans: Vec<IpBanRow>) {
         let mut map = self.banned.write().await;
@@ -346,6 +355,7 @@ impl AutoBanService {
         info!(count = map.len(), "Loaded IP bans from database");
     }
 
+    // SPEC-7.4.28
     /// Ban `ip` manually for `duration_secs` with an operator-supplied `reason`
     /// (BUNYIP-413). The counterpart to [`unban`](Self::unban): the in-memory
     /// map (what the request path checks) is updated first so the ban is
@@ -381,6 +391,7 @@ impl AutoBanService {
         Ok(expires_at)
     }
 
+    // SPEC-7.4.29
     /// Lift a ban for `ip` immediately and durably.
     ///
     /// Removes the IP from the in-memory `banned` map (the map the request path
@@ -419,6 +430,7 @@ impl AutoBanService {
         Ok(removed)
     }
 
+    // SPEC-7.4.30
     /// List all currently-active bans.
     ///
     /// Merges the persisted `ip_bans` rows (the source of `strikes` and
@@ -480,6 +492,7 @@ pub struct IpBanRow {
     pub expires_at: DateTime<Utc>,
 }
 
+// SPEC-7.4.27
 /// Persist a ban to the database (upsert).
 async fn persist_ban(
     pool: &PgPool,
@@ -509,6 +522,7 @@ async fn persist_ban(
     Ok(())
 }
 
+// SPEC-7.4.31
 /// Delete expired bans from the database.
 pub async fn cleanup_expired_bans(pool: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM ip_bans WHERE expires_at < NOW()")
@@ -517,6 +531,7 @@ pub async fn cleanup_expired_bans(pool: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(result.rows_affected())
 }
 
+// SPEC-7.4.31
 /// Load active bans from the database.
 pub async fn load_active_bans(pool: &PgPool) -> Result<Vec<IpBanRow>, sqlx::Error> {
     let rows = sqlx::query_as::<_, IpBanRow>(
@@ -581,6 +596,7 @@ where
         let auto_ban = self.auto_ban.clone();
         let service = Rc::clone(&self.service);
 
+        // SPEC-7.4.33
         // BUNYIP-413: the `enabled` flag governs AUTOMATIC banning (strike
         // recording), not enforcement. Existing bans - including the ones an
         // admin adds by hand - are still refused with auto-banning switched
@@ -597,6 +613,7 @@ where
                     return Ok(req.into_response(res).map_into_right_body());
                 }
 
+                // SPEC-7.4.34
                 // Check if the path is suspicious
                 if strikes_enabled && auto_ban.is_suspicious(&path) {
                     let newly_banned = auto_ban.record_strike(ip, &path).await;

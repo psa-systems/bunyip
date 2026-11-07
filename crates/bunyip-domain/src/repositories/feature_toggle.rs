@@ -20,6 +20,7 @@ pub struct FeatureToggleRow {
 pub struct FeatureToggleRepository;
 
 impl FeatureToggleRepository {
+    // SPEC-7.3.14
     pub async fn get_all(pool: &PgPool) -> Result<Vec<FeatureToggleRow>, AppError> {
         Ok(sqlx::query_as::<_, FeatureToggleRow>(
             "SELECT key, enabled, updated_at, updated_by FROM feature_toggles ORDER BY key",
@@ -29,6 +30,7 @@ impl FeatureToggleRepository {
     }
 
     /// Read every row and resolve it against the registry.
+    // SPEC-7.3.15
     pub async fn load(pool: &PgPool) -> Result<FeatureToggles, AppError> {
         let rows = Self::get_all(pool).await?;
         Ok(FeatureToggles::from_rows(
@@ -37,6 +39,7 @@ impl FeatureToggleRepository {
     }
 
     /// Upsert one toggle. Takes an executor so the caller can pair it with its audit row.
+    // SPEC-7.3.16
     pub async fn set<'e, E>(
         exec: E,
         key: &str,

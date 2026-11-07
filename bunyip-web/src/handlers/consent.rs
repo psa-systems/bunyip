@@ -40,6 +40,7 @@ pub struct ConsentForm {
     pub action: String,
 }
 
+// SPEC-12.53.4: fixed table, safe fallback
 /// Render a one-line summary of the concrete fields a scope discloses, in
 /// plain English. Reads from a fixed table so new scopes added later get a
 /// matching entry rather than a confusing fallback.
@@ -54,6 +55,7 @@ fn scope_label(scope: &str) -> &'static str {
     }
 }
 
+// SPEC-12.53.6: brand-aware lead sentence
 /// The consent card's lead sentence. Names the requesting application when the
 /// authorize handler passed a client name (BUNYIP-342); falls back to the
 /// generic wording for a hand-crafted URL or an older backend that sends none.
@@ -78,6 +80,7 @@ fn consent_description(client_name: Option<&str>, brand_name: &str) -> String {
     }
 }
 
+// SPEC-12.53.5: https or same-origin only, matches page CSP
 /// BUNYIP-406: only an `https://` or same-origin (`/…`) logo URL is rendered as
 /// an `<img>`; any other scheme (`javascript:`, `data:`, plaintext `http:` on
 /// an https page) degrades to the initial badge. Maud already escapes the
@@ -89,6 +92,7 @@ fn safe_logo_uri(logo_uri: Option<&str>) -> Option<&str> {
     (u.starts_with("https://") || u.starts_with('/')).then_some(u)
 }
 
+// SPEC-12.53.3, SPEC-12.53.5: escaped name, initial or generic fallback
 /// The app-identity row on the consent card: the client's logo when a safe URL
 /// is set, otherwise a name-initial badge (generic app glyph when the name is
 /// also absent), next to the client name. Rendered by Maud as escaped text /
@@ -112,6 +116,7 @@ fn app_identity(client_name: Option<&str>, logo_uri: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.53.8: origin-boundary check closes the open redirect
 /// Whether a consent `continue_url` is safe to 302 back to: it must be an
 /// absolute URL under the OP issuer origin (the `/oauth2/authorize` round-trip),
 /// not an attacker-supplied absolute URL. The trailing-slash boundary stops a
@@ -123,6 +128,7 @@ fn continue_under_issuer(continue_url: &str, oidc_issuer: &str) -> bool {
     !origin.is_empty() && (u == origin || u.starts_with(&format!("{origin}/")))
 }
 
+// SPEC-12.53.1, SPEC-12.53.2, SPEC-12.53.3, SPEC-12.53.7: identity from registry lookup only
 /// GET /oauth2/consent
 pub async fn consent_get(
     State(st): State<AppState>,
@@ -194,6 +200,7 @@ pub async fn consent_get(
     auth_page(&st, &headers, "Approve access", card).await
 }
 
+// SPEC-12.53.1, SPEC-12.53.9, SPEC-12.53.10, SPEC-12.53.11, SPEC-12.53.12: deny and allow both confined to the issuer
 /// POST /oauth2/consent
 pub async fn consent_post(
     State(st): State<AppState>,

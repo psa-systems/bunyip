@@ -38,6 +38,7 @@ pub struct CreateSetupIntentResponse {
 /// Create a Stripe Customer and SetupIntent for $0 card authorization at signup.
 /// Unauthenticated - the user does not exist yet at this point, so the signup
 /// challenge token is what stands in for a credential (BUNYIP-426 F8).
+// SPEC-10.28.1, SPEC-10.28.2, SPEC-10.28.3: unauthenticated, no registered-email oracle
 pub async fn create_setup_intent(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -86,6 +87,7 @@ pub async fn create_setup_intent(
 
 /// GET /v1/billing/invoices
 /// List all invoices for the authenticated user from Stripe
+// SPEC-10.28.4: own Stripe customer only
 pub async fn list_invoices(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -111,6 +113,7 @@ pub async fn list_invoices(
 
 /// GET /v1/billing/invoices/{invoice_id}/download
 /// Redirect to the Stripe-hosted PDF for an invoice
+// SPEC-10.28.5, SPEC-10.28.6, SPEC-10.28.7: foreign invoices look missing
 pub async fn download_invoice(
     req: HttpRequest,
     user: AuthenticatedUser,

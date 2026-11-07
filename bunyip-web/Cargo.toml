@@ -7,6 +7,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# SPEC-14.4.1, SPEC-2.1.4: exactly one binary target
 [[bin]]
 name = "bunyip-web"
 path = "src/main.rs"
@@ -16,18 +17,21 @@ path = "src/main.rs"
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tokio = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
+# SPEC-14.4.4: feature set the router relies on
 tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }
 
 # HTML templating (compile-checked Rust macro) - rendered to String and wrapped
 # in axum::response::Html, so no version coupling with a maud "axum" feature.
 maud = "0.26"
 
+# SPEC-14.4.2: shared SSR crate, path dependency
 # BUNYIP-502: the branding-free shared SSR web-kit (icons/buttons/badges/boxes,
 # the auth-card shell, the Origin/Referer CSRF middleware). Re-exported through
 # crate::views::ui / crate::views::common / crate::csrf so call sites are
 # unchanged. A second front-end (menkent web) consumes the same crate.
 web-kit = { path = "../crates/web-kit" }
 
+# SPEC-14.4.2, SPEC-1.5, SPEC-2.1.2: DTOs only; no database driver may be added here
 # BUNYIP-761: the authoritative response DTOs. `bunyip-web/src/api/types.rs`
 # re-exports the shared cross-service types (e.g. the provider-status
 # aggregate) from here instead of hand-copying a mirror struct that drifts
@@ -38,6 +42,7 @@ bunyip-domain = { path = "../crates/bunyip-domain" }
 # public /docs pages. `html` feature only (no CLI / default features).
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
+# SPEC-14.4.3: rustls only; gzip so the api can compress
 # Server-side HTTP client for the /v1 API. rustls to avoid a native OpenSSL dep.
 # BUNYIP-559 F12: `gzip` makes the client advertise Accept-Encoding and decode
 # the reply transparently, so bunyip-api's Compress middleware has something to
@@ -79,6 +84,7 @@ qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# SPEC-14.4.5: crate-local relaxations only
 # bunyip-web ships a wider API/UI surface than what's wired up in current
 # routes (recovery-codes, downloads, feedback admin, subscribe). The helpers
 # + types exist because the matching handler PRs are queued; flipping dead_code

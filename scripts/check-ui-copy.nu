@@ -48,8 +48,10 @@ const LITERAL_DOUBLE = '"(?<lit>(?:[^"\\]|\\.)*)"'
 const LITERAL_SINGLE = "'(?<lit>(?:[^'\\\\]|\\\\.)*)'"
 
 # Opens a log or assertion macro, whose message is operator or developer output.
+# SPEC-3.27.3
 const MACRO_OPEN = '(tracing::\w+!\(|^\s*(info|warn|error|debug|trace)!\(|assert[a-z_]*!\(|panic!\()'
 
+# SPEC-3.27.2
 const FORBIDDEN = [
     {
         pattern: '\.\.\.'
@@ -72,6 +74,7 @@ const FORBIDDEN = [
 # of quoting regexes to extract string literals with (Rust files scan only
 # double-quoted; JS files scan single- and double-quoted), and `stop_at_test`
 # gates the `#[cfg(test)]` cutoff, which only Rust files have.
+# SPEC-3.27.1
 def check-source [path: string, literals: list<string>, stop_at_test: bool]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -118,6 +121,7 @@ def check-js [path: string]: nothing -> list<string> {
     check-source $path [$LITERAL_DOUBLE $LITERAL_SINGLE] false
 }
 
+# SPEC-3.27.4
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

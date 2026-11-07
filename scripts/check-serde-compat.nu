@@ -25,6 +25,7 @@
 const TYPES_FILE = "bunyip-web/src/api/types.rs"
 
 # Fields allowed to stay required, each with the reason a default would be wrong.
+# SPEC-3.30.4
 const ESSENTIAL_FIELDS = [
     {field: "SessionInfo.id", reason: "revoke target for one session"}
     {field: "TrustedDeviceInfo.id", reason: "revoke target for one device"}
@@ -86,6 +87,7 @@ const ESSENTIAL_FIELDS = [
 
 # Every `Struct.field` of a `Deserialize` struct in `path` that carries no
 # `#[serde(default...)]`. The `mod tests` block is out of scope.
+# SPEC-3.30.1
 def undefaulted-fields [path: string]: nothing -> list<string> {
     mut found = []
     mut current = null
@@ -127,6 +129,7 @@ def undefaulted-fields [path: string]: nothing -> list<string> {
 }
 
 # Problems found in `path`; an empty list means the file is compliant.
+# SPEC-3.30.2, SPEC-3.30.3
 def check-types [path: string, essential: list<string>]: nothing -> list<string> {
     if not ($path | path exists) {
         return [$"($path): file not found"]
@@ -143,6 +146,7 @@ def check-types [path: string, essential: list<string>]: nothing -> list<string>
 
 # Prove the gate rejects what it claims to reject. Runs in CI next to the real
 # check, so a gate that silently stopped detecting anything fails the build.
+# SPEC-3.30.5
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

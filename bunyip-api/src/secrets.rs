@@ -132,6 +132,7 @@ pub enum Enforcement {
     Duplicated(Vec<SecretsProvider>),
 }
 
+// SPEC-9.30.1: four-row table
 /// The pure enforcement decision: which provider was declared, which providers hold a
 /// value. Kept free of IO so every cell of the table above is unit-tested.
 pub fn classify(declared: SecretsProvider, holders: &[SecretsProvider]) -> Enforcement {
@@ -148,6 +149,7 @@ pub fn classify(declared: SecretsProvider, holders: &[SecretsProvider]) -> Enfor
     }
 }
 
+// SPEC-9.29.3: blank is not a holder
 /// Empty is absent. A provider that holds an empty string for a governed secret is
 /// not holding it, so `Some("")` becomes `None` before it can be counted as a
 /// holder or copied as a value (BUNYIP-621): treating a blank as present is what
@@ -158,6 +160,7 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|v| !v.is_empty())
 }
 
+// SPEC-9.29.4, SPEC-9.29.5, SPEC-9.29.6, SPEC-9.29.8: Infisical only on Inspect; failure recorded
 /// Read every governed secret from every provider this run is allowed to inspect.
 ///
 /// The database read always runs (the pool is already open); the environment
@@ -266,6 +269,7 @@ pub async fn survey(
     })
 }
 
+// SPEC-9.29.1, SPEC-9.29.2: no cross-provider fallback
 /// Read ONE governed secret from the declared provider.
 ///
 /// The single-secret form of [`survey`], for request paths that need the live
@@ -335,6 +339,7 @@ pub async fn read_secret(
     }
 }
 
+// SPEC-9.29.9: secrets come from the declared provider
 /// Rebuild the runtime Stripe config for a hot reload: the non-secret columns
 /// from the `stripe_config` row, both secrets from the declared provider.
 ///
@@ -358,6 +363,7 @@ pub async fn stripe_runtime_config(
     Ok(runtime)
 }
 
+// SPEC-9.29.7: undecryptable is logged and treated as absent
 /// Decrypt one `stripe_config` ciphertext column. A value no key in the set can
 /// read is reported at `error` and treated as absent: the enforcement below then
 /// says so out loud instead of quietly falling through to another provider.
@@ -385,6 +391,7 @@ fn decrypt_column(
     }
 }
 
+// SPEC-9.30.2, SPEC-9.30.3, SPEC-9.30.4, SPEC-9.30.5, SPEC-9.30.6: caller owns the exit
 /// The boot enforcement: apply [`classify`] to every governed secret, logging
 /// each verdict. Returns the fatal reports, if any, so `main.rs` owns the exit.
 ///
@@ -455,6 +462,7 @@ fn provider_list(providers: &[SecretsProvider]) -> String {
     }
 }
 
+// SPEC-9.31.1, SPEC-9.31.2, SPEC-9.31.3, SPEC-9.31.4: one write-through per provider
 /// Write one governed secret to `provider`, the declared provider.
 ///
 /// Used by the admin save path and by `secrets-migrate`, so there is exactly one
@@ -630,6 +638,7 @@ pub async fn write_secret(
     }
 }
 
+// SPEC-9.31.5, SPEC-9.31.7: environment copy is reported, not removed
 /// Remove one governed secret's copy from a provider that is NOT the declared one
 /// (`secrets-purge`). Returns the operator-facing note for the `environment`
 /// provider, which cannot be written and so is reported instead of removed.
@@ -663,6 +672,7 @@ pub async fn purge_secret(
     }
 }
 
+// SPEC-9.31.6: secret columns only
 /// NULL out one governed secret's ciphertext columns, leaving every non-secret
 /// column (host, port, checkout URLs, tier ids) untouched.
 async fn clear_database_secret(pool: &PgPool, secret: GovernedSecret) -> Result<(), AppError> {
@@ -696,6 +706,7 @@ async fn clear_database_secret(pool: &PgPool, secret: GovernedSecret) -> Result<
     Ok(())
 }
 
+// SPEC-9.31.1: success would leave the value unread
 /// The 409 an admin write gets in `environment` mode: there is no writable
 /// provider, so reporting success would leave the typed value somewhere nothing
 /// reads.
@@ -758,6 +769,7 @@ pub struct ModeReadiness {
     pub note: String,
 }
 
+// SPEC-9.32.1, SPEC-9.32.2, SPEC-9.29.8: no value enters the report
 /// Build the status report from a survey. Pure, so the readiness rules are
 /// testable and so nothing here can mutate a provider.
 pub fn status_report(survey: &Survey) -> StatusReport {
@@ -808,6 +820,7 @@ pub fn status_report(survey: &Survey) -> StatusReport {
     }
 }
 
+// SPEC-9.32.3: mirrors the JSON, no values
 /// Render the status report as the operator-facing table. Mirrors the JSON
 /// exactly, and like it never prints a value.
 pub fn render_status(report: &StatusReport) -> String {
@@ -862,6 +875,7 @@ pub struct MigrationStep {
     pub action: MigrationAction,
 }
 
+// SPEC-9.32.4: dry run prints exactly this
 /// Plan the copy from the current live source into `target`. Pure: `--dry-run`
 /// prints exactly this and stops.
 pub fn plan_migration(survey: &Survey, target: SecretsProvider) -> Vec<MigrationStep> {
@@ -881,6 +895,7 @@ pub fn plan_migration(survey: &Survey, target: SecretsProvider) -> Vec<Migration
         .collect()
 }
 
+// SPEC-9.32.6, SPEC-9.32.5: environment copy is instructions
 /// Render a plan as operator-facing lines. For `--to environment` the copy step
 /// is a set of instructions, because a process cannot write that provider.
 pub fn render_plan(
@@ -930,6 +945,7 @@ pub fn render_plan(
     out
 }
 
+// SPEC-9.32.5: blank target is a failure unless allowed
 /// The governed secrets a real migration must refuse to proceed past: those with
 /// no value in any provider, which cannot be carried across and would leave the
 /// target blank (BUNYIP-621). `--allow-missing` turns this into an explicit skip,
@@ -945,6 +961,7 @@ fn migration_blockers(steps: &[MigrationStep], allow_missing: bool) -> Vec<&'sta
         .collect()
 }
 
+// SPEC-9.32.7: success must mean usable
 /// After a migration, the secrets it copied that the target provider does not now
 /// hold with a non-empty value. The re-read survey normalises empty to absent, so
 /// a name here means the write reported success without persisting a usable value
@@ -963,6 +980,7 @@ fn verification_failures(
         .collect()
 }
 
+// SPEC-9.32.5, SPEC-9.32.6, SPEC-9.32.7, SPEC-9.32.8, SPEC-2.2.2: secrets-migrate
 /// Copy every governed secret from its current live source into `target`.
 ///
 /// The old copy is deliberately left in place: it is the rollback path, and
@@ -1047,6 +1065,7 @@ pub async fn run_migration(
     Ok(out)
 }
 
+// SPEC-9.32.9, SPEC-9.32.10, SPEC-9.32.11, SPEC-2.2.2: secrets-purge
 /// Remove every governed-secret copy that sits outside the declared provider.
 ///
 /// Refuses only when a purge would leave a secret with no copy at all. A
@@ -1105,6 +1124,7 @@ pub async fn run_purge(
     Ok(out)
 }
 
+// SPEC-9.31.4: 4xx so the web tier shows the cause
 /// The error a failed Infisical write reports.
 ///
 /// Error visibility: an Infisical write can fail where a local transaction would
@@ -1123,6 +1143,7 @@ fn infisical_write_error(secret: GovernedSecret, cause: &str) -> AppError {
     )
 }
 
+// SPEC-9.29.2, SPEC-9.31.4: missing client is an internal error
 /// The error for `SECRETS_STORAGE=infisical` with no usable Infisical client.
 fn infisical_unconfigured_error() -> AppError {
     AppError::InternalError {

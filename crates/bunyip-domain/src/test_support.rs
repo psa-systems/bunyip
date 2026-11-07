@@ -2,6 +2,7 @@
 
 use std::sync::{Mutex, MutexGuard};
 
+// SPEC-7.1.3: one lock for every env-mutating test in the crate
 /// Serializes tests that mutate process-global environment variables.
 ///
 /// cargo test runs tests on parallel threads inside one process, so two tests

@@ -65,6 +65,7 @@ impl MirzamValues {
     }
 }
 
+// SPEC-12.15.1
 pub(super) fn mirzam_content(
     cfg: Result<&MirzamConfigResponse, &ApiError>,
     values: &MirzamValues,
@@ -152,6 +153,7 @@ pub(super) fn mirzam_content(
     }
 }
 
+// SPEC-12.15.2
 /// The last failed sync call (BUNYIP-998), or that none is recorded. The api
 /// clears it when a later call succeeds.
 pub(super) fn sync_block(c: &MirzamConfigResponse) -> Markup {
@@ -174,6 +176,7 @@ pub(super) fn sync_block(c: &MirzamConfigResponse) -> Markup {
     )
 }
 
+// SPEC-12.15.1
 pub async fn mirzam(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -207,6 +210,7 @@ pub struct MirzamForm {
     pub api_token: String,
 }
 
+// SPEC-12.15.3: blank token means keep the stored one
 /// The PUT body. The four settings are always sent, because the API replaces
 /// them whole (a blank address or slug is a deliberate clear); the token is
 /// sent only when typed, since a blank token means "keep the stored one". Pure
@@ -225,6 +229,7 @@ pub(super) fn mirzam_update_body(f: &MirzamForm) -> serde_json::Value {
     body
 }
 
+// SPEC-12.15.4
 pub async fn mirzam_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -265,6 +270,7 @@ fn list_label(list: &str) -> &'static str {
     }
 }
 
+// SPEC-12.15.5, SPEC-12.15.6, SPEC-12.15.7
 /// Where a Check connection click lands: the page with one success toast for
 /// the lists Mirzam answered right and one error toast for the lists that are
 /// wrong, one line per list naming it, its slug and what was found or what is
@@ -321,6 +327,7 @@ pub(super) fn check_redirect(result: Result<MirzamCheckResult, ApiError>) -> Str
     format!("{PAGE}?{}", params.join("&"))
 }
 
+// SPEC-12.15.5
 /// POST /admin/mirzam/check: check the saved settings against Mirzam and
 /// redirect back to the page with the outcome as toasts.
 pub async fn mirzam_check(State(st): State<AppState>, headers: HeaderMap) -> Response {

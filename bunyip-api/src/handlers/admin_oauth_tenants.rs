@@ -20,6 +20,7 @@ use crate::models::{AuditAction, CreateAuditLog, CreateUserTenantAssignment};
 use crate::repositories::{AuditLogRepository, OAuthClientUserTenantRepository, TokenRepository};
 use crate::responses::{get_request_id, success, success_no_data};
 
+// SPEC-10.18.16: flat oldest-first list.
 /// GET /v1/admin/oauth-clients/{client_id}/user-tenants
 ///
 /// List every (user, tenant) assignment for the given OAuth client.
@@ -39,6 +40,7 @@ pub async fn list_client_assignments(
     Ok(success(rows, request_id))
 }
 
+// SPEC-10.18.17, SPEC-10.18.18: idempotent assign, audited, then refresh-token families revoked.
 /// POST /v1/admin/oauth-clients/{client_id}/user-tenants
 /// Body: { "user_id": "<uuid>", "tenant_id": "<uuid>", "role": "<str>" }
 ///
@@ -90,6 +92,7 @@ pub async fn assign_user_tenant(
     Ok(success(row, request_id))
 }
 
+// SPEC-10.18.19, SPEC-10.18.20: idempotent unassign, always audited, revoke only if a row was removed.
 /// DELETE /v1/admin/oauth-clients/{client_id}/user-tenants/{assignment_id}
 ///
 /// Hard-delete the assignment. Idempotent: deleting an already-deleted

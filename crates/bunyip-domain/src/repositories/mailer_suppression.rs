@@ -36,6 +36,7 @@ impl MailerSuppressionRepository {
     /// Whether `address` is on the suppression list. The address is normalized
     /// here, so the caller passes the raw recipient and never has to remember to
     /// fold case itself.
+    // SPEC-7.3.123
     pub async fn is_suppressed(pool: &PgPool, address: &str) -> Result<bool, AppError> {
         let normalized = normalize_address(address);
         let exists: bool = sqlx::query_scalar(
@@ -50,6 +51,7 @@ impl MailerSuppressionRepository {
     /// Record `address` as suppressed, or refresh an existing row's reason and
     /// detail. Idempotent on the address, so a provider that redelivers the same
     /// bounce (they retry) never errors and simply bumps `updated_at`.
+    // SPEC-7.3.123, SPEC-7.3.124
     pub async fn upsert(
         pool: &PgPool,
         address: &str,
@@ -76,6 +78,7 @@ impl MailerSuppressionRepository {
     }
 
     /// The total number of suppressed addresses, for the admin list's paging.
+    // SPEC-7.3.125
     pub async fn count(pool: &PgPool) -> Result<i64, AppError> {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM mailer_suppressions")
             .fetch_one(pool)
@@ -85,6 +88,7 @@ impl MailerSuppressionRepository {
 
     /// Page through the suppression list, newest first, for the admin surface
     /// (BUNYIP-762).
+    // SPEC-7.3.125
     pub async fn list(
         pool: &PgPool,
         limit: i64,
@@ -105,6 +109,7 @@ impl MailerSuppressionRepository {
 
     /// Remove `address` from the suppression list so it can be mailed again
     /// (BUNYIP-762). Returns whether a row existed to delete.
+    // SPEC-7.3.123, SPEC-7.3.126
     pub async fn delete(pool: &PgPool, address: &str) -> Result<bool, AppError> {
         let normalized = normalize_address(address);
         let result = sqlx::query("DELETE FROM mailer_suppressions WHERE address = $1")

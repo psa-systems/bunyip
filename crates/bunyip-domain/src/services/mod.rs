@@ -6,6 +6,7 @@
 //! release/asset caches, download limiter) comes from dunite-download. Both
 //! are re-exported below.
 
+// SPEC-8.22.5
 pub mod argon2_offload;
 pub mod auth;
 pub mod backup;
@@ -34,6 +35,7 @@ pub mod webhook;
 // dropped the backward-compat alias; call sites name the kernel type
 // `EncryptionKeySet` directly, matching the shape the saas-sync plan's A2
 // wave finished folding.
+// SPEC-8.22.6: keeps old import paths valid
 pub use dunite_core::services::{EncryptionKeySet, JwtConfig, PasswordService};
 // Re-export the kernel service submodules so `crate::services::encryption::*`
 // and `crate::services::password::*` paths resolve unchanged.
@@ -46,6 +48,7 @@ pub use dunite_download::services::{
     ForgejoAssetClient, ForgejoError, LimitDenial, ReleaseCache,
 };
 
+// SPEC-8.22.7
 /// The concrete download cache: the generic dunite-download `DownloadCache`
 /// engine backed by Bunyip's Postgres `DownloadCacheRepository` store.
 ///

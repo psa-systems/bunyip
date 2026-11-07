@@ -23,6 +23,7 @@
 // Loaded with `defer` from the document head, so the DOM is parsed before it
 // runs and every listener below is registered once per page load.
 (function () {
+  // SPEC-11.37.3: opaque backgrounds only
   // ---------------------------------------------------------------- toasts --
   // Tiny toast system mounted in every <body>. `kind` is
   // "success" | "error" | "info" (default "info"); each call appends a pill
@@ -58,6 +59,7 @@
   var TOAST_LONG_MS = 8000;
   var TOAST_FADE_MS = 250;
 
+  // SPEC-11.37.6
   // Reading time, approximated by word count: whitespace-split, so "Saved OK"
   // (2 words) takes the short duration and "Settings were saved" (3) the long.
   function toastDurationMs(msg) {
@@ -68,6 +70,7 @@
     return words.length > 2 ? TOAST_LONG_MS : TOAST_SHORT_MS;
   }
 
+  // SPEC-11.37.5
   // The one removal path: fade out, then detach. Shared by the close button and
   // the auto-dismiss timer so both look identical on screen.
   function dismissToast(pill) {
@@ -78,6 +81,7 @@
     }, TOAST_FADE_MS);
   }
 
+  // SPEC-11.37.1, SPEC-11.37.2, SPEC-11.37.4, SPEC-11.37.5, SPEC-11.37.6: error toasts never auto-dismiss
   window.bunyipToast = function (msg, kind) {
     var root = document.getElementById('bunyip-toast-root');
     if (!root) return;
@@ -135,6 +139,7 @@
     if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
   };
 
+  // SPEC-11.37.7, SPEC-11.37.8
   // Drain ?toast_ok= / ?toast_err= so a handler can surface a confirmation via
   // a 302 (`Location: /settings?toast_ok=Email%20updated`). The params are
   // stripped with history.replaceState so a reload does not re-fire the toast.
@@ -168,6 +173,7 @@
     }
   }
 
+  // SPEC-11.37.9
   // ------------------------------------------------------- OTP autosubmit --
   // BUNYIP-331: submit a 2FA form the moment its six-digit TOTP field is
   // complete. The exact ^[0-9]{6}$ gate never matches a dashed XXXX-XXXX
@@ -186,6 +192,7 @@
     else form.submit();
   });
 
+  // SPEC-11.37.10
   // -------------------------------------------------------- profile menus --
   // BUNYIP-408: close an open <details data-menu> on click-away or Escape.
   document.addEventListener('click', function (e) {
@@ -200,6 +207,7 @@
     });
   });
 
+  // SPEC-11.37.11
   // ------------------------------------------------------ confirm-on-submit --
   // Destructive forms carry data-confirm="<question>"; cancelling stops the
   // submit exactly like the old `onsubmit="return confirm(...)"` did.
@@ -215,6 +223,7 @@
     true
   );
 
+  // SPEC-11.37.12, SPEC-11.37.13
   // ---------------------------------------------------- copy-to-clipboard --
   // The command text lives in the button's own data-copy attribute, so no
   // API-sourced value is ever executable. The Clipboard API needs a secure
@@ -254,6 +263,7 @@
     }
   });
 
+  // SPEC-11.37.14
   // ------------------------------------------------------- download-as-file --
   // The bytes come from the button's own data-download-file attribute (never
   // the network), the filename from data-download-filename, so nothing here
@@ -284,6 +294,7 @@
     }
   });
 
+  // SPEC-11.37.15
   // unlock the <a data-saved-gate-link> inside the nearest
   // [data-saved-gate] ancestor, so a "Done" affordance the operator can
   // click sits behind at least one Copy or Download. `hidden` +
@@ -306,6 +317,7 @@
     }
   }
 
+  // SPEC-11.37.16
   // ---------------------------------------------------------- <dialog>s ----
   document.addEventListener('click', function (e) {
     var el = e.target;
@@ -323,6 +335,7 @@
     }
   });
 
+  // SPEC-11.37.17
   // --------------------------------------------------- feedback launcher ----
   // Carry the originating page to the feedback form. The static
   // href="/feedback" stays the no-JS fallback; the /feedback handler sanitizes
@@ -335,6 +348,7 @@
     link.href = '/feedback?from=' + encodeURIComponent(location.pathname + location.search);
   });
 
+  // SPEC-11.37.18
   // ------------------------------------------------ delayed redirect/reload --
   document.querySelectorAll('[data-redirect-to]').forEach(function (el) {
     var target = el.getAttribute('data-redirect-to');
@@ -352,6 +366,7 @@
     }, delay);
   });
 
+  // SPEC-11.37.20, SPEC-11.37.21
   // ------------------------------------------------------------ scrollbars --
   // BUNYIP-848: thumbs rest hidden under html[data-scrollbars="auto"] and show while their container
   // is [data-scrollbar-active]: on scroll, while a mouse or pen is in the 14px zone, and for a drag.
@@ -471,6 +486,7 @@
   document.addEventListener('pointerup', sbRelease, { capture: true, passive: true });
   document.addEventListener('pointercancel', sbRelease, { capture: true, passive: true });
 
+  // SPEC-11.37.22, SPEC-11.37.23, SPEC-11.37.24, SPEC-11.37.25, SPEC-11.37.26: server stays authoritative
   // ------------------------------------------------------ feedback form -----
   // Progressive enhancement for /feedback. BUNYIP-540: an in-flight submit
   // state (disable + spinner) and client-side attachment validation with image
@@ -524,6 +540,7 @@
         fileError.classList.add('hidden');
       }
     }
+    // SPEC-11.37.22
     // BUNYIP-541 inline field validation. Each function returns '' when valid,
     // else the exact message the server would return, so client and server
     // agree and an inline error reads the same whichever side caught it.
@@ -571,6 +588,7 @@
       { el: messageInput, fn: validateMessage },
     ];
 
+    // SPEC-11.37.24
     // Returns '' when the selection is within the limits, else the message.
     function validate(files) {
       if (files.length > MAX_FILES) return 'Up to ' + MAX_FILES + ' files only.';
@@ -583,6 +601,7 @@
       }
       return '';
     }
+    // SPEC-11.37.25
     function render() {
       clearPreviews();
       var files = input && input.files ? input.files : [];
@@ -633,6 +652,7 @@
     }
     if (input) input.addEventListener('change', render);
 
+    // SPEC-11.37.23
     // Validate a field on blur, and once it is showing an error, re-validate on
     // every keystroke so the message clears the moment the input becomes valid.
     FIELD_CHECKS.forEach(function (c) {
@@ -648,6 +668,7 @@
     });
 
     form.addEventListener('submit', function (e) {
+      // SPEC-11.37.26
       // BUNYIP-541: validate every field first, mark each invalid one inline,
       // and remember the topmost so focus lands there. This catches the common
       // invalid case (bad email, empty message) in the browser with no
@@ -685,6 +706,7 @@
     });
   })();
 
+  // SPEC-11.37.19
   // -------------------------------------------------- data-submit-on-change --
   // BUNYIP-936 / BUNYIP-938 / BUNYIP-939 / BUNYIP-940: admin filter chips.
   // A `<select data-submit-on-change>` submits its enclosing <form> on

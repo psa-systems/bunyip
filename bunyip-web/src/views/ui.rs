@@ -9,8 +9,10 @@
 //! them here keeps them covering every caller, which all still live in this
 //! crate; the toolkit itself carries the small unit tests of its own helpers.
 
+// SPEC-11.20.2
 pub use web_kit::ui::*;
 
+// SPEC-11.27.1: shared admin list filter chip
 /// A `<select>` chip bound to one query key; a change submits the enclosing
 /// form. Shared by every admin list page that filters by one of a small set of
 /// values (audit, feedback, invites, ip-bans). Keeps the markup in one place so
@@ -25,6 +27,7 @@ pub fn filter_chip_select(name: &str, current: &str, options: &[(&str, &str)]) -
     }
 }
 
+// SPEC-11.27.2: load failures show cause and request id
 /// BUNYIP-844: an [`error_box_detailed`] populated from a load failure's
 /// `ApiError`, so every "could not load X" surface tells the admin the actual
 /// cause and request id instead of the bare headline `error_box` gives.

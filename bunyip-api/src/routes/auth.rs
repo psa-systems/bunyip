@@ -4,6 +4,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.23.1, SPEC-9.23.2, SPEC-9.23.3, SPEC-9.23.4: auth route inventory; no POST /setup
 /// Configure authentication routes
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(

@@ -18,6 +18,7 @@ impl UserRepository {
     /// `LOWER(email)`-based lookups or the verification / welcome mail. This is
     /// the single INSERT choke point, so every signup surface (register,
     /// magic-link auto-create, admin setup) inherits normalization here.
+    // SPEC-7.3.301
     pub async fn create(pool: &PgPool, data: CreateUser) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -36,6 +37,7 @@ impl UserRepository {
     }
 
     /// Find user by ID
+    // SPEC-7.3.302
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -51,6 +53,7 @@ impl UserRepository {
 
     /// Every live account with a verified address, oldest first: the accounts
     /// the Mirzam backfill (BUNYIP-999) puts on the two lists.
+    // SPEC-7.3.304
     pub async fn list_verified(pool: &PgPool) -> Result<Vec<User>, AppError> {
         let users = sqlx::query_as::<_, User>(
             r#"
@@ -66,6 +69,7 @@ impl UserRepository {
     }
 
     /// Find user by email
+    // SPEC-7.3.302
     pub async fn find_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -82,6 +86,7 @@ impl UserRepository {
     /// Batched sibling of [`Self::find_by_id`] (BUNYIP-920): every live user
     /// among `ids` in a single round trip. Order is not guaranteed; the
     /// caller maps results back by `id`.
+    // SPEC-7.3.302, SPEC-7.3.303
     pub async fn find_by_id_batch(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<User>, AppError> {
         if ids.is_empty() {
             return Ok(Vec::new());
@@ -101,6 +106,7 @@ impl UserRepository {
     /// user among `emails` in a single round trip, matched case-insensitively
     /// like `find_by_email`. Order is not guaranteed; the caller maps results
     /// back by lower-cased email.
+    // SPEC-7.3.302, SPEC-7.3.303
     pub async fn find_by_email_batch(
         pool: &PgPool,
         emails: &[String],
@@ -121,6 +127,7 @@ impl UserRepository {
     }
 
     /// Find user by Stripe customer ID
+    // SPEC-7.3.302
     pub async fn find_by_stripe_customer_id(
         pool: &PgPool,
         customer_id: &str,
@@ -138,6 +145,7 @@ impl UserRepository {
     }
 
     /// Update user's password hash
+    // SPEC-7.3.312
     pub async fn update_password(
         pool: &PgPool,
         user_id: Uuid,
@@ -168,6 +176,7 @@ impl UserRepository {
     /// other's write with a stale value. Whitespace normalization (trim, ""
     /// -> NULL) is the caller's responsibility - this method writes verbatim.
     /// Returns the updated user row.
+    // SPEC-7.3.307
     pub async fn update_profile(
         pool: &PgPool,
         user_id: Uuid,
@@ -207,6 +216,7 @@ impl UserRepository {
     /// Content-type + size are validated by the caller (handler) before this is
     /// reached; the DB CHECK constraints are the last-line backstop. Returns the
     /// updated user row (carrying the fresh `avatar_updated_at`).
+    // SPEC-7.3.308
     pub async fn set_avatar(
         pool: &PgPool,
         user_id: Uuid,
@@ -255,6 +265,7 @@ impl UserRepository {
     /// clears `users.avatar_updated_at` back to NULL in one transaction, so the
     /// UI falls back to the initials/icon. Idempotent: removing an absent avatar
     /// simply leaves both already-empty and returns the (unchanged) user row.
+    // SPEC-7.3.309
     pub async fn clear_avatar(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
         let mut tx = pool.begin().await?;
         sqlx::query("DELETE FROM user_avatars WHERE user_id = $1")
@@ -282,6 +293,7 @@ impl UserRepository {
     /// BUNYIP-408: fetch the stored avatar bytes + MIME for serving. `None` when
     /// the user has no avatar. Only the avatar-serving handler calls this, so the
     /// BYTEA is never loaded on the ordinary user-fetch path.
+    // SPEC-7.3.310
     pub async fn get_avatar(
         pool: &PgPool,
         user_id: Uuid,
@@ -299,12 +311,14 @@ impl UserRepository {
     /// Mark the user's email verified. Returns `true` only when this call
     /// changed it from unverified, so a caller can act on the transition (the
     /// Mirzam sync, BUNYIP-998) and not on every magic-link sign-in.
+    // SPEC-7.3.311
     pub async fn set_email_verified(pool: &PgPool, user_id: Uuid) -> Result<bool, AppError> {
         Self::set_email_verified_in(pool, user_id).await
     }
 
     /// [`Self::set_email_verified`] on any executor, for a caller that flips
     /// the flag inside its own transaction.
+    // SPEC-7.3.311
     pub async fn set_email_verified_in<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -324,6 +338,7 @@ impl UserRepository {
     }
 
     /// Update membership status
+    // SPEC-7.3.321
     pub async fn update_membership_status<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -351,6 +366,7 @@ impl UserRepository {
     /// Called from the `checkout.session.completed` webhook once a trial
     /// session finalizes, so a later subscribe cannot re-grant the trial.
     /// Idempotent: a replayed webhook just re-sets the flag to TRUE.
+    // SPEC-7.3.322
     pub async fn mark_trial_used<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -370,6 +386,7 @@ impl UserRepository {
     }
 
     /// Activate membership (set membership_status to 'active')
+    // SPEC-7.3.321
     pub async fn activate_membership(pool: &PgPool, user_id: Uuid) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -389,6 +406,7 @@ impl UserRepository {
     }
 
     /// Update Stripe customer ID
+    // SPEC-7.3.323
     pub async fn update_stripe_customer_id<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -413,6 +431,7 @@ impl UserRepository {
     }
 
     /// Store the Stripe customer ID and authorized payment method ID captured at signup.
+    // SPEC-7.3.323
     pub async fn update_stripe_registration_info(
         pool: &PgPool,
         user_id: Uuid,
@@ -436,6 +455,7 @@ impl UserRepository {
     }
 
     /// Lock price for user
+    // SPEC-7.3.323
     pub async fn lock_price(
         pool: &PgPool,
         user_id: Uuid,
@@ -459,6 +479,7 @@ impl UserRepository {
     }
 
     /// Set grace period
+    // SPEC-7.3.324
     pub async fn set_grace_period<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -486,6 +507,7 @@ impl UserRepository {
 
     /// Reset subscription tier to standard when a membership is revoked/canceled.
     /// This frees the lifetime or early_adopter slot so it can be assigned to the next user.
+    // SPEC-7.3.325
     pub async fn reset_membership_tier<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -510,6 +532,7 @@ impl UserRepository {
 
     /// Set subscription tier from a Stripe subscription event.
     /// Clears trial_ends_at (user is now a paid subscriber) but does not touch membership_status.
+    // SPEC-7.3.326
     pub async fn upgrade_membership_tier<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -539,6 +562,7 @@ impl UserRepository {
     }
 
     /// Clear grace period
+    // SPEC-7.3.324
     pub async fn clear_grace_period<'e, E>(executor: E, user_id: Uuid) -> Result<(), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -562,6 +586,7 @@ impl UserRepository {
     /// The new email is lowercased via [`normalize_email`] before write
     /// (BUNYIP-325), the second and last write path to `users.email`, so an
     /// email change can no more store a mixed-case address than a fresh signup.
+    // SPEC-7.3.306
     pub async fn update_email<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -589,6 +614,7 @@ impl UserRepository {
 
     /// Lock a user row `FOR UPDATE` to serialize concurrent mutations within a
     /// transaction. Returns whether a (non-deleted) row was locked.
+    // SPEC-7.3.314
     pub async fn lock_for_update<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -602,6 +628,7 @@ impl UserRepository {
     }
 
     /// Lock and fetch a non-deleted user row `FOR UPDATE` within a transaction.
+    // SPEC-7.3.302, SPEC-7.3.314
     pub async fn find_by_id_for_update<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -621,6 +648,7 @@ impl UserRepository {
 
     /// Check whether an email is already registered to a non-deleted user.
     /// Accepts any executor so it can run inside a transaction.
+    // SPEC-7.3.305
     pub async fn email_exists<'e, E>(executor: E, email: &str) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -641,6 +669,7 @@ impl UserRepository {
     /// be re-claimed by a new user. Login / OCI-auth continue to use
     /// [`Self::email_exists`] / [`Self::find_by_email`], which filter to
     /// non-deleted rows (a deleted user can't sign in).
+    // SPEC-7.3.305
     pub async fn email_reserved<'e, E>(executor: E, email: &str) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -655,6 +684,7 @@ impl UserRepository {
     }
 
     /// Update last login timestamp
+    // SPEC-7.3.313
     pub async fn update_last_login(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -672,6 +702,7 @@ impl UserRepository {
 
     /// BUNYIP-366: record the ISO 3166-1 alpha-2 country of the user's most
     /// recent geolocatable login, for the next login's change comparison.
+    // SPEC-7.3.313
     pub async fn set_last_login_country(
         pool: &PgPool,
         user_id: Uuid,
@@ -687,6 +718,7 @@ impl UserRepository {
 
     /// BUNYIP-366: set the per-user opt-out for the new-login-location email
     /// alert. `true` (the column default) keeps alerts on; `false` disables them.
+    // SPEC-7.3.313
     pub async fn set_login_location_alerts(
         pool: &PgPool,
         user_id: Uuid,
@@ -703,6 +735,7 @@ impl UserRepository {
     }
 
     /// Soft delete user
+    // SPEC-7.3.331
     pub async fn soft_delete(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -723,6 +756,7 @@ impl UserRepository {
     /// Returns `true` when a previously-deleted row was restored, `false` when
     /// no matching soft-deleted user exists (already active or unknown id), so
     /// the caller can distinguish a real reactivation from a no-op.
+    // SPEC-7.3.331
     pub async fn restore(pool: &PgPool, user_id: Uuid) -> Result<bool, AppError> {
         let result = sqlx::query(
             r#"
@@ -763,6 +797,7 @@ impl UserRepository {
     /// cannot perform, so nothing clears them. If an admin-disposable spec ever
     /// lands, extend this helper (or give those FKs `SET NULL`); there is no
     /// production impact, as production never hard-deletes users.
+    // SPEC-7.3.332
     async fn clear_deps_and_delete_users(
         tx: &mut sqlx::Transaction<'_, Postgres>,
         user_ids: &[Uuid],
@@ -790,6 +825,7 @@ impl UserRepository {
     /// Only ever reached from non-production e2e cleanup paths (the `?purge`
     /// flag, the disposable reaper, and `bunyip-e2e-bootstrap`). Returns the
     /// number of user rows removed. See [`Self::clear_deps_and_delete_users`].
+    // SPEC-7.3.332, SPEC-7.3.333
     pub async fn hard_delete(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
         let mut tx = pool.begin().await?;
         let removed = Self::clear_deps_and_delete_users(&mut tx, &[user_id]).await?;
@@ -802,6 +838,7 @@ impl UserRepository {
     /// email can name an active row plus soft-deleted rows; this removes them
     /// all, preserving the `bunyip-e2e-bootstrap --cleanup` by-email semantics.
     /// Returns the number of user rows removed.
+    // SPEC-7.3.332, SPEC-7.3.333
     pub async fn hard_delete_by_email(pool: &PgPool, email: &str) -> Result<u64, AppError> {
         let mut tx = pool.begin().await?;
         let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM users WHERE email = $1")
@@ -822,6 +859,7 @@ impl UserRepository {
     /// [`grant_lifetime_membership`](Self::grant_lifetime_membership),
     /// [`lock_price`](Self::lock_price)); this single-statement shortcut lets a
     /// seed template express an arbitrary membership snapshot for demo data.
+    // SPEC-7.3.336
     pub async fn apply_seed_membership(
         pool: &PgPool,
         user_id: Uuid,
@@ -863,6 +901,7 @@ impl UserRepository {
     /// idempotent re-import). Uses an exact suffix comparison (not `LIKE`), so a
     /// `_` or `%` in the domain can never widen the match on this delete path.
     /// Returns the rows removed.
+    // SPEC-7.3.332, SPEC-7.3.334
     pub async fn hard_delete_seed_users(pool: &PgPool, domain: &str) -> Result<u64, AppError> {
         let mut tx = pool.begin().await?;
         let suffix = format!("@{domain}");
@@ -881,6 +920,7 @@ impl UserRepository {
     /// scope), for PSA-52 export. Same suffix comparison as
     /// [`hard_delete_seed_users`](Self::hard_delete_seed_users), so export and
     /// reset operate on exactly the same set.
+    // SPEC-7.3.334
     pub async fn list_seed_users(pool: &PgPool, domain: &str) -> Result<Vec<User>, AppError> {
         let suffix = format!("@{domain}");
         let users = sqlx::query_as::<_, User>(
@@ -901,6 +941,7 @@ impl UserRepository {
     /// timestamp), then deleted via the shared helper. Returns each removed
     /// row's `(id, email, email_verified, already soft-deleted)`, read before
     /// the delete, so the caller can tell Mirzam (BUNYIP-998).
+    // SPEC-7.3.332, SPEC-7.3.335
     pub async fn hard_delete_stale_disposable(
         pool: &PgPool,
         pattern: &str,
@@ -925,6 +966,7 @@ impl UserRepository {
     }
 
     /// Set two_factor_enabled flag on a user
+    // SPEC-7.3.337
     pub async fn set_two_factor_enabled(
         pool: &PgPool,
         user_id: Uuid,
@@ -942,6 +984,7 @@ impl UserRepository {
     }
 
     /// Update user role
+    // SPEC-7.3.338
     pub async fn update_role(pool: &PgPool, user_id: Uuid, role: &str) -> Result<User, AppError> {
         let user = sqlx::query_as::<_, User>(
             r#"
@@ -963,6 +1006,7 @@ impl UserRepository {
     /// BUNYIP-413: set or clear the super-admin ("first setup account") flag.
     /// Used by the bootstrap-admin promotion so the first admin of a fresh
     /// install can manage rate limits and IP bans without a second step.
+    // SPEC-7.3.338
     pub async fn set_super_admin(
         pool: &PgPool,
         user_id: Uuid,
@@ -998,6 +1042,7 @@ impl UserRepository {
     /// `joined`); anything else falls back to newest-first by join date. `id` is
     /// always appended as a stable tiebreak so pagination never drops or repeats
     /// a row across pages.
+    // SPEC-7.3.339, SPEC-7.3.340, SPEC-7.3.341
     #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
@@ -1018,6 +1063,7 @@ impl UserRepository {
         // BUNYIP-995: compute the offset in i64 and saturate, mirroring
         // BUNYIP-946 F14, so a page value large enough to overflow an i32
         // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        // SPEC-7.3.3
         let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
         let search_pattern = search.map(|s| format!("%{}%", s));
 
@@ -1076,6 +1122,7 @@ impl UserRepository {
         // key: only these fixed expressions can reach the query, so a crafted
         // `sort` param cannot inject SQL. Unknown / absent falls back to join
         // date. `id` is the stable tiebreak.
+        // SPEC-7.3.4, SPEC-7.3.341: fixed expressions only; raw sort key never reaches SQL
         let sort_expr = match sort_by {
             Some("email") => "LOWER(email)",
             Some("tier") => "COALESCE(membership_tier, 'standard')",
@@ -1101,6 +1148,7 @@ impl UserRepository {
     /// Must be called inside a transaction that holds a `pg_advisory_xact_lock`
     /// to prevent concurrent verifications from racing on the same slot count.
     /// Returns the tier that was assigned.
+    // SPEC-7.3.342
     pub async fn assign_membership_tier<'e, E>(
         executor: E,
         user_id: Uuid,
@@ -1149,6 +1197,7 @@ impl UserRepository {
     /// computes the trial window for early_adopter/standard from the configured
     /// trial days. The caller performs any Stripe-side work (the $0 invoice
     /// subscription when moving to lifetime) and session revocation.
+    // SPEC-7.3.343
     pub async fn admin_set_membership_tier(
         pool: &PgPool,
         user_id: Uuid,
@@ -1206,6 +1255,7 @@ impl UserRepository {
     /// lifetimes read as 0, so they bypassed the cap and the Pricing tiers page
     /// under-reported usage (BUNYIP-105). Only soft-deleted users (`deleted_at`)
     /// are excluded.
+    // SPEC-7.3.344
     pub async fn count_tier_assignments<'e, E>(executor: E) -> Result<(i64, i64), AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
@@ -1219,6 +1269,7 @@ impl UserRepository {
     /// SQL backing [`Self::count_tier_assignments`]. Held as a named const so the
     /// BUNYIP-105 regression test can assert the `email_verified` predicate stays
     /// dropped without needing a live database.
+    // SPEC-7.3.344
     const COUNT_TIER_ASSIGNMENTS_SQL: &'static str = r#"
             SELECT
                 COUNT(*) FILTER (WHERE membership_tier = 'lifetime') AS lifetime_count,
@@ -1228,6 +1279,7 @@ impl UserRepository {
             "#;
 
     /// Grant lifetime membership to a user (admin override).
+    // SPEC-7.3.345
     pub async fn grant_lifetime_membership(
         pool: &PgPool,
         user_id: Uuid,
@@ -1259,6 +1311,7 @@ impl UserRepository {
     /// Returns the user to `standard` tier with no active subscription, mirroring
     /// the post-cancel Stripe state. Caller is responsible for any Stripe-side
     /// cleanup (cancelling the $0 invoice subscription, etc.).
+    // SPEC-7.3.346
     pub async fn revoke_lifetime_membership(
         pool: &PgPool,
         user_id: Uuid,
@@ -1285,6 +1338,7 @@ impl UserRepository {
     }
 
     /// Grant free membership to a user (admin override, not tied to signup count).
+    // SPEC-7.3.345
     pub async fn grant_free_membership(
         pool: &PgPool,
         user_id: Uuid,
@@ -1313,6 +1367,7 @@ impl UserRepository {
     }
 
     /// Get email addresses of all active admin users for system notifications
+    // SPEC-7.3.347
     pub async fn find_admin_emails(pool: &PgPool) -> Result<Vec<String>, AppError> {
         let rows: Vec<(String,)> = sqlx::query_as(
             "SELECT email FROM users WHERE role = 'admin' AND deleted_at IS NULL ORDER BY created_at ASC",
@@ -1326,6 +1381,7 @@ impl UserRepository {
     /// Count of active (non-deleted) users among `emails`. Powers the
     /// `/e2e-bootstrapped` readiness probe (BUNYIP-163): one indexed lookup, no
     /// per-row data returned.
+    // SPEC-7.3.347
     pub async fn count_active_by_emails(pool: &PgPool, emails: &[String]) -> Result<i64, AppError> {
         let row: (i64,) = sqlx::query_as(
             "SELECT COUNT(*) FROM users WHERE email = ANY($1) AND deleted_at IS NULL",
@@ -1345,6 +1401,7 @@ impl UserRepository {
     /// concurrent sweep tick cannot re-touch a row the other tick already
     /// moved. Returns the rows that were moved (id, email, role) so the
     /// caller can write one `GracePeriodEnded` audit row per user.
+    // SPEC-7.3.348
     pub async fn end_expired_grace_periods(
         pool: &PgPool,
     ) -> Result<Vec<(Uuid, String, String)>, AppError> {
@@ -1369,6 +1426,7 @@ impl UserRepository {
     /// BUNYIP-512: membership statuses that count a user as still "on a plan"
     /// for the archive guard. `past_due` counts because a member mid-dunning is
     /// not off the plan yet; `canceled`, `none` and `unpaid` do not.
+    // SPEC-7.3.349
     pub const PLAN_MEMBER_STATUSES: [&'static str; 3] = ["active", "grace_period", "past_due"];
 
     /// BUNYIP-512: count users still attached to a plan, either by an active
@@ -1379,6 +1437,7 @@ impl UserRepository {
     /// the tier and a locked price is counted once. `locked_price_id` counts
     /// regardless of status because a grandfathered price must not be withdrawn
     /// out from under the user who locked it.
+    // SPEC-7.3.349
     pub async fn count_members_for_plan(
         pool: &PgPool,
         tiers: &[String],
@@ -1397,6 +1456,7 @@ impl UserRepository {
     /// regression test can assert the predicate set (the tier + status guard,
     /// the `locked_price_id` OR arm, and the `deleted_at` exclusion) without a
     /// live database, mirroring the `COUNT_TIER_ASSIGNMENTS_SQL` test.
+    // SPEC-7.3.349
     const COUNT_MEMBERS_FOR_PLAN_SQL: &'static str = r#"
             SELECT COUNT(*)
             FROM users
@@ -1415,6 +1475,7 @@ impl UserRepository {
     /// summing the rows whose tier OR locked price falls in a given plan gets the
     /// same `OR`-deduplicated count [`Self::count_members_for_plan`] returns for
     /// that plan, computed once for the whole page.
+    // SPEC-7.3.350
     pub async fn plan_member_index(pool: &PgPool) -> Result<PlanMemberIndex, AppError> {
         let rows: Vec<(Option<String>, Option<String>, i64)> = sqlx::query_as(
             r#"
@@ -1473,6 +1534,7 @@ impl PlanMemberIndex {
     /// [`UserRepository::count_members_for_plan`]: a bucket counts if its active
     /// tier is one of the plan's tiers, or its locked price is one of the plan's
     /// prices. Each user is in exactly one bucket, so there is no double count.
+    // SPEC-7.3.350
     pub fn count_for(&self, tiers: &[String], price_ids: &[String]) -> i64 {
         self.rows
             .iter()

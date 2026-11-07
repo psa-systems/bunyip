@@ -39,13 +39,16 @@ export def main [
     --simulate-tag: string = ""      # dry-run only: simulate a release of this version
     --json(-j)                       # Serialize the record to JSON for shell capture
 ] {
+    # SPEC-3.11.1, SPEC-3.11.6
     use std log
     let describe = (^git describe --tags --always | str trim)
+    # SPEC-3.11.7
     log info $"[get-tags] mode: ($mode) ref-name: ($ref_name) simulate-tag: ($simulate_tag) describe: ($describe)"
 
     # Resolve the effective publish train and its version (if any). A dry-run
     # maps onto a real train so both publish paths can be exercised without a
     # registry mutation.
+    # SPEC-3.11.2
     let effective = if $mode == "release" {
         { train: "release", version: $ref_name }
     } else if $mode == "latest" {
@@ -57,13 +60,16 @@ export def main [
             { train: "latest", version: "" }
         }
     } else {
+        # SPEC-3.11.3
         error make { msg: $"[get-tags] Unknown mode: '($mode)'. Expected release|latest|dry-run." }
     }
 
+    # SPEC-3.11.4
     if $effective.train == "release" and ($effective.version | is-empty) {
         error make { msg: "[get-tags] release train requires a non-empty version (--ref-name for a tag build, or --simulate-tag for a dry-run)." }
     }
 
+    # SPEC-3.11.5
     let tag = if $effective.train == "release" { $effective.version } else { "latest" }
     log info $"[get-tags] Resolved train: ($effective.train) tag: ($tag)"
 

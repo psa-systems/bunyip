@@ -26,6 +26,7 @@ use bunyip_domain::repositories::{
 use sqlx::PgPool;
 use tracing::error;
 
+// SPEC-9.11.7
 /// Build the full provider stack: the merged database provider over the file and
 /// environment providers.
 ///
@@ -66,6 +67,7 @@ pub async fn survey(pool: &PgPool) -> Result<ConfigStack, AppError> {
     Ok(ConfigStack::with_database(database))
 }
 
+// SPEC-9.11.7
 /// A refused key is an operator-facing configuration error, not an internal one.
 fn to_app_error(failure: bunyip_domain::config::ConfigFailure) -> AppError {
     AppError::BadRequest(format!(

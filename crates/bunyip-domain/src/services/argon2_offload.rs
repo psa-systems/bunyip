@@ -20,6 +20,7 @@
 //! the leaf picks its documented defaults and the previous ceiling is lost.
 //! The PR body enumerates the deploy diff.
 
+// SPEC-8.1.4: env names and defaults are read by the shared dunite leaf
 use dunite_argon2_offload::OffloadError;
 
 use crate::errors::AppError;
@@ -28,6 +29,7 @@ use crate::services::PasswordService;
 /// Map the leaf's two failure branches to the AppError the request path
 /// expects. Both are internal faults (overloaded or broken server), never a
 /// wrong-answer `Ok(false)` on the verify path.
+// SPEC-8.1.2: overload and join failure are errors, never Ok(false)
 fn map_offload_error(e: OffloadError) -> AppError {
     match e {
         OffloadError::PermitTimeout => AppError::internal("Password hashing is overloaded"),
@@ -43,6 +45,7 @@ fn map_offload_error(e: OffloadError) -> AppError {
 /// failure. The leaf returns `Result<Result<T, AppError>, OffloadError>`;
 /// the `?` below unwraps the leaf's error into AppError, and `work`'s own
 /// `Result` is still returned to the caller.
+// SPEC-8.1.1
 pub async fn offload<T, F>(operation: &'static str, work: F) -> Result<T, AppError>
 where
     F: FnOnce() -> Result<T, AppError> + Send + 'static,
@@ -54,11 +57,13 @@ where
 }
 
 /// Hash a password on the blocking pool.
+// SPEC-8.1.3
 pub async fn hash_password(password: String) -> Result<String, AppError> {
     offload("hash", move || PasswordService::new().hash(&password)).await
 }
 
 /// Verify a password against a stored hash on the blocking pool.
+// SPEC-8.1.3
 pub async fn verify_password(password: String, hash: String) -> Result<bool, AppError> {
     offload("verify", move || {
         PasswordService::new().verify(&password, &hash)

@@ -49,14 +49,17 @@ use bunyip_oci::{
 type AppBlobCache = BlobCache<OciBlobCacheRepository>;
 use bunyip_oidc::services::{oidc_keys::OidcKeySet, oidc_provider::OidcProvider};
 
+// SPEC-9.6.11: branding refresh period
 /// BUNYIP-561: how often each api process re-reads the branding row. A `PUT`
 /// refreshes the replica that served it in the same request; this is what makes
 /// the change reach the others.
 const BRANDING_REFRESH_SECS: u64 = 60;
 
+// SPEC-9.6.6: feature-toggle refresh period
 /// BUNYIP-840: how often each api process re-reads `feature_toggles`.
 const FEATURE_TOGGLE_REFRESH_SECS: u64 = 60;
 
+// SPEC-9.3.5, SPEC-9.3.6: fixed pool size, not tied to worker count
 /// Connections in each database pool (BUNYIP-559 F10).
 ///
 /// Deliberately NOT a function of the actix worker count. actix opens one
@@ -83,6 +86,7 @@ const DB_POOL_MAX_CONNECTIONS: u32 = 10;
 async fn main() -> anyhow::Result<()> {
     // Load a local .env if present (dev convenience; no-op in containers that
     // inject real environment). Must run before Config::from_env().
+    // SPEC-9.3.1: local .env loaded before any config read
     let _ = dotenvy::dotenv();
 
     // Initialize tracing/logging BEFORE the config loads (BUNYIP-537), so a
@@ -91,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
     // required variables, invalid TRUSTED_PROXY_CIDR entries) predates the
     // subscriber otherwise. RUST_LOG is read directly because `config.log_level`
     // does not exist yet; it is the same read.
+    // SPEC-9.3.2: subscriber is up before config so config errors are logged
     let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
     // The error-log buffer (BUNYIP-327) is created first so the capture layer
     // can be wired into the subscriber; the same buffer is registered as app
@@ -104,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
     // non-zero: an operator message, not a panic and a backtrace (BUNYIP-537).
     // SPEC-2.2.1: configuration loads before any listener binds or database
     // connection opens.
+    // SPEC-9.3.3: one error line per failing variable, then exit 1
     let mut config = match Config::from_env() {
         Ok(config) => config,
         Err(e) => {
@@ -113,6 +119,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // SPEC-9.3.4: boot banner and feature-gap warnings
     info!(
         version = env!("CARGO_PKG_VERSION"),
         environment = %config.environment,
@@ -140,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Create database connection pool
+    // SPEC-9.3.5: primary pool: 10 connections, 5 s acquire timeout
     let pool = PgPoolOptions::new()
         .max_connections(DB_POOL_MAX_CONNECTIONS)
         .acquire_timeout(Duration::from_secs(5))
@@ -160,6 +168,7 @@ async fn main() -> anyhow::Result<()> {
     // already has.
     // SPEC-2.2.2: a first positional argument is dispatched as a maintenance
     // subcommand and the process exits without binding either listener below.
+    // SPEC-9.3.7: subcommands run against the already-migrated schema
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(subcommand) = args.first() {
         return run_subcommand(subcommand, &args[1..], &pool, &config).await;
@@ -168,6 +177,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-79: heal the in-place-edited migration checksums before the
     // migrator's immutability check would abort on databases that applied the
     // pre-edit bodies. No-op on fresh and already-healed databases.
+    // SPEC-9.4.1: fixed pre-migration order; any failure aborts
     bunyip_api::migrate_reconcile::reconcile_legacy_migration_checksums(&pool)
         .await
         .map_err(|e| {
@@ -221,6 +231,7 @@ async fn main() -> anyhow::Result<()> {
     // CREATE ROLE, so no separate admin connection is needed. Gated on
     // BUNYIP_APP_PASSWORD: unset means the role is not managed here and the app
     // pool below falls back to the primary pool (RLS no-op).
+    // SPEC-9.4.9: role provisioning is gated on BUNYIP_APP_PASSWORD
     if let Some(app_password) = config.app_password.as_deref() {
         bunyip_api::db::provision_app_role(&pool, app_password)
             .await
@@ -240,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
     // rerouted handlers open transactions via `db::begin_with_user`, so the
     // fallback is safe. Built AFTER provisioning so the role exists before the
     // pool connects as it.
+    // SPEC-9.4.12: separate RLS pool only when APP_DATABASE_URL is set
     let app_pool = match config.app_database_url.as_deref() {
         Some(url) => {
             let p = PgPoolOptions::new()
@@ -263,6 +275,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-559 F10: opt-in pool sampling for a load run. The RLS pool is only
     // sampled when it is a pool of its own; when APP_DATABASE_URL is unset it
     // is a clone of the primary and a second line would double-count it.
+    // SPEC-9.4.13: a shared pool is sampled once
     let mut sampled = vec![("primary", pool.clone())];
     if config.app_database_url.is_some() {
         sampled.push(("rls", app_pool.clone()));
@@ -275,9 +288,11 @@ async fn main() -> anyhow::Result<()> {
     // secret_env supports both the plain env var (dev) and the
     // SETUP_DEFAULT_ADMIN_FILE compose secret (production), and treats empty
     // values as unset.
+    // SPEC-9.5.1, SPEC-9.5.2: seed the first admin only when none exists
     if let Some(setup_admin) = secret_env("SETUP_DEFAULT_ADMIN") {
         let admin_emails = UserRepository::find_admin_emails(&pool).await?;
         if admin_emails.is_empty() {
+            // SPEC-9.5.3: malformed value is a fatal config error
             let Some((email, password)) = setup_admin.split_once(':') else {
                 fatal_config_error(
                     "SETUP_DEFAULT_ADMIN",
@@ -326,6 +341,7 @@ async fn main() -> anyhow::Result<()> {
     // PKCE flow on every other host; this env-driven startup upsert is
     // authoritative and self-healing, correcting the stale row in place. Each
     // client is env-gated: unset vars -> skip + log (mirrors SETUP_DEFAULT_ADMIN).
+    // SPEC-9.5.8: two fixed SPA clients, env-reconciled
     upsert_spa_oidc_client(
         &pool,
         "b0000000-0000-4000-8000-000000000002",
@@ -366,6 +382,7 @@ async fn main() -> anyhow::Result<()> {
     upsert_mokosh_webhook_url(&pool).await?;
 
     // Test database connection
+    // SPEC-9.4.14: post-reconcile health check
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
         error!(error = %e, "Database health check failed");
         e
@@ -376,6 +393,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize JWT service. secret_env reads JWT_SECRET_FILE (compose
     // secret) or JWT_SECRET (dev .env); empty counts as unset, so an
     // unconfigured production deployment fails fast here.
+    // SPEC-9.6.1: production requires the secret; dev uses a placeholder
     let jwt_secret = secret_env("JWT_SECRET").unwrap_or_else(|| {
         if config.is_production() {
             // Unreachable in practice: the startup audit (BUNYIP-537) already
@@ -411,6 +429,7 @@ async fn main() -> anyhow::Result<()> {
     // reads BUNYIP_WEBHOOK_SIGNING_SECRET_FILE, a dev .env reads
     // BUNYIP_WEBHOOK_SIGNING_SECRET. Production fails to boot if unset;
     // dev/test falls back to a stable placeholder.
+    // SPEC-9.6.2: webhook key is separate from the JWT key
     let webhook_signing_secret = secret_env("BUNYIP_WEBHOOK_SIGNING_SECRET").unwrap_or_else(|| {
         if config.is_production() {
             // Unreachable in practice (the startup audit already refused this
@@ -431,6 +450,7 @@ async fn main() -> anyhow::Result<()> {
     // `has_db_overrides` branch is gone: an empty database provider resolves to
     // exactly what the deployment providers alone resolve, so the branch decided
     // nothing and only hid the precedence.
+    // SPEC-9.6.3: database, file, environment provider stack
     let tier_config = {
         use bunyip_api::repositories::TierConfigRepository;
         let row = match TierConfigRepository::get(&pool).await {
@@ -453,6 +473,7 @@ async fn main() -> anyhow::Result<()> {
     let tier_config = Arc::new(std::sync::RwLock::new(tier_config));
 
     // BUNYIP-840: a failed first read leaves every feature OFF; the refresh task retries.
+    // SPEC-9.6.5: failed first read leaves every feature off
     let feature_toggles: bunyip_api::feature_toggles::FeatureToggleSnapshot = Arc::default();
     match bunyip_api::repositories::FeatureToggleRepository::load(&pool).await {
         Ok(toggles) => {
@@ -465,6 +486,7 @@ async fn main() -> anyhow::Result<()> {
         ),
     }
     {
+        // SPEC-9.6.6: periodic toggle refresh, first tick skipped
         let snapshot = Arc::clone(&feature_toggles);
         let pool = pool.clone();
         tokio::spawn(async move {
@@ -493,6 +515,7 @@ async fn main() -> anyhow::Result<()> {
     // Infisical is contacted only when it IS the declared provider, so `database`
     // and `environment` deployments keep the property that Infisical is never a
     // boot dependency. In `infisical` mode the read is deliberately fail-closed.
+    // SPEC-9.6.7: Infisical is contacted only when declared
     let infisical_probe =
         if config.secrets_provider == bunyip_api::config::SecretsProvider::Infisical {
             bunyip_api::secrets::InfisicalProbe::Inspect
@@ -515,6 +538,7 @@ async fn main() -> anyhow::Result<()> {
     );
     // The env-fallback EmailConfig carries the same resolved password, so both
     // branches below agree on the one provider's value.
+    // SPEC-9.6.8: one provider value feeds both email config branches
     let smtp_password = secret_survey
         .value(bunyip_api::config::GovernedSecret::SmtpPassword)
         .map(str::to_string);
@@ -525,6 +549,7 @@ async fn main() -> anyhow::Result<()> {
     // been branded. A read failure is logged with its cause and leaves the
     // bootstrap default in place (the api must still boot without a brand); the
     // refresh task below retries on its interval.
+    // SPEC-9.6.10: APP_NAME is only the bootstrap default
     let branding_cache = Arc::new(bunyip_api::models::BrandingCache::new(
         config.app_name.clone(),
     ));
@@ -544,6 +569,7 @@ async fn main() -> anyhow::Result<()> {
     {
         // Refresh on a TTL as well as on PUT: a save reaches only the replica
         // that served it, so every other process picks the change up here.
+        // SPEC-9.6.11: keep last good value on a failed refresh
         let cache = Arc::clone(&branding_cache);
         let pool = pool.clone();
         tokio::spawn(async move {
@@ -570,6 +596,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-571: poll the support IMAP mailbox and ingest replies into the
     // support queue. Always spawned; it re-reads the config each tick and
     // no-ops while IMAP is disabled or unconfigured.
+    // SPEC-9.7.18: always spawned; no-ops while IMAP is off
     bunyip_api::support_ingest::spawn(pool.clone(), config.clone(), app_key_set.clone());
 
     // Initialize Email service: non-secret settings prefer the DB row (admin
@@ -577,6 +604,7 @@ async fn main() -> anyhow::Result<()> {
     // comes from the declared provider alone (BUNYIP-542). The auth service (built
     // below) also holds the email service for BUNYIP-366 login-location alerts,
     // so email is wired ahead of auth.
+    // SPEC-9.6.3: same provider stack as tier config
     let email_config = {
         use bunyip_api::repositories::EmailConfigRepository;
         let row = match EmailConfigRepository::get(&pool).await {
@@ -597,6 +625,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-204/351: a production deployment must not run with email disabled,
     // even when the effective config is resolved from the DB. The disabled path
     // suppresses transactional mail (magic links, resets), breaking auth flows.
+    // SPEC-9.6.9: production must be able to send mail
     if config.is_production() && !email_config.enabled {
         fatal_config_error(
             "SMTP_HOST",
@@ -608,6 +637,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let email_enabled = email_config.enabled;
+    // SPEC-9.7.1: suppression list guards every send path
     let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
         EmailService::new_dev()
@@ -624,6 +654,7 @@ async fn main() -> anyhow::Result<()> {
     // lifetime and amortizes repeat lookups during a spam burst. The lookup
     // itself has a short per-call timeout and fails open, so a transient DNS
     // outage never drops real feedback.
+    // SPEC-9.7.2: shared MX resolver for the feedback spam gate
     let mx_resolver: Arc<dyn bunyip_api::handlers::mx_check::MxResolver> =
         Arc::new(bunyip_api::handlers::mx_check::HickoryMxResolver::new());
 
@@ -645,11 +676,13 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-603: the shared HMAC secret the bounce/complaint feedback webhook is
     // signed with. Absent means the endpoint fails closed (it cannot verify a
     // signature, so it trusts nothing); `log_feature_gaps` warns once at boot.
+    // SPEC-9.7.2: absent secret makes the feedback webhook fail closed
     let mailer_webhook_secret = secret_env("MAILER_WEBHOOK_SECRET");
 
     // BUNYIP-366: IP -> country resolver for login-location alerts. Optional:
     // when IP2LOCATION_DB_PATH is unset or the .BIN fails to load, geoip stays
     // None and the alerts silently disable. Login is never blocked either way.
+    // SPEC-9.7.3: optional dataset; load failure never blocks login
     let geoip = match config.ip2location_db_path.as_deref() {
         Some(path) => match GeoIpService::new(path) {
             Ok(svc) => {
@@ -691,10 +724,12 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-998: keeps account holders on Mirzam's lists, off the request
     // path. Inert while the integration is off or incomplete.
+    // SPEC-9.7.4: sync handle shared with auth and handlers
     let mirzam_sync =
         bunyip_api::mirzam_sync::mirzam_sync(pool.clone(), config.clone(), app_key_set.clone());
 
     // Initialize Auth service
+    // SPEC-9.7.5: auth service wiring
     let auth_service = Arc::new(
         AuthService::new(
             pool.clone(),
@@ -715,6 +750,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP-542: the non-secret Stripe settings (app tag, checkout URLs, trial
     // length) still come from the `stripe_config` row, but the two secrets come
     // from the declared provider alone.
+    // SPEC-9.7.6: non-secret columns from row, secrets from provider
     let stripe_config = {
         use bunyip_api::config::GovernedSecret;
         use bunyip_api::repositories::StripeConfigRepository;
@@ -760,6 +796,7 @@ async fn main() -> anyhow::Result<()> {
     // webhook signing secret is configured. The webhook handler fails closed
     // in this state, so events will be rejected until a real webhook signing
     // secret is saved.
+    // SPEC-9.7.7: webhook endpoint fails closed in this state
     if stripe_service.is_configured() && !stripe_service.webhook_secret_configured() {
         tracing::warn!(
             "Stripe secret key is configured but the webhook signing secret is unset or the \
@@ -773,6 +810,7 @@ async fn main() -> anyhow::Result<()> {
     // The mechanism comes from the dunite-download engine; bunyip supplies the
     // Postgres-backed store (DownloadCacheRepository) and counter
     // (DownloadDailyCountRepository) adapters.
+    // SPEC-9.7.8: downloads degrade when Forgejo is unconfigured
     let forgejo_client = config.download.forgejo_base_url.as_ref().and_then(|base| {
         config
             .download
@@ -822,6 +860,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Initialize OCI registry services (optional - degrade gracefully when Forgejo is unconfigured)
+    // SPEC-9.7.9: OCI degrades when Forgejo is unconfigured
     let forgejo_registry_client: Option<Arc<ForgejoRegistryClient>> =
         config.download.forgejo_base_url.as_ref().and_then(|base| {
             config
@@ -856,6 +895,7 @@ async fn main() -> anyhow::Result<()> {
     // Daily pull counter persistence adapter used by the OCI registry server.
     let oci_pull_counter = Arc::new(OciPullDailyCountRepository::new(pool.clone()));
 
+    // SPEC-9.7.10: OCI limiter and token service
     let oci_limiter = Arc::new(OciLimiter::new(
         config.oci.concurrent_manifests_per_user,
         config.oci.pulls_per_user_per_day,
@@ -866,6 +906,7 @@ async fn main() -> anyhow::Result<()> {
     // Misconfiguration here otherwise only surfaces as opaque docker-login
     // failures on the client side.
     if config.oci.enabled {
+        // SPEC-9.7.10: malformed realm fails fast at boot
         if let Err(e) = config.oci.validate() {
             anyhow::bail!("invalid OCI registry configuration: {e}");
         }
@@ -878,6 +919,7 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Initialize TOTP service
+    // SPEC-9.7.11: TOTP service with branded issuer
     let totp_service = Arc::new(TotpService::new(
         app_key_set.clone(),
         config.app_name.clone(),
@@ -907,6 +949,7 @@ async fn main() -> anyhow::Result<()> {
     info!("Event bus initialized");
 
     // Initialize OIDC provider (optional - only when OIDC_ISSUER is set)
+    // SPEC-9.7.12: OIDC only when OIDC_ISSUER is set
     let oidc_provider: Option<Arc<OidcProvider>> = if config.oidc.enabled() {
         // BUNYIP-258's dev-kid guard is part of the startup audit in
         // `Config::from_env` (BUNYIP-537), so a `dev-` kid in production never
@@ -944,6 +987,7 @@ async fn main() -> anyhow::Result<()> {
     // header's `typ` claim and routes to whichever verifier matches;
     // when OIDC is disabled, `None` here means the extractor falls
     // back to HS256-only, preserving the pre-BUNYIP-55 behaviour.
+    // SPEC-9.7.13: extractors accept at+jwt only when OIDC is on
     let at_jwt_verifier: Option<Arc<bunyip_domain::middleware::auth::BunyipAtJwtVerifier>> =
         oidc_provider
             .as_ref()
@@ -951,6 +995,7 @@ async fn main() -> anyhow::Result<()> {
 
     // BUNYIP-643: the same declared provider stack as the tier and email
     // configurations above.
+    // SPEC-9.6.3: same provider stack as tier config
     let auto_ban_config = {
         use bunyip_api::repositories::AutoBanConfigRepository;
         let row = match AutoBanConfigRepository::get(&pool).await {
@@ -977,6 +1022,7 @@ async fn main() -> anyhow::Result<()> {
     // cap set in compose that an admin row has made dead is reported at boot
     // exactly like a dead SMTP_HOST. The caps themselves are resolved per TTL
     // snapshot by RateLimitConfigRepository::effective, not here.
+    // SPEC-9.6.4: boot report only; enforcement reports its own failures
     match bunyip_domain::repositories::RateLimitConfigRepository::list(&pool).await {
         Ok(rows) => ConfigStack::with_database(
             bunyip_domain::repositories::rate_limit_config::database_provider(&rows),
@@ -993,6 +1039,7 @@ async fn main() -> anyhow::Result<()> {
     // adapter calls Mokosh's tenant data export/import; otherwise the domain's
     // pending stub is used. New adapters register here without touching the
     // orchestration.
+    // SPEC-9.7.14: real adapter only when fully configured
     let mokosh_adapter: Arc<dyn AppBackupAdapter> = {
         let url = std::env::var("MOKOSH_BACKUP_API_URL")
             .ok()
@@ -1030,6 +1077,7 @@ async fn main() -> anyhow::Result<()> {
     let backup_service = BackupService::new(vec![mokosh_adapter]);
 
     // Initialize auto-ban service
+    // SPEC-9.7.15: bans survive restart; load failure is logged
     let auto_ban_service = Arc::new(AutoBanService::new(auto_ban_config, pool.clone()));
 
     // Load existing bans from DB
@@ -1051,6 +1099,7 @@ async fn main() -> anyhow::Result<()> {
     // Initialize the operator-facing update checker. Polls
     // BUNYIP_UPDATE_CHECK_URL (a Forgejo/Gitea releases/latest endpoint)
     // hourly with caching; disabled when the env var is unset.
+    // SPEC-9.7.16: empty URL disables the checker
     let update_check_url = std::env::var("BUNYIP_UPDATE_CHECK_URL")
         .ok()
         .filter(|s| !s.is_empty());
@@ -1068,12 +1117,14 @@ async fn main() -> anyhow::Result<()> {
         concat!("bunyip-api/", env!("CARGO_PKG_VERSION")),
     ));
 
+    // SPEC-9.9.1: bind address is HOST_IP:APP_PORT
     let server_addr = config.server_addr();
     // CORS_ORIGIN is a comma-separated allow-list once multiple RPs register
     // (bunyip-web + mokosh-apps + drillmark). Parse it into a Vec so each
     // origin can be registered individually with the CorsLayer; passing the
     // raw comma-list as a single .allowed_origin() never matches any browser
     // Origin header.
+    // SPEC-9.9.2: explicit allow-list only, no wildcard
     let cors_origins: Vec<String> = config
         .cors_origin
         .split(',')
@@ -1088,6 +1139,7 @@ async fn main() -> anyhow::Result<()> {
     // app-specific exempt prefixes and ambient-cookie names. /oauth2/* and
     // /.well-known/* are cross-origin OIDC surfaces gated by PKCE + state +
     // nonce; /v1/webhooks/stripe is HMAC-authenticated by Stripe.
+    // SPEC-9.9.4: cross-origin OIDC and HMAC webhook paths are exempt
     const CSRF_EXEMPT_PREFIXES: [&str; 3] = ["/oauth2/", "/.well-known/", "/v1/webhooks/stripe"];
     const CSRF_AMBIENT_COOKIES: [&str; 2] = ["access_token", "refresh_token"];
     let csrf_guard = dunite_core::middleware::OriginGuard::new(
@@ -1099,6 +1151,7 @@ async fn main() -> anyhow::Result<()> {
     let config_data = config.clone();
 
     // Spawn rate limit cleanup background task
+    // SPEC-9.8.1, SPEC-9.8.2, SPEC-9.8.9: a failed tick is logged; loop continues
     let cleanup_pool = pool.clone();
     tokio::spawn(async move {
         info!("Rate limit cleanup task started");
@@ -1121,6 +1174,7 @@ async fn main() -> anyhow::Result<()> {
     // Sweep rate_limit_history on the same cadence. Retention is 24 hours:
     // past throttles answer the admin page's "has a rate limit fired
     // recently" question, older rows add nothing.
+    // SPEC-9.8.3: 24 h retention
     let history_pool = pool.clone();
     tokio::spawn(async move {
         info!("Rate limit history retention task started");
@@ -1142,6 +1196,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Sweep rate_limit_traffic on the same cadence. The admin page's
     // maximum window is 1 day, so a 24h retention floor is enough.
+    // SPEC-9.8.3: 24 h retention
     let traffic_pool = pool.clone();
     tokio::spawn(async move {
         info!("Rate limit traffic retention task started");
@@ -1162,6 +1217,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // Spawn auto-ban cleanup background task (every 5 minutes)
+    // SPEC-9.8.4: memory then database
     let ban_cleanup_pool = pool.clone();
     let ban_cleanup_service = auto_ban_service.clone();
     tokio::spawn(async move {
@@ -1187,6 +1243,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Spawn feedback archive+purge background task (every 24h)
     // Archives closed feedback older than 90 days into feedback_archive, then hard-deletes it
+    // SPEC-9.8.5: daily archive and purge
     let feedback_purge_pool = pool.clone();
     tokio::spawn(async move {
         info!("Feedback archive/purge task started");
@@ -1216,6 +1273,7 @@ async fn main() -> anyhow::Result<()> {
     // grace_period_end < NOW()` in `end_expired_grace_periods` cannot overwrite
     // a concurrent payment-succeeded reactivation, which clears the window and
     // sets `active` before the sweep's predicate would match the row again.
+    // SPEC-9.8.6: keeps membership_status truthful; not the access gate
     let grace_period_pool = pool.clone();
     tokio::spawn(async move {
         info!("Grace period sweep task started");
@@ -1252,6 +1310,7 @@ async fn main() -> anyhow::Result<()> {
     // BUNYIP_E2E_BOOTSTRAP_ALLOW=true), so it can never touch a real user on
     // production. Hard-deletes rows whose email carries the disposable
     // subaddress marker `+e2e-` and that are older than the age threshold.
+    // SPEC-9.8.7: never spawned in production
     if config.e2e_purge_enabled() {
         // Hourly sweep; only disposables older than 6h are eligible, so the
         // reaper can never race a live test mid-run. The `+e2e-` marker is the
@@ -1284,6 +1343,7 @@ async fn main() -> anyhow::Result<()> {
                         // like any deleted one. A row already soft-deleted
                         // left them when it was deleted.
                         for (user_id, email, was_verified, soft_deleted) in reaped {
+                            // SPEC-9.8.8: soft-deleted accounts already left the lists
                             if !soft_deleted {
                                 reaper_mirzam.notify(
                                     bunyip_domain::services::mirzam_sync::AccountChange::Deleted {
@@ -1323,6 +1383,7 @@ async fn main() -> anyhow::Result<()> {
     // (BUNYIP-74). Built once at startup so a builder error fails fast instead
     // of being silently swallowed per request; cloned per worker (reqwest
     // clones share one connection pool).
+    // SPEC-9.7.17: built once so a builder error fails at boot
     let backchannel_http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -1330,6 +1391,7 @@ async fn main() -> anyhow::Result<()> {
 
     // SPEC-2.2.4 / SPEC-2.2.5: the primary server always starts; its
     // middleware order below is the one SPEC-2.2.5 fixes.
+    // SPEC-9.9.6, SPEC-9.9.7, SPEC-9.9.8: wrap order is innermost-first; app data is per worker
     let primary = HttpServer::new(move || {
         // Configure CORS. Only the explicit CORS_ORIGIN entries are echoed
         // back with credentials; everything else gets no
@@ -1342,6 +1404,7 @@ async fn main() -> anyhow::Result<()> {
         // attacker-controlled hosts (`http://localhost.attacker.com`, any
         // `*.{apex}` subdomain). For local dev, enumerate the dev origin (e.g.
         // `http://localhost:4400`) in CORS_ORIGIN instead. (BUNYIP-124)
+        // SPEC-9.9.2, SPEC-9.9.3: no allowed_origin_fn (BUNYIP-124)
         let mut cors = Cors::default();
         for o in &cors_origins {
             cors = cors.allowed_origin(o);
@@ -1364,6 +1427,7 @@ async fn main() -> anyhow::Result<()> {
         // CORS_ORIGIN entries, so widen only `connect-src` / `form-action` of
         // the dunite CSP to allowlist them instead of relaxing the whole
         // policy or hardcoding a brand origin in the generic crate (BUNYIP-244).
+        // SPEC-9.9.5: only RP origins widen connect-src and form-action
         let csp = CspConfig {
             connect_src: cors_origins.clone(),
             form_action: cors_origins.clone(),
@@ -1477,10 +1541,12 @@ async fn main() -> anyhow::Result<()> {
             // Configure routes
             .configure(routes::configure)
     })
+    // SPEC-2.4.2: primary listener bind
     .bind(&server_addr)?
     .shutdown_timeout(30)
     .run();
 
+    // SPEC-9.10.1, SPEC-9.10.2: enabled without Forgejo is a warning, not a failure
     let oci_ready = config.oci.enabled && forgejo_registry_client_oci.is_some();
     if config.oci.enabled && forgejo_registry_client_oci.is_none() {
         tracing::warn!(
@@ -1489,6 +1555,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // SPEC-9.9.9: printed once the primary listener is bound
     // Startup banner (the primary listener is already bound at this point).
     println!();
     println!("  ===================================================");
@@ -1522,6 +1589,7 @@ async fn main() -> anyhow::Result<()> {
         // SPEC-2.2.4: the OCI server starts only when OCI is enabled and a
         // Forgejo registry client is configured; it is awaited alongside the
         // primary server below.
+        // SPEC-9.10.4, SPEC-9.10.5: no CORS, CSRF, floor, ban or compression here
         let oci = HttpServer::new(move || {
             App::new()
                 // Same external-client-IP attribution in the root span as the
@@ -1557,12 +1625,15 @@ async fn main() -> anyhow::Result<()> {
                 .app_data(web::Data::new(frc.clone()))
                 .configure(bunyip_oci::routes::configure)
         })
+        // SPEC-2.4.2: OCI listener bind
         .bind(&oci_addr)?
         .shutdown_timeout(30)
         .run();
 
+        // SPEC-9.10.6: either server exiting ends the process
         tokio::try_join!(primary, oci)?;
     } else {
+        // SPEC-9.10.3: primary server only
         info!("OCI registry server disabled (requires OCI_REGISTRY_ENABLED=true + FORGEJO_BASE_URL + FORGEJO_API_TOKEN)");
         primary.await?;
     }
@@ -1570,6 +1641,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// SPEC-9.11.1: closed set of subcommand names
 /// Maintenance subcommands (BUNYIP-483, BUNYIP-542). Anything but a known
 /// subcommand is an error rather than a silently-ignored argument.
 async fn run_subcommand(
@@ -1587,6 +1659,7 @@ async fn run_subcommand(
     // serving. Infisical is inspected when the deployment has it enabled, which
     // is what makes "is `--to infisical` ready?" answerable.
     let key_set = config.app_key_set();
+    // SPEC-9.11.2: pre-flight inspects Infisical when enabled
     let probe = if config.infisical.enabled || config.secrets_provider == SecretsProvider::Infisical
     {
         secrets::InfisicalProbe::Inspect
@@ -1595,6 +1668,7 @@ async fn run_subcommand(
     };
 
     match subcommand {
+        // SPEC-9.11.3
         "secrets-status" => {
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let report = secrets::status_report(&survey);
@@ -1605,6 +1679,7 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        // SPEC-9.11.4
         "secrets-migrate" => {
             let target = match args.iter().position(|arg| arg == "--to") {
                 Some(idx) => args
@@ -1638,6 +1713,7 @@ async fn run_subcommand(
             print!("{summary}");
             Ok(())
         }
+        // SPEC-9.11.6
         "config-status" => {
             // BUNYIP-643: the configuration twin of `secrets-status`. Reads the
             // three admin-managed rows and reports, per key, which provider is
@@ -1654,6 +1730,7 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        // SPEC-9.11.8: plaintext secret is printed here only
         "machine-client" => {
             // BUNYIP-604: register / rotate / disable / list the `oauth_clients`
             // credential a calling app presents to the mailer relay. The module
@@ -1664,6 +1741,7 @@ async fn run_subcommand(
             print!("{report}");
             Ok(())
         }
+        // SPEC-9.11.5
         "secrets-purge" => {
             let survey = secrets::survey(pool, config, &key_set, probe).await?;
             let confirm = args.iter().any(|arg| arg == "--confirm");
@@ -1671,6 +1749,7 @@ async fn run_subcommand(
             print!("{summary}");
             Ok(())
         }
+        // SPEC-9.11.9: read-only unless --apply
         "reconcile-duplicate-prices" => {
             // BUNYIP-562: clean up duplicate active prices left by a partially
             // failed BUNYIP-511 replace. Read-only unless `--apply`. A CLI, not a
@@ -1687,6 +1766,7 @@ async fn run_subcommand(
         // a FILE (or stdin), never from a flag: an argument is visible in `ps`
         // and in `docker inspect`, and this one unlocks every integration secret
         // at once.
+        // SPEC-9.11.10: passphrase from a file, never a flag
         "settings-export" => {
             let passphrase = bunyip_api::settings_archive::read_passphrase(
                 &flag_value(args, "--passphrase-file").ok_or_else(|| {
@@ -1718,6 +1798,7 @@ async fn run_subcommand(
             );
             Ok(())
         }
+        // SPEC-9.11.11: partial import prints then fails
         "settings-import" => {
             let passphrase = bunyip_api::settings_archive::read_passphrase(
                 &flag_value(args, "--passphrase-file").ok_or_else(|| {
@@ -1759,6 +1840,7 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        // SPEC-9.11.12: counts print first, then failure fails the run
         "mirzam-backfill" => {
             // BUNYIP-999: put the accounts that predate the Mirzam integration
             // on its two lists. Safe to re-run: an address already on a list,
@@ -1793,6 +1875,7 @@ async fn run_subcommand(
     }
 }
 
+// SPEC-9.11.14
 /// The value following `flag` in `args`, for the hand-rolled subcommand parsing
 /// this binary uses instead of a CLI framework.
 fn flag_value(args: &[String], flag: &str) -> Option<String> {
@@ -1800,6 +1883,7 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
     args.get(idx + 1).cloned()
 }
 
+// SPEC-9.11.9: mirrors the startup construction
 /// BUNYIP-562: build a `StripeService` for a CLI subcommand the same way startup
 /// does - non-secret settings from the `stripe_config` row, the secret key and
 /// webhook secret from the declared secrets provider (the survey). An unreadable row
@@ -1842,6 +1926,7 @@ async fn run_reencrypt_subcommand(
     config: &Config,
 ) -> anyhow::Result<()> {
     match subcommand {
+        // SPEC-9.11.13: undecryptable values fail the run
         "reencrypt-secrets" => {
             let summary = bunyip_api::reencrypt::reencrypt_all(pool, &config.app_key_set()).await?;
             info!(%summary, "reencrypt-secrets finished");
@@ -1868,6 +1953,7 @@ async fn run_reencrypt_subcommand(
     }
 }
 
+// SPEC-9.5.5, SPEC-9.5.6, SPEC-9.5.7
 /// Env-driven, idempotent upsert of a browser SPA OIDC client (BUNYIP-57).
 ///
 /// Reads the per-client env vars (via `secret_env`, so the `{NAME}_FILE`
@@ -1962,6 +2048,7 @@ async fn upsert_spa_oidc_client(
     Ok(())
 }
 
+// SPEC-9.5.9, SPEC-9.5.10
 /// Reconcile the lets-chat confidential OIDC client for THIS environment
 /// (LC-448). Confidential analogue of `upsert_spa_oidc_client`: the static
 /// migration `20260618032217_register_lets_chat_oidc_client.sql` seeds
@@ -2052,6 +2139,7 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
     Ok(())
 }
 
+// SPEC-9.5.11
 /// BUNYIP-336: populate `applications.webhook_url` for `slug='mokosh'` from
 /// the `MOKOSH_WEBHOOK_URL` env var, so `fan_out_account_deleted`
 /// (bunyip-api/src/handlers/user.rs:694) actually POSTs the
@@ -2104,6 +2192,7 @@ async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
+// SPEC-9.5.4: operator message and exit 1, never a panic
 /// Report a configuration error that only surfaces after the config has loaded
 /// (a malformed value, or a feature resolved from the database), then exit
 /// non-zero (BUNYIP-537).
@@ -2121,6 +2210,7 @@ fn fatal_config_error(env_var: &str, reason: &str, remedy: &str) -> ! {
     std::process::exit(1);
 }
 
+// SPEC-9.3.2
 /// Initialize tracing subscriber with compact human-readable output, plus the
 /// BUNYIP-327 error-log capture layer that copies ERROR-level events into the
 /// in-memory buffer backing the admin log view. The capture layer filters to

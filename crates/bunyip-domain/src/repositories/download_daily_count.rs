@@ -24,6 +24,7 @@ impl DownloadDailyCountRepository {
     }
 
     /// Increments the count for `(user_id, day)` by 1 and returns the new value.
+    // SPEC-7.3.61
     pub async fn increment(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {
         let (count,): (i32,) = sqlx::query_as(
             r#"
@@ -42,6 +43,7 @@ impl DownloadDailyCountRepository {
     }
 
     /// Decrement on failed download (counted optimistically, roll back on failure).
+    // SPEC-7.3.62
     pub async fn decrement(&self, user_id: Uuid, day: NaiveDate) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -59,6 +61,7 @@ impl DownloadDailyCountRepository {
 }
 
 /// Wire the Postgres repository to the engine's counter trait.
+// SPEC-7.3.80
 #[async_trait]
 impl dunite_download::store::DownloadCounter for DownloadDailyCountRepository {
     async fn increment(&self, user_id: Uuid, day: NaiveDate) -> Result<i32, AppError> {

@@ -15,6 +15,7 @@ use crate::models::User;
 // from dunite-core (not a local redefinition).
 pub use dunite_core::services::JwtConfig;
 
+// SPEC-8.23.2
 /// Access token claims
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccessTokenClaims {
@@ -30,6 +31,7 @@ pub struct AccessTokenClaims {
     /// Unix timestamp when trial expires; None for lifetime members
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trial_ends_at: Option<i64>,
+    // SPEC-8.23.8
     /// BUNYIP-719: Unix timestamp when the stored grace period ends; None
     /// when the user is not in a grace period. `#[serde(default)]` keeps a
     /// token minted before this field readable (grace access then decided as
@@ -43,6 +45,7 @@ pub struct AccessTokenClaims {
 }
 
 impl AccessTokenClaims {
+    // SPEC-8.23.9
     /// Check if the user has active member access.
     ///
     /// Access is granted when ANY of the following are true:
@@ -60,6 +63,7 @@ impl AccessTokenClaims {
         )
     }
 
+    // SPEC-8.23.9
     /// Static version of `has_member_access` for use with raw user fields
     /// (e.g. when building userinfo responses without a full `AccessTokenClaims`).
     pub fn has_member_access_static(
@@ -87,6 +91,7 @@ pub struct TwoFactorChallengeClaims {
     pub iat: i64,
     pub jti: String,
     pub iss: String,
+    // SPEC-8.24.4
     /// BUNYIP-382: whether the paused sign-in chose "remember me". Carried
     /// through the 2FA / approval challenge so completion mints a 30-day session
     /// (and, on the 2FA path, trusts the device) rather than defaulting to 1 day.
@@ -119,6 +124,7 @@ pub struct RefreshTokenClaims {
     pub iss: String,
 }
 
+// SPEC-8.23.1
 /// JWT service for token operations
 #[derive(Clone)]
 pub struct JwtService {
@@ -130,6 +136,7 @@ impl JwtService {
         Self { config }
     }
 
+    // SPEC-8.23.2, SPEC-8.23.5
     /// Create access token for a user
     pub fn create_access_token(&self, user: &User) -> Result<String, AppError> {
         let now = Utc::now();
@@ -158,6 +165,7 @@ impl JwtService {
         Ok(token)
     }
 
+    // SPEC-8.23.3, SPEC-8.23.5
     /// Create refresh token
     /// Returns (token, token_hash) - hash is stored in database
     pub fn create_refresh_token(&self, user_id: Uuid) -> Result<(String, String), AppError> {
@@ -183,6 +191,7 @@ impl JwtService {
         Ok((token, token_hash))
     }
 
+    // SPEC-8.23.6
     /// Verify access token
     pub fn verify_access_token(&self, token: &str) -> Result<AccessTokenClaims, AppError> {
         let mut validation = Validation::new(Algorithm::HS256);
@@ -197,6 +206,7 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    // SPEC-8.23.6, SPEC-8.23.7
     /// Verify refresh token
     pub fn verify_refresh_token(&self, token: &str) -> Result<RefreshTokenClaims, AppError> {
         let mut validation = Validation::new(Algorithm::HS256);
@@ -215,6 +225,7 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    // SPEC-8.24.1, SPEC-8.23.5
     /// Create a 2FA challenge token (5 min expiry). BUNYIP-382: `remember`
     /// carries the paused sign-in's "remember me" choice into completion.
     pub fn create_2fa_challenge_token(
@@ -240,6 +251,7 @@ impl JwtService {
             .map_err(|e| AppError::internal(format!("Failed to create 2FA challenge token: {}", e)))
     }
 
+    // SPEC-8.24.3, SPEC-8.24.7: purpose check keeps flows apart
     /// Verify a 2FA challenge token
     pub fn verify_2fa_challenge_token(
         &self,
@@ -264,6 +276,7 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    // SPEC-8.24.5, SPEC-8.23.5
     /// BUNYIP-377: mint a signup timing-challenge token (signed issue time),
     /// valid for `max_age`. Embedded in a freshly-rendered register form and
     /// verified at `/register`.
@@ -282,6 +295,7 @@ impl JwtService {
         })
     }
 
+    // SPEC-8.24.6, SPEC-8.24.7
     /// BUNYIP-377: verify a signup timing-challenge token (signature, issuer,
     /// not-expired, purpose). Returns the claims so the caller can apply the
     /// minimum-fill-time check against `iat`.
@@ -308,6 +322,7 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    // SPEC-8.24.2, SPEC-8.23.5
     /// BUNYIP-373: create a login-approval challenge token (15 min expiry),
     /// bound to a pending suspicious login. Mirrors the 2FA challenge token but
     /// with a distinct purpose so the two flows can never be crossed.
@@ -344,6 +359,7 @@ impl JwtService {
         Ok((token, jti))
     }
 
+    // SPEC-8.24.3, SPEC-8.24.7: purpose check keeps flows apart
     /// BUNYIP-373: verify a login-approval challenge token.
     pub fn verify_login_approval_challenge_token(
         &self,
@@ -368,6 +384,7 @@ impl JwtService {
         Ok(token_data.claims)
     }
 
+    // SPEC-8.23.4
     /// Hash a token for database storage
     pub fn hash_token(&self, token: &str) -> String {
         let mut hasher = Sha256::new();

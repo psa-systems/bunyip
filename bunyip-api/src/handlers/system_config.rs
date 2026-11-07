@@ -60,6 +60,7 @@ pub struct SettingProvenance {
 
 /// Resolve each system setting's provenance through `stack`. Pure over the
 /// stack, so the caller decides which one (and reads it once).
+// SPEC-10.39.2: provenance carries no values
 fn provenance_from(stack: &ConfigStack) -> Vec<SettingProvenance> {
     SYSTEM_SETTINGS_KEYS
         .iter()
@@ -79,6 +80,7 @@ fn provenance_from(stack: &ConfigStack) -> Vec<SettingProvenance> {
         .collect()
 }
 
+// SPEC-10.39.1: values and provenance from one stack
 fn response_from(settings: &SystemSettings, stack: &ConfigStack) -> SystemConfigResponse {
     SystemConfigResponse {
         path: SystemSettings::directory().display().to_string(),
@@ -95,6 +97,7 @@ fn response_from(settings: &SystemSettings, stack: &ConfigStack) -> SystemConfig
 /// are system-level and environment-only, so the request cannot carry them and
 /// the handler has nothing to write. Any such key an old client sends is dropped
 /// by serde as an unknown field, never persisted.
+// SPEC-10.39.3: no field exists for system-level origins
 #[derive(Debug, Deserialize)]
 pub struct UpdateSystemConfigRequest {
     pub login_approval_enabled: Option<bool>,
@@ -106,6 +109,7 @@ pub struct UpdateSystemConfigRequest {
 /// Parse a comma/space separated list of ISO 3166-1 alpha-2 codes, validating
 /// each is two ASCII letters, so an invalid list is rejected before anything is
 /// written (BUNYIP-580 AC4).
+// SPEC-10.39.4: validate before any write
 fn parse_country_list(raw: &str) -> Result<Vec<String>, AppError> {
     let mut out = Vec::new();
     for token in raw.split(|c: char| c == ',' || c.is_whitespace()) {
@@ -125,6 +129,7 @@ fn parse_country_list(raw: &str) -> Result<Vec<String>, AppError> {
 }
 
 /// GET /v1/admin/system-config
+// SPEC-10.39.1: one stack for values and provenance
 pub async fn get_system_config(
     req: HttpRequest,
     _admin: AdminUser,
@@ -142,6 +147,7 @@ pub async fn get_system_config(
 
 /// The settings that differ between `old` and `new`: the declared key with its
 /// previous and new value as JSON (BUNYIP-789). Empty when nothing changed.
+// SPEC-10.39.6: one entry per changed key
 fn changed_settings(
     old: &SystemSettings,
     new: &SystemSettings,
@@ -181,6 +187,7 @@ fn changed_settings(
 
 /// Write one audit row per changed setting (BUNYIP-789) and one `info!` naming
 /// the changed keys. Writes nothing when nothing changed.
+// SPEC-10.39.6: nothing written when nothing changed
 async fn record_changes(
     pool: &PgPool,
     admin: &AdminUser,
@@ -209,6 +216,7 @@ async fn record_changes(
 }
 
 /// PUT /v1/admin/system-config
+// SPEC-10.39.3, SPEC-10.39.4, SPEC-10.39.5, SPEC-10.39.6, SPEC-10.39.7: validate then merge under the save lock
 pub async fn update_system_config(
     req: HttpRequest,
     pool: web::Data<PgPool>,

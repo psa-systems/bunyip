@@ -57,6 +57,7 @@ use crate::models::User;
 use crate::repositories::{MirzamConfigRepository, UserRepository};
 use crate::services::mirzam::{without_url, MIRZAM_HTTP_TIMEOUT};
 
+// SPEC-8.29.2
 /// The waits between attempts: three attempts in all, after 1s and then 4s,
 /// like the account-delete webhook's bounded retries.
 pub const MIRZAM_RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
@@ -67,6 +68,7 @@ pub const MIRZAM_CONSENT_NOTE: &str = "Account holder";
 /// How much of Mirzam's answer a recorded failure keeps.
 const ANSWER_SUMMARY_MAX_CHARS: usize = 200;
 
+// SPEC-8.28.6
 /// A Mirzam call that failed. `Display` is the admin-facing summary; it is
 /// built with the token and the addresses of the call already redacted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,6 +87,7 @@ impl MirzamCallError {
         }
     }
 
+    // SPEC-8.28.7
     /// Worth another attempt: no answer, a timeout, a rate limit or a server
     /// error. A refused token or a rejected body fails the same way again.
     pub fn is_transient(&self) -> bool {
@@ -157,6 +160,7 @@ struct AddBody<'a> {
     keep_unsubscribed: bool,
 }
 
+// SPEC-8.28.1, SPEC-8.28.2
 /// A small Mirzam API client: one attempt per call, no redirects followed
 /// (like the connection check, so a wrong saved address fails loudly), a short
 /// per-request timeout. Retrying is [`with_retries`]'s job.
@@ -191,6 +195,7 @@ impl MirzamClient {
         )
     }
 
+    // SPEC-8.28.3
     /// Send one request and return Mirzam's status, or the failure with the
     /// token and `addresses` redacted from anything that could carry them.
     async fn send(
@@ -227,6 +232,7 @@ impl MirzamClient {
         }
     }
 
+    // SPEC-8.28.4
     /// Replace the token and every address with a placeholder. Done on the
     /// whole text, before any truncation, so no prefix of either survives.
     fn redact(&self, text: &str, addresses: &[&str]) -> String {
@@ -242,6 +248,7 @@ impl MirzamClient {
         text
     }
 
+    // SPEC-8.28.8
     /// Add `email` to the list `list_slug`, confirmed at once on the account
     /// holder consent record. With `keep_unsubscribed`, an address that left
     /// the list is left as it is; without it, Mirzam re-subscribes it.
@@ -274,6 +281,7 @@ impl MirzamClient {
         }
     }
 
+    // SPEC-8.28.9
     /// Change the subscriber `old_email` to `new_email`, keeping every
     /// subscription. A taken new address and an unknown old one are outcomes,
     /// not errors: the caller decides the fallback.
@@ -295,6 +303,7 @@ impl MirzamClient {
         }
     }
 
+    // SPEC-8.28.10
     /// Unsubscribe `email` from the list `list_slug`. Never erases anything.
     pub async fn remove(
         &self,
@@ -314,6 +323,7 @@ impl MirzamClient {
     }
 }
 
+// SPEC-8.28.5
 /// One line of Mirzam's answer: its `error.message` (or `error.code`) when the
 /// body is Mirzam's JSON error shape, otherwise the text itself, whitespace
 /// collapsed and cut to [`ANSWER_SUMMARY_MAX_CHARS`].
@@ -348,6 +358,7 @@ fn summarize_answer(body: &str) -> String {
     }
 }
 
+// SPEC-8.29.1
 /// Run `op` until it succeeds, fails for good, or the attempts run out: one
 /// attempt plus one more after each of `delays`, retrying only failures that
 /// look transient.
@@ -391,6 +402,7 @@ pub struct AccountAdd {
 }
 
 impl AccountAdd {
+    // SPEC-8.29.4
     /// The sentences of the calls that failed for good, product updates first.
     pub fn errors(self) -> Vec<String> {
         [self.updates, self.notices]
@@ -400,6 +412,7 @@ impl AccountAdd {
     }
 }
 
+// SPEC-8.29.3, SPEC-8.29.4
 /// The "email verified" calls, also made on a reactivation, by the email
 /// change fallbacks and by the backfill: add `email` to the product-updates
 /// list keeping an unsubscribe (the reader may have left it themselves) and to
@@ -424,6 +437,7 @@ pub async fn add_account(
     AccountAdd { updates, notices }
 }
 
+// SPEC-8.29.5
 /// The "account deleted" calls: unsubscribe `email` from both lists.
 pub async fn remove_account(
     client: &MirzamClient,
@@ -443,6 +457,7 @@ pub async fn remove_account(
     errors
 }
 
+// SPEC-8.29.6
 /// The "email changed" calls for an account verified on both sides: change the
 /// address in place; when Mirzam already has the new address, add it to both
 /// lists and unsubscribe the old one; when Mirzam never had the old one, add
@@ -501,6 +516,7 @@ pub enum AccountChange {
 }
 
 impl AccountChange {
+    // SPEC-8.30.3
     /// Whether this change can lead to a call at all, decided before a task
     /// is spawned: an address that was never verified never reaches Mirzam.
     fn may_call(&self) -> bool {
@@ -534,6 +550,7 @@ pub trait MirzamTokenSource: Send + Sync {
     async fn token(&self) -> Result<Option<String>, String>;
 }
 
+// SPEC-8.30.1
 /// The settings a sync runs with, when the integration is on and complete.
 pub fn active_lists(row: &MirzamConfigRow) -> Option<MirzamLists> {
     (row.enabled && row.settings_complete()).then(|| MirzamLists {
@@ -542,6 +559,7 @@ pub fn active_lists(row: &MirzamConfigRow) -> Option<MirzamLists> {
     })
 }
 
+// SPEC-8.29.7
 /// The account's display name for Mirzam: first and last name, either alone,
 /// or none.
 pub fn account_display_name(user: &User) -> Option<String> {
@@ -614,6 +632,7 @@ impl MirzamSync {
         self
     }
 
+    // SPEC-8.30.2
     /// Mirror `change` onto Mirzam in a spawned task and return at once. The
     /// caller's request never waits for Mirzam.
     pub fn notify(&self, change: AccountChange) {
@@ -629,6 +648,7 @@ impl MirzamSync {
         });
     }
 
+    // SPEC-8.30.4
     /// Resolve once every task [`Self::notify`] spawned has finished. Tests
     /// await this instead of sleeping.
     pub async fn idle(&self) {
@@ -650,13 +670,16 @@ impl MirzamSync {
         let row = match MirzamConfigRepository::get(&self.pool).await {
             Ok(row) => row,
             Err(e) => {
+                // SPEC-8.30.6
                 tracing::warn!(error = %e, user_id = %user_id, "Mirzam sync: could not read mirzam_config; nothing sent");
                 return;
             }
         };
+        // SPEC-8.30.5
         let Some(lists) = active_lists(&row) else {
             return;
         };
+        // SPEC-8.30.5, SPEC-8.30.7
         let token = match self.token_source.token().await {
             Ok(Some(token)) if !token.trim().is_empty() => token,
             Ok(_) => return,
@@ -671,6 +694,7 @@ impl MirzamSync {
                 return;
             }
         };
+        // SPEC-8.30.6
         let plan = match self.plan(change).await {
             Ok(Some(plan)) => plan,
             Ok(None) => return,
@@ -679,6 +703,7 @@ impl MirzamSync {
                 return;
             }
         };
+        // SPEC-8.30.7
         let client = match MirzamClient::new(&row.base_url, &token) {
             Ok(client) => client,
             Err(e) => {
@@ -718,6 +743,7 @@ impl MirzamSync {
         self.finish(user_id, errors).await;
     }
 
+    // SPEC-8.30.8, SPEC-8.30.9, SPEC-8.30.10
     /// Turn a change into the calls it needs, or none.
     async fn plan(&self, change: AccountChange) -> Result<Option<Plan>, crate::errors::AppError> {
         Ok(match change {
@@ -766,6 +792,7 @@ impl MirzamSync {
         })
     }
 
+    // SPEC-8.30.11, SPEC-8.30.12
     /// Record the outcome: clear the stored failure after a clean run, or log
     /// and store this run's failures.
     async fn finish(&self, user_id: Uuid, errors: Vec<String>) {

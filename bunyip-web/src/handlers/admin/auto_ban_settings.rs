@@ -15,6 +15,7 @@ use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{button_class, error_box, error_box_for, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.12.9
 /// Upper bounds for the auto-ban fields. Threshold is a strike count; the two
 /// durations are seconds (window capped at 30 days, ban at 365 days) so a typo
 /// cannot persist an absurd value.
@@ -42,6 +43,7 @@ impl AutoBanFormValues {
     }
 }
 
+// SPEC-12.12.9
 /// Parse one auto-ban field: require a base-10 integer in `[1, max]`.
 fn parse_auto_ban_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
     let n: i64 = raw
@@ -57,6 +59,7 @@ fn parse_auto_ban_field(raw: &str, label: &str, max: i64) -> Result<i64, String>
     Ok(n)
 }
 
+// SPEC-12.12.8
 pub(super) fn auto_ban_settings_content(
     cfg: Result<&crate::api::types::AutoBanConfigResponse, &ApiError>,
     values: &AutoBanFormValues,
@@ -104,6 +107,7 @@ pub(super) fn auto_ban_settings_content(
     }
 }
 
+// SPEC-12.12.8
 pub async fn auto_ban_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -141,6 +145,7 @@ pub struct AutoBanForm {
     pub ban_duration_secs: String,
 }
 
+// SPEC-12.12.9, SPEC-12.12.10
 pub async fn auto_ban_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,

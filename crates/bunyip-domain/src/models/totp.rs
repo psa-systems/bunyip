@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.65, SPEC-7.2.66, SPEC-7.2.67, SPEC-7.2.68: encrypted secret, staged re-key, replay step, setup token.
 /// User TOTP configuration
 #[derive(Debug, Clone, FromRow)]
 pub struct UserTotp {
@@ -34,6 +35,7 @@ pub struct UserTotp {
     pub setup_token_expires_at: Option<DateTime<Utc>>,
 }
 
+// SPEC-7.2.69: only the hash is stored.
 /// Recovery code for 2FA backup
 #[derive(Debug, Clone, FromRow)]
 pub struct RecoveryCode {

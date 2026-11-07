@@ -21,6 +21,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.26.1, SPEC-9.26.2: tail key pattern; stays under the per-IP floor
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/host")

@@ -21,12 +21,14 @@ use crate::ui::{button_class, icon};
 /// stream without threading config through every handler call site.
 static SSE_API_ORIGIN: OnceLock<String> = OnceLock::new();
 
+// SPEC-13.6.3, SPEC-13.6.4: first install wins; trailing slashes stripped
 /// Install the public-facing API origin used by the SSE subscriber. Called once
 /// from `main` before any request is served. Idempotent.
 pub fn install_sse_api_origin(origin: impl Into<String>) {
     let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
 }
 
+// SPEC-13.6.4: localhost default when nothing was installed
 fn sse_api_origin() -> &'static str {
     SSE_API_ORIGIN
         .get()
@@ -42,16 +44,19 @@ fn sse_api_origin() -> &'static str {
 /// build timestamp when git is absent).
 static ASSET_VERSION_CELL: OnceLock<&'static str> = OnceLock::new();
 
+// SPEC-13.6.3: first install wins
 /// Install the consumer's build asset version. Called once from `main` before
 /// serving. Idempotent.
 pub fn install_asset_version(version: &'static str) {
     let _ = ASSET_VERSION_CELL.set(version);
 }
 
+// SPEC-13.6.2: dev when nothing was installed
 pub fn asset_version() -> &'static str {
     ASSET_VERSION_CELL.get().copied().unwrap_or("dev")
 }
 
+// SPEC-13.6.1: every /assets reference carries the build version
 /// A versioned `/assets/*` URL. Every reference in the markup goes through this -
 /// an unversioned one is served `immutable` and can never be updated.
 pub fn asset(path: &str) -> String {
@@ -63,11 +68,13 @@ pub fn asset(path: &str) -> String {
 /// through every response caller.
 static COMMUNITY_ENABLED: OnceLock<bool> = OnceLock::new();
 
+// SPEC-13.6.3: first install wins
 /// Install the community feature flag. Called once from `main`. Idempotent.
 pub fn install_community_enabled(enabled: bool) {
     let _ = COMMUNITY_ENABLED.set(enabled);
 }
 
+// SPEC-13.6.5: false until installed
 pub fn community_enabled() -> bool {
     *COMMUNITY_ENABLED.get().unwrap_or(&false)
 }
@@ -83,12 +90,14 @@ pub fn community_enabled() -> bool {
 /// so a consumer that never installs it leaves the feature dark.
 static ORGS_ENABLED: AtomicBool = AtomicBool::new(false);
 
+// SPEC-13.7.1: re-callable so an admin switch needs no restart
 /// Install the organizations and teams flag. Called from `main`; re-callable, so
 /// a consumer that re-reads the switch can publish the new value.
 pub fn install_orgs_enabled(enabled: bool) {
     ORGS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+// SPEC-13.7.1: false until installed
 pub fn orgs_enabled() -> bool {
     ORGS_ENABLED.load(Ordering::Relaxed)
 }
@@ -97,11 +106,13 @@ pub fn orgs_enabled() -> bool {
 /// Re-installable like [`ORGS_ENABLED`]; an absent key reads as OFF.
 static FEATURES: RwLock<BTreeMap<String, bool>> = RwLock::new(BTreeMap::new());
 
+// SPEC-13.7.2, SPEC-13.7.4: replaces the whole map; a poisoned lock is recovered
 /// Replace the whole feature map with a fresh reading.
 pub fn install_features(features: impl IntoIterator<Item = (String, bool)>) {
     *FEATURES.write().unwrap_or_else(|e| e.into_inner()) = features.into_iter().collect();
 }
 
+// SPEC-13.7.3, SPEC-13.7.4: absent key reads as off
 /// Whether feature `key` is switched on. Absent means off.
 pub fn feature_enabled(key: &str) -> bool {
     FEATURES
@@ -118,15 +129,18 @@ pub fn feature_enabled(key: &str) -> bool {
 /// Graph tags are never simply absent.
 static DEFAULT_SHARE_IMAGE: OnceLock<Option<String>> = OnceLock::new();
 
+// SPEC-13.6.3: first install wins
 /// Install the fallback share image. Called once from `main`. Idempotent.
 pub fn install_default_share_image(url: Option<String>) {
     let _ = DEFAULT_SHARE_IMAGE.set(url);
 }
 
+// SPEC-13.6.5: None until installed with a value
 pub fn default_share_image() -> Option<&'static str> {
     DEFAULT_SHARE_IMAGE.get().and_then(Option::as_deref)
 }
 
+// SPEC-13.8.1: empty record means omit the markup, no compiled-in colour
 /// BUNYIP-560/568: resolve one palette value (a `theme-color` meta, the `:root`
 /// ramp): the brand record's value when non-empty, else nothing at all. There is
 /// no second source and no compiled-in colour, so an unbranded deployment omits
@@ -140,6 +154,7 @@ pub fn palette_value(record: &str) -> Option<&str> {
     }
 }
 
+// SPEC-13.8.3: origin travels as a data attribute, never as script text
 /// BUNYIP-145 / BUNYIP-424: the browser-facing origin the dashboard's
 /// `EventSource` connects to, handed to the SSE client script as a `data-`
 /// attribute. Server values reach the client as passive markup, never as
@@ -150,6 +165,7 @@ pub fn sse_subscriber_script() -> Markup {
     }
 }
 
+// SPEC-13.8.2: data attributes replace inline handlers
 /// The light/dark and high-contrast toggle buttons. BUNYIP-424:
 /// `data-theme-toggle` / `data-contrast-toggle` replace inline click handlers;
 /// `assets/js/theme.js` binds them.
@@ -165,6 +181,7 @@ pub fn theme_controls(icon_class: &str) -> Markup {
     }
 }
 
+// SPEC-13.10.1, SPEC-13.10.2, SPEC-13.10.3, SPEC-13.10.4: count bubble or failure marker
 /// An optional attention badge on a [`NavItem`] (BUNYIP-919): a small count
 /// bubble, or a failure marker when the count could not be fetched. `Copy` so a
 /// consumer can hand the same badge to the sidebar and the below-`md`
@@ -179,6 +196,7 @@ pub enum NavBadge {
     Unavailable { tooltip: &'static str },
 }
 
+// SPEC-13.9.3: external marks an entry that leaves this app
 /// One navigation destination. The consumer builds the section lists (their
 /// routes, their icons); `external` marks an entry that leaves this app (opens
 /// in a new tab with a trailing glyph) instead of hardcoding any one route here.
@@ -191,6 +209,7 @@ pub struct NavItem {
     pub badge: Option<NavBadge>,
 }
 
+// SPEC-13.10.1, SPEC-13.10.2, SPEC-13.10.3, SPEC-13.10.4: 0 renders nothing; over 99 renders 99+; failure renders !
 /// Render a [`NavBadge`] as a small pill pushed to the row's end, reusing the
 /// same class vocabulary as [`crate::ui::badge`] so the committed CSS already
 /// carries every class. A zero count renders nothing (the row reads as "nothing
@@ -225,6 +244,7 @@ const NAV_ACTIVE: &str =
     "bg-gradient-to-r from-primary to-indigo-500 text-white shadow-md shadow-primary/20";
 const NAV_INACTIVE: &str = "text-muted-foreground hover:bg-accent hover:text-accent-foreground";
 
+// SPEC-13.9.1, SPEC-13.9.2, SPEC-13.9.3, SPEC-13.9.4: one renderer for the sidebar and the below-md list
 /// The nav rows, shared by the sidebar and the below-`md` disclosure
 /// (BUNYIP-547) so the two cannot drift in destinations, active styling, or
 /// external-link handling. Sections are divider-separated.
@@ -259,6 +279,7 @@ pub fn nav_links(sections: &[Vec<NavItem>], active: &str) -> Markup {
     }
 }
 
+// SPEC-13.11.1: viewport-pinned shell classes from md up
 /// BUNYIP-368: the authenticated shells pin themselves to the viewport from the
 /// `md` breakpoint up, so the sidebar and `<main>` are each their own scroll
 /// container. Below `md` there is no sidebar, so the page keeps its natural
@@ -269,6 +290,7 @@ pub const APP_SHELL_CLASS: &str = "flex min-h-screen md:h-screen md:overflow-hid
 pub const APP_COLUMN_CLASS: &str = "flex flex-1 flex-col overflow-hidden";
 pub const APP_MAIN_CLASS: &str = "relative flex-1 overflow-y-auto p-6";
 
+// SPEC-13.11.2: card with optional subtitle
 /// A single settings/content block: a card with a title, an optional subtitle,
 /// and a body. The building unit of the two-column admin block layout
 /// (BUNYIP-415), so sparse full-width screens group related controls into blocks
@@ -287,6 +309,7 @@ pub fn admin_block(title: &str, subtitle: Option<&str>, body: Markup) -> Markup 
     }
 }
 
+// SPEC-13.11.3: two columns from lg, one below
 /// Lay a set of blocks out in a responsive two-column grid that collapses to a
 /// single column below the `lg` breakpoint (BUNYIP-415). `items-start` so blocks
 /// of unequal height top-align, and `gap-6` matches the single-column rhythm.

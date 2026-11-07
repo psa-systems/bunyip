@@ -18,6 +18,7 @@
 //! re-exports core's `jwt` submodule so `crate::services::jwt` resolves,
 //! alongside the OIDC-local provider and the `dunite-oidc` key set.
 
+// SPEC-5.1.1: thin re-exports keep crate:: paths on the domain types
 pub mod config {
     pub use bunyip_domain::config::*;
 }
@@ -40,6 +41,7 @@ pub mod repositories {
     pub use bunyip_domain::repositories::*;
 }
 
+// SPEC-5.1.2: key and JWKS engine stays in dunite-oidc
 pub mod services {
     pub use bunyip_domain::services::*;
     // Re-export the submodule so `crate::services::jwt::...` paths resolve.

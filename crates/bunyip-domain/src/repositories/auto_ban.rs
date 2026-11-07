@@ -9,6 +9,7 @@ use crate::models::auto_ban::AutoBanConfigRow;
 pub struct AutoBanConfigRepository;
 
 impl AutoBanConfigRepository {
+    // SPEC-7.3.9, SPEC-7.3.12
     pub async fn get(pool: &PgPool) -> Result<AutoBanConfigRow, AppError> {
         let row =
             sqlx::query_as::<_, AutoBanConfigRow>("SELECT * FROM auto_ban_config WHERE id = 1")
@@ -19,6 +20,7 @@ impl AutoBanConfigRepository {
 
     /// Updates only the fields that are `Some`. `None` leaves the existing DB
     /// value unchanged (COALESCE), matching the tier/stripe config pattern.
+    // SPEC-7.3.13
     pub async fn update(
         pool: &PgPool,
         enabled: Option<bool>,

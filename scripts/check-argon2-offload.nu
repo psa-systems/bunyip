@@ -86,6 +86,7 @@ def print-hits [file: string, hits: table] {
 
 # Run every rule over one file's content. Returns the failure messages, so the
 # self-test can drive the same logic over synthetic sources.
+# SPEC-3.31.1, SPEC-3.31.2, SPEC-3.31.3, SPEC-3.31.4
 def check-source [file: string, content: string]: nothing -> list<string> {
     mut problems = []
 
@@ -133,6 +134,7 @@ def check-source [file: string, content: string]: nothing -> list<string> {
     $problems
 }
 
+# SPEC-3.31.5
 def self-test [] {
     let cases = [
         [name, file, content];

@@ -22,6 +22,7 @@ use crate::services::mirzam_sync::{
     account_display_name, add_account, AccountAdd, AddOutcome, MirzamClient, MirzamLists,
 };
 
+// SPEC-8.31.2
 /// The pause between two accounts. Each account is two calls, so this keeps a
 /// run near 8 requests a second, under Mirzam's 600 a minute per token.
 pub const MIRZAM_BACKFILL_PACE: Duration = Duration::from_millis(250);
@@ -40,6 +41,7 @@ pub enum BackfillResult {
 }
 
 impl BackfillResult {
+    // SPEC-8.31.4
     /// A failure outranks a kept unsubscribe, which outranks an add: the count
     /// an operator reads first is the one that needs them.
     pub fn of(add: &AccountAdd) -> Self {
@@ -68,6 +70,7 @@ pub struct BackfillReport {
 }
 
 impl BackfillReport {
+    // SPEC-8.31.4, SPEC-8.31.5
     fn record(&mut self, add: AccountAdd) {
         match BackfillResult::of(&add) {
             BackfillResult::Added => self.added += 1,
@@ -81,6 +84,7 @@ impl BackfillReport {
     }
 }
 
+// SPEC-8.31.6
 impl fmt::Display for BackfillReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
@@ -95,6 +99,7 @@ impl fmt::Display for BackfillReport {
     }
 }
 
+// SPEC-8.31.1, SPEC-8.31.2, SPEC-8.31.3
 /// Make the "email verified" calls for every live verified account, one
 /// account at a time with `pace` between them.
 pub async fn backfill(

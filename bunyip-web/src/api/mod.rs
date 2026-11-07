@@ -16,12 +16,14 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+// SPEC-11.13.1
 #[derive(Clone)]
 pub struct Api {
     base_v1: String,
     http: reqwest::Client,
 }
 
+// SPEC-11.13.5
 /// One API response: status, parsed JSON body, and any `Set-Cookie` headers to
 /// relay to the browser.
 pub struct Resp {
@@ -43,11 +45,13 @@ pub struct Resp {
 }
 
 impl Resp {
+    // SPEC-11.13.11
     pub fn ok(&self) -> bool {
         (200..300).contains(&self.status)
     }
 }
 
+// SPEC-11.14.1
 #[derive(Debug, Clone)]
 pub struct ApiError {
     pub status: u16,
@@ -68,6 +72,7 @@ pub struct ApiError {
     pub bucket: Option<String>,
 }
 
+// SPEC-11.14.6
 /// Standard human phrasing for a `Retry-After` duration in seconds
 /// (BUNYIP-314): under a minute rounds up to "a minute", an hour or more
 /// collapses to "an hour", and anything in between rounds the minutes up.
@@ -82,6 +87,7 @@ pub fn humanize_retry_after(secs: u64) -> String {
 }
 
 impl ApiError {
+    // SPEC-11.13.3
     fn network(msg: impl Into<String>) -> Self {
         ApiError {
             status: 0,
@@ -93,6 +99,7 @@ impl ApiError {
         }
     }
 
+    // SPEC-11.14.5: never leak transport or 5xx text to the browser.
     pub fn user_message(&self) -> String {
         // BUNYIP-506: a decode failure gets its own fixed line. The serde
         // message names internal fields and types and never reaches the page.
@@ -127,6 +134,7 @@ impl ApiError {
         }
     }
 
+    // SPEC-11.14.7
     /// BUNYIP-516: [`user_message`](Self::user_message) with bunyip-api's request
     /// id appended, for surfaces where the admin is the one who has to quote it
     /// to an operator. Unchanged when the call never reached the api, so a
@@ -138,6 +146,7 @@ impl ApiError {
         }
     }
 
+    // SPEC-11.14.8
     /// Verification-email-specific copy for a throttled (429) resend
     /// (BUNYIP-314). Falls back to the generic `user_message()` for any other
     /// error so non-429 handling is unchanged.
@@ -155,6 +164,7 @@ impl ApiError {
 }
 
 impl Api {
+    // SPEC-11.13.1
     pub fn new(api_url: &str) -> Self {
         Api {
             base_v1: format!("{}/v1", api_url.trim_end_matches('/')),
@@ -162,6 +172,7 @@ impl Api {
         }
     }
 
+    // SPEC-11.13.2, SPEC-11.13.3, SPEC-11.13.4, SPEC-11.13.6, SPEC-2.3.3
     /// Perform a request. Returns a `Resp` for any HTTP response (including 4xx/5xx);
     /// only transport failures are `Err`.
     pub async fn send(
@@ -218,10 +229,12 @@ impl Api {
         })
     }
 
+    // SPEC-11.13.11 (get, post, put, delete wrap send)
     pub async fn get(&self, path: &str, cookie: Option<&str>) -> Result<Resp, ApiError> {
         self.send(Method::GET, path, cookie, None).await
     }
 
+    // SPEC-11.13.8
     /// GET a root-level path (no `/v1` prefix). bunyip-api serves a handful of
     /// endpoints at the application root rather than inside `/v1`: `/health`,
     /// `/healthz`, `/version`. Those need to bypass the `base_v1` prefix the
@@ -264,6 +277,7 @@ impl Api {
             request_id,
         })
     }
+    // SPEC-11.13.11
     pub async fn post(
         &self,
         path: &str,
@@ -289,6 +303,7 @@ impl Api {
         self.send(Method::DELETE, path, cookie, body).await
     }
 
+    // SPEC-11.13.9, SPEC-11.13.3, SPEC-11.13.4, SPEC-11.13.7
     /// GET returning the raw `reqwest::Response` for streaming a binary body
     /// (the download proxy). Unlike `send`, the body is neither read nor parsed
     /// as JSON here, so a large asset streams through to the browser rather than
@@ -319,6 +334,7 @@ impl Api {
         }
     }
 
+    // SPEC-11.13.10, SPEC-11.13.3, SPEC-11.13.4, SPEC-11.13.6
     /// POST a multipart form (feedback submission).
     pub async fn post_form(
         &self,
@@ -367,6 +383,7 @@ impl Api {
     }
 }
 
+// SPEC-11.13.7, SPEC-2.3.3: no resolved address means no header, never an invented one.
 /// BUNYIP-311: attach the end-user's client IP as `X-Forwarded-For` on an
 /// outbound API request when the per-request middleware resolved one (i.e. the
 /// browser reached the BFF through a trusted proxy). When there is no resolved
@@ -390,6 +407,7 @@ fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
     rb
 }
 
+// SPEC-11.13.5
 /// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
 /// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
 /// the HTTP-date form is not produced by the API, so only the delta-seconds
@@ -408,6 +426,7 @@ fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<Strin
         .map(str::to_string)
 }
 
+// SPEC-11.13.5
 fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
@@ -415,6 +434,7 @@ fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64>
         .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
+// SPEC-11.14.1
 /// Turn the `{ success, error: { code, message } }` envelope into an `ApiError`.
 pub fn error_from(resp: &Resp) -> ApiError {
     let err = resp.body.get("error");
@@ -455,6 +475,7 @@ pub fn error_from(resp: &Resp) -> ApiError {
     }
 }
 
+// SPEC-11.14.2
 /// `&resp.body["data"]` if 2xx, else the error envelope.
 pub fn ok_data(resp: &Resp) -> Result<&Value, ApiError> {
     if resp.ok() {
@@ -464,6 +485,7 @@ pub fn ok_data(resp: &Resp) -> Result<&Value, ApiError> {
     }
 }
 
+// SPEC-11.14.4
 /// The `code` every decode failure carries; the views branch on it.
 pub const DECODE_ERROR_CODE: &str = "DECODE_ERROR";
 
@@ -472,6 +494,7 @@ pub const DECODE_ERROR_CODE: &str = "DECODE_ERROR";
 pub const DECODE_ERROR_MESSAGE: &str =
     "We could not read the response from the server. Please try again.";
 
+// SPEC-11.14.4: a 2xx that will not decode is a deployment defect, logged at error.
 /// Build the `DECODE_ERROR` for a 2xx body that did not match `T`, logging the
 /// endpoint, the target type and the serde message first (BUNYIP-506). A 2xx the
 /// client cannot read is a deployment defect (a bunyip-web / bunyip-api version
@@ -495,6 +518,7 @@ pub fn decode_error<T>(path: &str, e: &serde_json::Error) -> ApiError {
     }
 }
 
+// SPEC-11.14.3, SPEC-11.14.4
 /// Deserialize `resp.body["data"]` into `T` (or the error envelope).
 pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     if resp.ok() {
@@ -508,6 +532,7 @@ pub fn parse<T: DeserializeOwned>(resp: Resp) -> Result<T, ApiError> {
     }
 }
 
+// SPEC-11.14.3
 /// Deserialize the WHOLE 2xx body into `T` (or the error envelope).
 ///
 /// BUNYIP-515: `GET /v1/pricing` answers with a bare payload rather than the
@@ -531,6 +556,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    // SPEC-11.13.1
     /// BUNYIP-559 F12: the BFF hop is only compressed while reqwest carries the
     /// `gzip` feature, which is what makes `Client::new()` advertise
     /// `Accept-Encoding: gzip` and decode the reply. Nothing in this crate's

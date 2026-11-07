@@ -8,6 +8,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.24.6: public branding; stays under the per-IP floor
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.route("/branding", web::get().to(handlers::public_branding))
         // BUNYIP-560: the brand images (mark, mascot, derived favicon set).

@@ -1,3 +1,4 @@
+# SPEC-14.3.1: git deps fetched through the git CLI
 # Use the system git CLI (not libgit2) to fetch git dependencies, so cargo
 # honours the configured credential helper / token when pulling the private
 # dunite crates from https://dev.a8n.run/psa-systems/dunite. Without this,
@@ -5,6 +6,7 @@
 [net]
 git-fetch-with-cli = true
 
+# SPEC-14.3.2: offline sqlx macros resolve from the committed cache
 # Build the compile-time sqlx::query! macros (in the bunyip-oidc vertical)
 # against the committed offline cache in .sqlx/ instead of a live database.
 # Regenerate the cache with `cargo sqlx prepare` after changing any query.

@@ -38,6 +38,7 @@ use super::host_auth::{
 };
 
 /// The caps and label this route authenticates under.
+// SPEC-10.37.5: secrets-route budgets
 const CAPS: HostRouteCaps = HostRouteCaps {
     read: &RateLimitConfig::HOST_SECRET_READ,
     auth_failures: &RateLimitConfig::HOST_SECRET_AUTH_FAILURES,
@@ -45,6 +46,7 @@ const CAPS: HostRouteCaps = HostRouteCaps {
 };
 
 /// GET /v1/host/secrets/{key}
+// SPEC-10.37.1, SPEC-10.37.6, SPEC-10.37.7, SPEC-10.37.8, SPEC-10.37.9: entitlement before existence
 pub async fn get_host_secret(
     req: HttpRequest,
     pool: web::Data<PgPool>,

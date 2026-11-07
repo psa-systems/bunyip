@@ -14,6 +14,7 @@ use crate::repositories::{
 use crate::responses::{get_request_id, success};
 use crate::services::AccessTokenClaims;
 
+// SPEC-10.6.1, SPEC-10.6.2: fresh row, not the claim; a failed read is logged and falls back.
 /// BUNYIP-229: resolve `has_member_access` from the DB user row instead of
 /// the JWT claim cache. The JWT was minted at login (or last refresh) and
 /// holds a snapshot of `trial_ends_at`, `lifetime_member`, `membership_status`
@@ -68,6 +69,7 @@ async fn resolve_has_member_access(req: &HttpRequest, pool: &PgPool, user: &Opti
     }
 }
 
+// SPEC-10.6.3: public group metadata.
 /// GET /v1/application-groups
 /// List application groups (display metadata) so the web layer can render
 /// applications grouped under their group heading. Public: groups carry no
@@ -81,6 +83,7 @@ pub async fn list_application_groups(
     Ok(success(serde_json::json!({ "groups": groups }), request_id))
 }
 
+// SPEC-10.6.5: open, admin or entitled.
 /// The per-caller visibility gate for the catalog list. An open product is
 /// always visible, an admin always sees everything, and a signed-in caller
 /// sees a restricted product only when their entitlement id set carries it.
@@ -94,6 +97,7 @@ fn catalog_visible(
     !app.requires_entitlement || is_admin || entitled_ids.contains(&app.id)
 }
 
+// SPEC-10.6.4, SPEC-10.6.5: hosted active apps only, restricted ones filtered per caller.
 /// GET /v1/applications
 /// List active HOSTED applications (hub launch tiles). Catalog-only
 /// distribution products are excluded; they surface via /v1/downloads and
@@ -149,6 +153,7 @@ pub async fn list_applications(
     ))
 }
 
+// SPEC-10.6.6: a restricted app the caller may not use is indistinguishable from a missing one.
 /// GET /v1/applications/{slug}
 /// Get a specific application by slug
 pub async fn get_application(

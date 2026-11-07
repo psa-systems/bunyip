@@ -1,9 +1,8 @@
 # Specification roadmap
 
 `docs/specification.md` is being converted from an overview document into a normative, numbered requirement set
-(BUNYIP-1023). The conversion is split by module group, one PR per group, so each change stays small enough to
-read, write, and review: roughly 140k lines of source cannot be covered in one PR, and a requirement for one
-module tends to cross several files, so the split is by module group rather than by individual file.
+(BUNYIP-1023). The conversion is split by module group into one issue per group, because a requirement for one
+module tends to cross several files. The groups below were written in parallel and landed together in one PR.
 
 This page holds the durable plan and the links between the sections and the issues that write them. It does not
 restate status: current progress lives on the issues themselves, not here.
@@ -25,17 +24,13 @@ restate status: current progress lives on the issues themselves, not here.
 | 12 | Web handlers | BUNYIP-1033 |
 | 13-14 | Shared web UI crate, packaging and final reconciliation | BUNYIP-1034 |
 
-Every section issue is linked `is required for` / `relates to` the parent epic, BUNYIP-1023, which tracks the
-conversion as a whole.
+Every section issue is a subtask of the parent epic, BUNYIP-1023, which tracks the conversion as a whole.
 
 ## Sequencing
 
-Sections 1-2 (this issue) go first because every later section cites the id scheme and the workspace/process-model
-facts they establish. The remaining sections have no further ordering constraint between them: a module group's
-requirements only need its own files plus whatever sections 1-2 already fixed, so BUNYIP-1025 through BUNYIP-1034
-can proceed in parallel once this issue merges. BUNYIP-1034 is last by convention, not by a hard dependency: it
-also does a final reconciliation pass (the three completeness tables across the whole document) once every other
-section has landed.
+Sections 1-2 come first because every later section cites the id scheme and the workspace/process-model facts they
+establish. The remaining sections have no ordering constraint between them: a module group's requirements only need
+its own files plus whatever sections 1-2 fixed.
 
 ## Convention
 

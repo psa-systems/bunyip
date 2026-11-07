@@ -44,6 +44,7 @@ impl MailTransport {
     /// string. `smtp_password` is never formatted in. Taking `config` here
     /// rather than at each call site is what makes the context unskippable: a
     /// new send site cannot compile without passing it.
+    // SPEC-8.18.3
     async fn send(&self, config: &EmailConfig, message: Message) -> Result<(), AppError> {
         let sent = match self {
             MailTransport::Smtp(t) => t.send(message).await.map(|_| ()).map_err(|e| e.to_string()),
@@ -74,6 +75,7 @@ struct EmailRuntime {
 /// the TLS layer, or the credentials) instead of a single generic error, which
 /// is the whole point of the Test connection button: PMS-669 was a rotated
 /// password that silently broke delivery, and only the Auth stage names that.
+// SPEC-8.19.9
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmtpTestStage {
     /// TCP reach to `host:port` (host unreachable / connection refused / DNS).
@@ -121,6 +123,7 @@ pub struct SmtpTestError {
 /// `@example.*`) never reach SMTP: the reserved-TLD RFCs guarantee no DNS
 /// resolver returns MX records for them, so handing one to a relay produces
 /// a bounce every time.
+// SPEC-8.18.5
 pub fn is_reserved_recipient(address: &str) -> bool {
     let Some((_, domain)) = address.rsplit_once('@') else {
         return false;
@@ -168,6 +171,7 @@ impl EmailService {
     ///
     /// Host/port/tls/credentials are baked into the transport at build time, so
     /// this is reused by both `new()` and `reload()` to (re)construct it.
+    // SPEC-8.18.1
     fn build_transport(config: &EmailConfig) -> Result<Option<MailTransport>, AppError> {
         if !config.enabled {
             return Ok(None);
@@ -214,6 +218,7 @@ impl EmailService {
     /// Callers pass the currently *saved* config; no mail is delivered to any
     /// recipient. `config.enabled` is intentionally ignored: the point is to
     /// validate the credentials even before (or while) sending is switched on.
+    // SPEC-8.19.8, SPEC-8.19.9, SPEC-8.19.10: probe only: no message is sent
     pub async fn test_connection(config: &EmailConfig) -> Result<(), SmtpTestError> {
         // Bound every network step so an unresponsive relay cannot hang the
         // request (and, with the endpoint's rate limit, cannot be used to tie
@@ -315,6 +320,7 @@ impl EmailService {
     /// rejection as [`SmtpTestStage::Auth`]. Split out from `test_connection` so
     /// the success and authentication-failure paths are unit-testable against an
     /// in-process mock relay without standing up TLS.
+    // SPEC-8.19.10
     async fn authenticate(
         conn: &mut AsyncSmtpConnection,
         username: &str,
@@ -340,6 +346,7 @@ impl EmailService {
     /// from `main` before the listener binds, alongside the same list handed
     /// to `MailerRelay`, so the read on every EmailService send path and the
     /// read on the relay path consult the one table.
+    // SPEC-8.18.11
     pub fn set_suppression_list(&self, list: std::sync::Arc<dyn SuppressionList>) {
         *self.suppression.write().unwrap_or_else(|e| e.into_inner()) = Some(list);
     }
@@ -348,6 +355,7 @@ impl EmailService {
     /// attached (dev/test construction), never a silent guess when the
     /// attached list errors: the caller surfaces that failure rather than
     /// sending to an address that could not be checked.
+    // SPEC-8.18.4: an unreadable list is an error, never a send
     async fn is_suppressed(&self, address: &str) -> Result<bool, AppError> {
         let list = self
             .suppression
@@ -368,6 +376,7 @@ impl EmailService {
     /// BUNYIP-561: `app_name` is overridden from the branding record when one
     /// is attached, so every subject and the template context follow the admin
     /// panel rather than the `APP_NAME` fixed at construction.
+    // SPEC-8.18.11
     fn config(&self) -> EmailConfig {
         let mut config = self
             .runtime
@@ -397,6 +406,7 @@ impl EmailService {
 
     /// Hot-reload the SMTP transport + config (e.g. after an admin update). Rebuilds
     /// the transport because host/port/tls/credentials are baked into it at build time.
+    // SPEC-8.18.2
     pub fn reload(&self, config: EmailConfig) -> Result<(), AppError> {
         let transport = Self::build_transport(&config)?;
         let mut rt = self.runtime.write().expect("EmailService lock poisoned");
@@ -406,6 +416,7 @@ impl EmailService {
     }
 
     /// Create a new email service
+    // SPEC-8.18.12
     pub fn new(config: EmailConfig) -> Result<Self, AppError> {
         let transport = Self::build_transport(&config)?;
 
@@ -729,6 +740,7 @@ impl EmailService {
     /// `bunyip-api/src/handlers/mailer.rs` fails the build if one does, because
     /// a stub wired into a running deployment would swallow every email while
     /// reporting success.
+    // SPEC-8.18.12: test seam: no binary may call it
     pub fn new_capturing(config: EmailConfig) -> (Self, AsyncStubTransport) {
         let stub = AsyncStubTransport::new_ok();
         let service = Self {
@@ -746,6 +758,7 @@ impl EmailService {
     /// The `<uuid@domain>` Message-ID (header form and bare form), with `domain`
     /// taken from `config.from_email` so it aligns with the `From:` / DKIM `d=`
     /// domain (BUNYIP-334).
+    // SPEC-8.18.6
     fn new_message_id(config: &EmailConfig) -> (String, String) {
         let domain = config
             .from_email
@@ -771,6 +784,7 @@ impl EmailService {
     /// dev-mode no-op the template senders take: the calling app hands off
     /// responsibility for the message, so "nothing was sent" must never be
     /// reported to it as success.
+    // SPEC-8.18.7, SPEC-8.18.8
     pub async fn send_relay(
         &self,
         to: &str,
@@ -852,6 +866,7 @@ impl EmailService {
     /// (`550 5.7.1 RfcMessageNonCompliant`). lettre's builder synthesizes a
     /// `Date` but never a `Message-ID`, so we set it explicitly here rather
     /// than at each call site, since every send routes through this method.
+    // SPEC-8.18.6
     fn build_message(
         &self,
         config: &EmailConfig,
@@ -916,6 +931,7 @@ impl EmailService {
     }
 
     /// Send an email
+    // SPEC-8.18.4: single choke point for template senders
     async fn send_email(
         &self,
         config: &EmailConfig,
@@ -970,6 +986,7 @@ impl EmailService {
     /// Send an app-composed reply to a support ticket, threaded onto the
     /// original via In-Reply-To / References. Returns the bare Message-ID of the
     /// sent reply, to store on the outbound support message (BUNYIP-571).
+    // SPEC-8.18.9
     pub async fn send_support_reply(
         &self,
         to: &str,
@@ -1055,6 +1072,7 @@ impl EmailService {
     }
 
     /// Send magic link email
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.3, SPEC-8.19.4
     pub async fn send_magic_link(&self, email: &str, token: &str) -> Result<(), AppError> {
         let config = self.config();
         let magic_link_url = format!("{}/magic-link?token={}", config.base_url, token);
@@ -1088,6 +1106,7 @@ impl EmailService {
     /// request came from (BUNYIP-397), or `None` when it could not be resolved
     /// (admin-initiated reset, a local IP, or no GeoIP DB); the template shows
     /// the "(from ...)" clause only when it is present.
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.3, SPEC-8.19.4, SPEC-8.19.5
     pub async fn send_password_reset(
         &self,
         email: &str,
@@ -1126,6 +1145,7 @@ impl EmailService {
     /// onboarding page fires the verify step), while magic-link signup verifies
     /// it as part of the flow, so that path passes `true` to suppress the prompt
     /// (BUNYIP-570).
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_account_created(
         &self,
         email: &str,
@@ -1153,6 +1173,7 @@ impl EmailService {
     }
 
     /// Send password changed notification email
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_password_changed(&self, email: &str) -> Result<(), AppError> {
         let config = self.config();
         if !config.enabled {
@@ -1177,6 +1198,7 @@ impl EmailService {
     /// BUNYIP-366: alert the user that a sign-in came from a country they have
     /// not signed in from before. Best-effort at the call site (login must never
     /// fail if this does not send).
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_new_login_location(
         &self,
         email: &str,
@@ -1213,6 +1235,7 @@ impl EmailService {
     /// code is a bearer credential, so like the magic link it is never logged at
     /// INFO and is emitted at DEBUG only under EMAIL_LOG_TOKENS. Best-effort at
     /// the call site (login must never fail if this does not send).
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.4, SPEC-8.19.5: ttl_minutes mirrors the code expiry
     pub async fn send_login_approval_code(
         &self,
         email: &str,
@@ -1247,6 +1270,7 @@ impl EmailService {
     }
 
     /// Send welcome email after membership activation
+    // SPEC-8.19.1, SPEC-8.19.4, SPEC-8.19.6
     pub async fn send_welcome(&self, email: &str, price_cents: i32) -> Result<(), AppError> {
         let config = self.config();
         if !config.enabled {
@@ -1270,6 +1294,7 @@ impl EmailService {
     }
 
     /// Send payment failed email
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_payment_failed(
         &self,
         email: &str,
@@ -1304,6 +1329,7 @@ impl EmailService {
     }
 
     /// Send grace period reminder email
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_grace_period_reminder(
         &self,
         email: &str,
@@ -1338,6 +1364,7 @@ impl EmailService {
     }
 
     /// Send membership canceled email
+    // SPEC-8.19.1, SPEC-8.19.4, SPEC-8.19.6
     pub async fn send_membership_canceled(
         &self,
         email: &str,
@@ -1365,6 +1392,7 @@ impl EmailService {
     }
 
     /// Send email change verification email (to new address)
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.3, SPEC-8.19.4, SPEC-8.19.7
     pub async fn send_email_change_verify(&self, email: &str, token: &str) -> Result<(), AppError> {
         let config = self.config();
         let verify_url = format!("{}/settings/confirm-email?token={}", config.base_url, token);
@@ -1392,6 +1420,7 @@ impl EmailService {
     }
 
     /// Send email change notification (to old address)
+    // SPEC-8.19.1, SPEC-8.19.4, SPEC-8.19.7
     pub async fn send_email_change_notification(
         &self,
         old_email: &str,
@@ -1419,6 +1448,7 @@ impl EmailService {
     }
 
     /// Send email verification link
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.3, SPEC-8.19.4
     pub async fn send_email_verify(&self, email: &str, token: &str) -> Result<(), AppError> {
         let config = self.config();
         let verify_url = format!("{}/settings/verify-email?token={}", config.base_url, token);
@@ -1447,6 +1477,7 @@ impl EmailService {
     }
 
     /// Send payment succeeded (receipt) email
+    // SPEC-8.19.1, SPEC-8.19.4, SPEC-8.19.6
     pub async fn send_payment_succeeded(
         &self,
         email: &str,
@@ -1474,6 +1505,7 @@ impl EmailService {
     }
 
     /// Notify admins about newly submitted feedback
+    // SPEC-8.19.1, SPEC-8.19.4, SPEC-8.19.7: first send error stops the loop
     pub async fn send_admin_feedback_notification(
         &self,
         admin_url: &str,
@@ -1507,6 +1539,7 @@ impl EmailService {
     }
 
     /// Send a feedback response to the original submitter
+    // SPEC-8.19.1, SPEC-8.19.4
     pub async fn send_feedback_response(
         &self,
         email: &str,
@@ -1541,6 +1574,7 @@ impl EmailService {
     }
 
     /// Send admin invite email
+    // SPEC-8.19.1, SPEC-8.19.2, SPEC-8.19.3, SPEC-8.19.4
     pub async fn send_admin_invite(&self, email: &str, token: &str) -> Result<(), AppError> {
         let config = self.config();
         let invite_url = format!("{}/invite/accept?token={}", config.base_url, token);
@@ -1577,6 +1611,7 @@ impl EmailService {
     /// Unlike every other sender, a disabled email service is an error here
     /// rather than a silent no-op: the operator clicked this to learn whether
     /// mail actually leaves, so "nothing was sent" must never read as success.
+    // SPEC-8.18.10, SPEC-8.19.4: a disabled service is an error, not a silent no-op
     pub async fn send_test_message(&self, to: &str) -> Result<(), AppError> {
         let config = self.config();
         if !config.enabled || self.transport().is_none() {

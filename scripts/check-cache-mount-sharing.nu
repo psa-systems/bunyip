@@ -26,6 +26,7 @@
 const MOUNT_PATTERN = '--mount=type=cache[^\s\\]*'
 
 # Problems in one Dockerfile, as human-readable lines.
+# SPEC-3.14.1, SPEC-3.14.2
 def check-dockerfile [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -57,6 +58,7 @@ def dockerfiles []: nothing -> list<string> {
     ^git ls-files | lines | where {|f| ($f | path basename) =~ 'Dockerfile' }
 }
 
+# SPEC-3.14.5
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

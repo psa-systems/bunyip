@@ -27,20 +27,24 @@ use std::time::{Duration, Instant};
 
 use crate::api::ApiError;
 
+// SPEC-11.8.1
 /// Freshness window for the cached pricing payload. Short, so an admin change
 /// surfaces quickly; the upstream API adds its own bound.
 pub const PRICING_CACHE_TTL_SECS: u64 = 30;
 
+// SPEC-11.8.1
 /// Freshness window for the public chrome's application list. Same as pricing:
 /// both ride on every public render and change only when an admin edits the
 /// catalog.
 pub const APPLICATIONS_CACHE_TTL_SECS: u64 = 30;
 
+// SPEC-11.8.1
 /// Freshness window for the `/docs` hub's documented-application list
 /// (BUNYIP-635). Same as the application list: it moves only when an admin
 /// publishes a documentation page or deactivates an application.
 pub const DOCUMENTED_APPS_CACHE_TTL_SECS: u64 = 30;
 
+// SPEC-11.8.1
 /// Freshness window for the setup-status flags. Longer, because they change
 /// only when an admin configures SMTP or Stripe, and bunyip-api hot-reloads
 /// both (`StripeService::reload`), so the change still lands with no restart.
@@ -61,6 +65,7 @@ pub enum CacheSource {
     NoValueOnError,
 }
 
+// SPEC-11.8.3: fetch_gate single-flights concurrent misses.
 pub struct TtlCache<T> {
     ttl: Duration,
     /// The upstream path, named in the failure log so the operator knows which
@@ -95,6 +100,7 @@ impl<T: Send + Sync> TtlCache<T> {
         }
     }
 
+    // SPEC-11.8.3, SPEC-11.8.5
     /// The cached value if still fresh, otherwise the result of `fetch`.
     ///
     /// The read lock is never held across the await. A fetch error is logged
@@ -113,6 +119,7 @@ impl<T: Send + Sync> TtlCache<T> {
         value
     }
 
+    // SPEC-11.8.2: fresh means strictly younger than the TTL.
     /// The cached value, if a read within the TTL is already sitting in the
     /// slot.
     fn fresh_hit(&self) -> Option<Arc<T>> {
@@ -121,6 +128,7 @@ impl<T: Send + Sync> TtlCache<T> {
         (at.elapsed() < self.ttl).then(|| Arc::clone(hit))
     }
 
+    // SPEC-11.8.2, SPEC-11.8.3, SPEC-11.8.5
     /// [`Self::get_or_fetch`] plus the [`CacheSource`], for tests.
     pub async fn get_or_fetch_traced<F, Fut>(
         &self,
@@ -160,6 +168,7 @@ impl<T: Send + Sync> TtlCache<T> {
                 } else {
                     CacheSource::NoValueOnError
                 };
+                // SPEC-11.8.4: a failed fetch is always logged before stale or Err is returned.
                 tracing::error!(
                     endpoint = self.endpoint,
                     target = self.target,

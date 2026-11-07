@@ -25,6 +25,7 @@ use crate::services::{
 /// The blob cache, parameterised over Bunyip's Postgres blob-cache store.
 type AppBlobCache = BlobCache<OciBlobCacheRepository>;
 
+// SPEC-6.10.12: one digest rule for the pull path and the admin refresh path
 /// Resolve a manifest's content digest, computing the sha256 fallback over the
 /// raw bytes when the upstream response omitted a digest. Single source for
 /// both the member pull path and the admin cache-refresh path.
@@ -36,8 +37,10 @@ pub(crate) fn resolve_manifest_digest(digest: String, bytes: &[u8]) -> String {
     }
 }
 
+// SPEC-6.10.7: used only when the client sends no Accept header
 const DEFAULT_ACCEPT: &str = "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json";
 
+// SPEC-6.9.1, SPEC-6.9.2: auth-only probe; any extraction failure arrives as None and is a 401
 /// GET /v2/  - version probe. Requires auth but no scope.
 pub async fn version_probe(user: Option<OciBearerUser>) -> Result<HttpResponse, OciError> {
     match user {
@@ -48,6 +51,7 @@ pub async fn version_probe(user: Option<OciBearerUser>) -> Result<HttpResponse, 
     }
 }
 
+// SPEC-6.10.1, SPEC-6.10.9: GET/HEAD manifest: scope, app, entitlement, reference, metering, cache
 /// GET/HEAD /v2/{slug}/manifests/{reference}
 pub async fn get_manifest(
     req: HttpRequest,
@@ -60,11 +64,13 @@ pub async fn get_manifest(
     counter: web::Data<Arc<OciPullDailyCountRepository>>,
 ) -> Result<HttpResponse, OciError> {
     let (slug, reference) = path.into_inner();
+    // SPEC-6.10.1: scope mismatch is audited and answered DENIED
     if user.assert_scope(&slug).is_err() {
         audit_denied_scope(pool.get_ref(), &req, &user, &slug).await;
         return Err(OciError::Denied);
     }
 
+    // SPEC-6.10.2: no upstream client means the registry is off for this app (404)
     let client = client
         .as_ref()
         .as_ref()
@@ -76,6 +82,7 @@ pub async fn get_manifest(
         .ok_or_else(|| internal_fault("resolve the manifest cache from the app data"))?
         .clone();
 
+    // SPEC-6.10.3, SPEC-6.10.6: inactive or non-pullable apps are NAME_UNKNOWN
     let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
         .await
         .internal_ctx(|| format!("load the application for manifest slug {slug}"))?
@@ -83,6 +90,7 @@ pub async fn get_manifest(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    // SPEC-6.10.4: entitlement gate precedes cache and upstream
     assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let pinned = app
         .pinned_image_tag
@@ -95,6 +103,7 @@ pub async fn get_manifest(
     // BUNYIP-386: allow the pinned tag, any sha256 digest, OR any recorded
     // non-yanked historical version (application_versions), so a pin bump no
     // longer makes older tags unpullable through the proxy.
+    // SPEC-6.10.5, SPEC-6.10.6: pinned tag, any digest, or a recorded non-yanked version
     let is_digest = reference.starts_with("sha256:");
     if !is_digest
         && reference != pinned
@@ -124,10 +133,13 @@ pub async fn get_manifest(
     // concurrency-only acquire (PSA-42), so a multi-arch pull's by-digest
     // platform-manifest follow-ups stay within concurrent_manifests_per_user
     // without counting toward the daily cap.
+    // SPEC-6.11.1: only tag-addressed requests count toward the daily cap
     let is_head = req.method() == actix_web::http::Method::HEAD;
     let counts_as_pull = should_meter(&reference);
     // Every request holds a concurrency slot for the duration of the fetch;
     // only tag-addressed (metered) requests also count toward the daily cap.
+    // SPEC-6.11.2, SPEC-6.11.4, SPEC-6.11.5, SPEC-6.11.6:
+    //  tag requests take a slot and the daily cap; denials are audited 429s
     let _guard = if counts_as_pull {
         match limiter
             .acquire(counter.get_ref().as_ref(), user.claims.sub)
@@ -160,6 +172,7 @@ pub async fn get_manifest(
     } else {
         // Not metered (digest-addressed), but still take a concurrency slot so
         // the by-digest follow-ups of a multi-arch pull stay bounded (PSA-42).
+        // SPEC-6.11.3: digest follow-ups stay concurrency-bounded without using the cap
         match limiter.acquire_concurrency_only(user.claims.sub) {
             Ok(g) => g,
             Err(OciLimitDenial::Concurrency) => {
@@ -175,8 +188,10 @@ pub async fn get_manifest(
         }
     };
 
+    // SPEC-6.10.13: recorded before the cache or upstream is consulted
     audit_requested(pool.get_ref(), &req, &user, &app.id, &reference).await;
 
+    // SPEC-6.10.7: client Accept wins; otherwise the default media-type list
     let accept = req
         .headers()
         .get(actix_web::http::header::ACCEPT)
@@ -184,6 +199,8 @@ pub async fn get_manifest(
         .unwrap_or(DEFAULT_ACCEPT)
         .to_string();
 
+    // SPEC-6.10.8, SPEC-6.10.10, SPEC-6.10.11:
+    //  cache miss fetches upstream; NotFound is 404, other failures 502 and audited
     let manifest: Arc<CachedManifest> = if let Some(hit) = cache.get(app.id, &reference).await {
         hit
     } else {
@@ -231,6 +248,7 @@ pub async fn get_manifest(
     // in the history even if the admin-bump append missed it, and it fills the
     // resolved digest. Best-effort: a history write never fails a pull. Digest
     // references are not versions, so skip them.
+    // SPEC-6.12.1, SPEC-6.12.2: self-heal the version history; a failed write never fails the pull
     if !is_digest {
         if let Err(e) = ApplicationRepository::record_version(
             pool.get_ref(),
@@ -244,6 +262,7 @@ pub async fn get_manifest(
         }
     }
 
+    // SPEC-6.10.13: completion record carries the resolved digest
     audit_completed(
         pool.get_ref(),
         &req,
@@ -255,8 +274,10 @@ pub async fn get_manifest(
     .await;
     // Release the concurrency slot (held by every request) before cloning the
     // response bytes, so a slow client read does not hold it.
+    // SPEC-6.11.7: free the slot before building the response so slow readers do not hold it
     drop(_guard);
 
+    // SPEC-6.10.9: headers always; body only for GET
     let mut resp = HttpResponse::Ok();
     resp.insert_header(("Content-Type", manifest.media_type.clone()));
     resp.insert_header(("Docker-Content-Digest", manifest.digest.clone()));
@@ -268,6 +289,7 @@ pub async fn get_manifest(
     }
 }
 
+// SPEC-6.13.1, SPEC-6.13.3, SPEC-6.13.4: GET/HEAD blob: same gates as manifests, no pinned-tag allow-list
 /// GET/HEAD /v2/{slug}/blobs/{digest}
 pub async fn get_blob(
     req: HttpRequest,
@@ -277,16 +299,19 @@ pub async fn get_blob(
     blob_cache: web::Data<Option<Arc<AppBlobCache>>>,
 ) -> Result<HttpResponse, OciError> {
     let (slug, digest) = path.into_inner();
+    // SPEC-6.13.1: same scope check and audit as the manifest endpoint
     if user.assert_scope(&slug).is_err() {
         audit_denied_scope(pool.get_ref(), &req, &user, &slug).await;
         return Err(OciError::Denied);
     }
+    // SPEC-6.13.2: a missing blob cache is a wiring fault: logged 500
     let blob_cache = blob_cache
         .as_ref()
         .as_ref()
         .ok_or_else(|| internal_fault("resolve the blob cache from the app data"))?
         .clone();
 
+    // SPEC-6.13.1: same active and pullable lookup as the manifest endpoint
     let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
         .await
         .internal_ctx(|| format!("load the application for blob slug {slug}"))?
@@ -294,6 +319,7 @@ pub async fn get_blob(
     if !app.is_pullable() {
         return Err(OciError::NameUnknown);
     }
+    // SPEC-6.13.1: same entitlement gate as the manifest endpoint
     assert_entitled(pool.get_ref(), &req, &user, &app).await?;
     let owner = app
         .oci_image_owner
@@ -301,6 +327,7 @@ pub async fn get_blob(
         .ok_or(OciError::NameUnknown)?;
     let name = app.oci_image_name.as_deref().ok_or(OciError::NameUnknown)?;
 
+    // SPEC-6.13.3, SPEC-6.13.6: engine classifies the failure; non-404 failures are logged and audited
     let handle = match blob_cache.get_or_fetch(owner, name, &digest).await {
         Ok(h) => h,
         Err(e) => {
@@ -333,6 +360,7 @@ pub async fn get_blob(
         }
     };
 
+    // SPEC-6.13.4: HEAD sends headers only
     let is_head = req.method() == actix_web::http::Method::HEAD;
     let mut resp = HttpResponse::Ok();
     resp.insert_header(("Docker-Content-Digest", handle.digest.clone()));
@@ -344,9 +372,11 @@ pub async fn get_blob(
         return Ok(resp.finish());
     }
 
+    // SPEC-6.13.7: open failure after a successful fetch is a logged 500
     let file = tokio::fs::File::open(&handle.path)
         .await
         .internal_ctx(|| format!("open the cached blob {digest} at {}", handle.path.display()))?;
+    // SPEC-6.13.5, SPEC-6.13.8: chunked streaming; mid-stream errors can only be logged
     let stream = FramedRead::new(file, BytesCodec::new()).map(move |r| {
         r.map(|b: bytes::BytesMut| b.freeze()).map_err(|e| {
             // Mid-stream, so the status is already sent: the log line is the
@@ -358,11 +388,13 @@ pub async fn get_blob(
     Ok(resp.streaming(stream))
 }
 
+// SPEC-6.14.1: read-only registry: every write verb is 405
 /// Any non-GET/HEAD under /v2/* returns 405 per OCI "read-only" stance.
 pub async fn push_not_supported() -> Result<HttpResponse, OciError> {
     Err(OciError::Unsupported)
 }
 
+// SPEC-6.15.3: operator-facing diagnosis; the member only sees UPSTREAM
 /// 401/403 from Forgejo means OUR service credentials were rejected, not the
 /// member's. Surface a precise operator diagnostic; the member still sees a
 /// generic upstream error. Shared by the manifest and blob paths so the
@@ -376,6 +408,7 @@ fn log_forgejo_credential_rejection(status: u16) {
     );
 }
 
+// SPEC-6.11.1: digest-addressed requests are free so one pull is not billed several times
 /// Whether a manifest request should be metered toward the daily pull cap +
 /// concurrency limit (BUNYIP-43). Only TAG-addressed requests count as a
 /// logical pull; digest-addressed requests are the multi-arch platform-manifest
@@ -384,6 +417,7 @@ fn should_meter(reference: &str) -> bool {
     !reference.starts_with("sha256:")
 }
 
+// SPEC-6.10.10, SPEC-6.15.3: NotFound is 404; every other upstream failure is 502
 fn map_reg_err(e: &RegistryError) -> OciError {
     match e {
         RegistryError::NotFound => OciError::ManifestUnknown,
@@ -395,6 +429,7 @@ fn map_reg_err(e: &RegistryError) -> OciError {
     }
 }
 
+// SPEC-6.10.13, SPEC-6.16.1, SPEC-6.16.2, SPEC-6.16.3: oci_pull_requested; write errors are only logged
 async fn audit_requested(
     pool: &PgPool,
     req: &HttpRequest,
@@ -412,6 +447,7 @@ async fn audit_requested(
     }
 }
 
+// SPEC-6.10.13, SPEC-6.16.1, SPEC-6.16.2, SPEC-6.16.3: oci_pull_completed with reference and digest
 async fn audit_completed(
     pool: &PgPool,
     req: &HttpRequest,
@@ -430,6 +466,7 @@ async fn audit_completed(
     }
 }
 
+// SPEC-6.11.4, SPEC-6.11.5, SPEC-6.16.1, SPEC-6.16.2: oci_pull_denied_rate_limit with reason and reset seconds
 async fn audit_denied(
     pool: &PgPool,
     req: &HttpRequest,
@@ -448,6 +485,7 @@ async fn audit_denied(
     }
 }
 
+// SPEC-6.10.1, SPEC-6.16.1, SPEC-6.16.2: oci_pull_denied_scope with requested slug and token scope
 async fn audit_denied_scope(
     pool: &PgPool,
     req: &HttpRequest,
@@ -466,6 +504,7 @@ async fn audit_denied_scope(
     }
 }
 
+// SPEC-6.10.11, SPEC-6.13.6, SPEC-6.16.1, SPEC-6.16.2: oci_pull_failed_upstream with kind, reference and error
 async fn audit_failed_upstream(
     pool: &PgPool,
     req: &HttpRequest,
@@ -489,6 +528,7 @@ async fn audit_failed_upstream(
     }
 }
 
+// SPEC-6.15.1, SPEC-6.15.2: denial is audited and disguised as NAME_UNKNOWN; lookup errors are 500s
 /// Entitlement gate for a restricted product (BUNYIP-39). The decision is the
 /// shared `EntitlementRepository::is_allowed` (open products and admins pass
 /// without a DB hit). Denials are audited and surface as `NameUnknown` (404),

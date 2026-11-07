@@ -50,6 +50,7 @@ def flat []: string -> string {
 }
 
 # Problems in one stylesheet, as human-readable lines.
+# SPEC-3.25.1, SPEC-3.25.2, SPEC-3.25.3, SPEC-3.25.4
 def check-css [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -94,6 +95,7 @@ def check-css [path: string]: nothing -> list<string> {
 }
 
 # The idle hold lives in app.js alone; it must be declared once and sit in the agreed 5-7s range.
+# SPEC-3.25.5
 def check-js [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -151,6 +153,7 @@ def css-of [parts: record]: nothing -> string {
     $parts | values | str join "\n"
 }
 
+# SPEC-3.25.6
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
     let compliant = (css-of $PARTS)

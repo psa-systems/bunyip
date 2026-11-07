@@ -26,6 +26,7 @@ use crate::repositories::UserRepository;
 use crate::services::{AppBackupAdapter, AppBackupContext, AppBackupOutcome};
 use crate::AppError;
 
+// SPEC-9.17.5
 /// The acr the minted backup token carries; mirrors the password login-flow
 /// value bunyip stamps on interactive at+jwts (`handlers/oidc.rs`).
 const BACKUP_TOKEN_ACR: &str = "urn:bunyip:loa:pwd";
@@ -62,6 +63,7 @@ impl MokoshHttpBackupAdapter {
         }
     }
 
+    // SPEC-9.17.5
     /// Mint a short-lived Mokosh-audience `at+jwt` for `user_id`. The token's
     /// `sub` is the bunyip user id, which Mokosh JIT-mirrors as its own user id,
     /// and `bunyip_role` (stamped from the user's role) satisfies Mokosh's
@@ -87,6 +89,7 @@ impl MokoshHttpBackupAdapter {
     }
 }
 
+// SPEC-9.17.4
 #[async_trait]
 impl AppBackupAdapter for MokoshHttpBackupAdapter {
     fn slug(&self) -> &str {
@@ -98,6 +101,7 @@ impl AppBackupAdapter for MokoshHttpBackupAdapter {
         mokosh_export(&self.http, &self.base_url, &token).await
     }
 
+    // SPEC-9.17.7
     async fn restore(&self, ctx: &AppBackupContext, bundle: &Value) -> Result<bool, AppError> {
         // Fail fast before minting if the bundle can't satisfy the import guard.
         confirm_from_bundle(bundle)?;
@@ -106,6 +110,7 @@ impl AppBackupAdapter for MokoshHttpBackupAdapter {
     }
 }
 
+// SPEC-9.17.7
 /// The `confirm` value Mokosh's import requires: the tenant name, which the
 /// export envelope carries (PMS-647). A bundle without it cannot be imported.
 fn confirm_from_bundle(bundle: &Value) -> Result<&str, AppError> {
@@ -117,6 +122,7 @@ fn confirm_from_bundle(bundle: &Value) -> Result<&str, AppError> {
         })
 }
 
+// SPEC-9.17.6
 /// `GET {base}/api/v1/data/export` with the bearer token. A 2xx yields the
 /// envelope; any other status is reported as unavailable (recorded in the
 /// account bundle, not fatal to the overall backup).
@@ -146,6 +152,7 @@ async fn mokosh_export(
     }
 }
 
+// SPEC-9.17.7
 /// `POST {base}/api/v1/data/import` with `{confirm, export}`. Returns whether
 /// Mokosh accepted the restore (2xx).
 async fn mokosh_import(

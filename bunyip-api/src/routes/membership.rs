@@ -4,6 +4,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.25.1: membership route inventory
 /// Configure membership routes
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(

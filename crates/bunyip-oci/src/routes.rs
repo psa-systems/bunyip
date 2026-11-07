@@ -8,6 +8,8 @@ use actix_web::web;
 
 use crate::handlers::{oci_auth, oci_registry};
 
+// SPEC-6.2.1, SPEC-6.2.2, SPEC-6.2.3, SPEC-6.2.4, SPEC-6.2.5:
+//  registry route table; every non-GET/HEAD verb under /v2 is rejected
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/auth/token").route(web::get().to(oci_auth::issue_token)))
         .service(
@@ -24,6 +26,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                         .route(web::get().to(oci_registry::get_blob))
                         .route(web::head().to(oci_registry::get_blob)),
                 )
+                // SPEC-1.2: every write verb is rejected here, never stored.
                 // Push-catchall: any non-GET/HEAD under /v2/* → 405.
                 .service(
                     web::resource("/{tail:.*}")

@@ -19,6 +19,7 @@ use crate::views::common::{auth_card, auth_card_plain};
 use crate::views::layout::{document, public_shell};
 use crate::views::password::{guard_message, password_field, PwField, PwRole};
 
+// SPEC-12.40.4: failed fetch hides the Pricing link
 /// BUNYIP-487: whether the header and footer should carry a Pricing link. The
 /// auth cards render the public shell directly (they need to attach their own
 /// cookies), so they resolve the flag themselves rather than through
@@ -32,11 +33,13 @@ async fn pricing_published(st: &AppState) -> bool {
     st.pricing().await.published()
 }
 
+// SPEC-12.47.7: stays under the challenge token exp
 /// BUNYIP-255: 2FA challenge-token TTL aligned with the JWT exp set in
 /// `crates/bunyip-domain/src/services/jwt.rs::create_2fa_challenge_token`.
 /// Stays under that exp so the cookie never outlives the token it carries.
 const BUNYIP_2FA_COOKIE_MAX_AGE_SECS: u64 = 600;
 
+// SPEC-12.47.7: one helper keeps attributes consistent
 /// BUNYIP-255: emit the `bunyip_2fa` cookie via a single helper so the
 /// `Secure` / `HttpOnly` / `SameSite` / `Max-Age` attributes can be set
 /// consistently. The previous raw-string emit (`bunyip_2fa=...; Path=/;
@@ -54,6 +57,7 @@ fn bunyip_2fa_cookie_set(secure: bool, challenge_token: &str) -> String {
     )
 }
 
+// SPEC-12.47.7: clear must match the set attributes
 /// BUNYIP-255: matching clear for the `bunyip_2fa` cookie. The clear
 /// MUST share the original cookie's `HttpOnly` / `Secure` / `SameSite`
 /// attributes or browsers may decide the clear is for a different
@@ -63,10 +67,12 @@ fn bunyip_2fa_cookie_clear(secure: bool) -> String {
     format!("bunyip_2fa=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
 }
 
+// SPEC-12.47.7: same lifetime as the 2FA challenge
 /// BUNYIP-944: same TTL/shape as `bunyip_2fa` for the login-approval challenge
 /// token, carried between `/login` (or `/magic-link`) and `/login/approval`.
 const BUNYIP_APPROVAL_COOKIE_MAX_AGE_SECS: u64 = 600;
 
+// SPEC-12.47.7: approval challenge cookie
 fn bunyip_approval_cookie_set(secure: bool, challenge_token: &str) -> String {
     let secure = if secure { "; Secure" } else { "" };
     format!(
@@ -75,11 +81,13 @@ fn bunyip_approval_cookie_set(secure: bool, challenge_token: &str) -> String {
     )
 }
 
+// SPEC-12.47.7: clear must match the set attributes
 fn bunyip_approval_cookie_clear(secure: bool) -> String {
     let secure = if secure { "; Secure" } else { "" };
     format!("bunyip_approval=; Path=/; HttpOnly; SameSite=Lax{secure}; Max-Age=0")
 }
 
+// SPEC-12.47.9: logout clears cookies even when the API fails
 /// BUNYIP-323: defense-in-depth clearing cookies emitted by bunyip-web's
 /// own `/logout` handler, independent of whatever bunyip-api returns.
 /// bunyip-api is meant to emit these too (POST /v1/auth/logout was widened
@@ -237,6 +245,7 @@ fn password_script() -> Markup {
     html! { script src=(crate::views::layout::asset("/assets/js/password.js")) defer {} }
 }
 
+// SPEC-12.47.1: closes the open redirect on ?redirect=
 /// Validate and normalise a post-login redirect target.
 ///
 /// Accepts two shapes:
@@ -268,6 +277,7 @@ fn safe_redirect(raw: Option<&str>, oidc_issuer: &str) -> String {
     FALLBACK.into()
 }
 
+// SPEC-12.47.2, SPEC-12.51.2: checked breaks the authorize loop; recovery picks the variant
 #[derive(Deserialize)]
 pub struct RedirectQuery {
     pub redirect: Option<String>,
@@ -288,6 +298,7 @@ pub struct RedirectQuery {
     pub recovery: Option<String>,
 }
 
+// SPEC-12.47.3: redirect survives into the magic-link path
 fn login_content(error: Option<&str>, redirect: &str) -> Markup {
     // Login's header is title + subtitle only (no icon bubble), so it routes
     // through `auth_card_plain` instead of re-implementing the card shell
@@ -343,6 +354,7 @@ fn login_content(error: Option<&str>, redirect: &str) -> Markup {
     auth_card_plain("Welcome back", "Sign in to your account to continue", body)
 }
 
+// SPEC-12.47.2: signed-in bounce unless checked is set
 pub async fn login_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -380,6 +392,7 @@ pub struct LoginForm {
     pub redirect: Option<String>,
 }
 
+// SPEC-12.47.4, SPEC-12.47.5, SPEC-12.47.6, SPEC-12.47.8: outcome-specific redirects and challenge cookies
 pub async fn login_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -434,6 +447,7 @@ pub async fn login_post(
     }
 }
 
+// SPEC-12.47.9, SPEC-12.47.10: unconditional local clears, safe post-logout target
 pub async fn logout(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -533,6 +547,7 @@ fn password_reentry_hint() -> Markup {
     }
 }
 
+// SPEC-12.48.3, SPEC-12.48.5, SPEC-12.48.7: honeypot, token, never echo passwords
 /// BUNYIP-590: `entry_price` is the cheapest published monthly price
 /// (`util::entry_price`), not a compile-time figure. The subtitle used to quote
 /// a hardcoded `$3/month` that no configuration backed; with nothing published
@@ -625,6 +640,7 @@ fn register_card(
     )
 }
 
+// SPEC-12.48.1, SPEC-12.48.2: mint timing token beside pricing
 pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, _) = ctx(&st, &headers).await;
     if c.is_signed_in() {
@@ -650,6 +666,7 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     .await
 }
 
+// SPEC-12.48.4, SPEC-12.48.5, SPEC-12.48.6, SPEC-12.48.7: all failing rules at once, API errors as banner
 pub async fn register_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -740,6 +757,7 @@ pub struct EmailForm {
     pub email: String,
 }
 
+// SPEC-12.49.1, SPEC-12.49.5: request form and sent confirmation
 fn magic_form(error: Option<&str>, success: bool) -> Markup {
     if success {
         return auth_card(
@@ -772,6 +790,7 @@ fn magic_form(error: Option<&str>, success: bool) -> Markup {
     )
 }
 
+// SPEC-12.49.2, SPEC-12.49.3, SPEC-12.49.4: redirect target preserved through verification
 pub async fn magic_link_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -819,6 +838,7 @@ pub async fn magic_link_get(
     auth_page(&st, &headers, "Magic link", magic_form(None, false)).await
 }
 
+// SPEC-12.49.5: request a link for the trimmed email
 pub async fn magic_link_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -835,6 +855,7 @@ pub async fn magic_link_post(
 // Password reset
 // ===========================================================================
 
+// SPEC-12.50.1: non-enumerating confirmation copy
 fn reset_form(error: Option<&str>, success: bool) -> Markup {
     if success {
         return auth_card(
@@ -870,6 +891,7 @@ pub async fn password_reset_get(State(st): State<AppState>, headers: HeaderMap) 
     auth_page(&st, &headers, "Reset password", reset_form(None, false)).await
 }
 
+// SPEC-12.50.1: request reset
 pub async fn password_reset_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -921,6 +943,7 @@ fn reset_confirm_card(token: &str, error: Option<&str>) -> Markup {
     )
 }
 
+// SPEC-12.50.2: missing token shows the invalid-link card
 pub async fn password_reset_confirm_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -951,6 +974,7 @@ pub async fn password_reset_confirm_get(
     }
 }
 
+// SPEC-12.50.3, SPEC-12.50.4: policy then mismatch before the API
 pub async fn password_reset_confirm_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1002,6 +1026,7 @@ pub struct TwoFactorForm {
     pub recovery: Option<String>,
 }
 
+// SPEC-12.51.2: authenticator or recovery variant
 fn twofa_card(error: Option<&str>, redirect: Option<&str>, recovery_mode: bool) -> Markup {
     let redirect = redirect.unwrap_or_default();
     let (heading, blurb) = if recovery_mode {
@@ -1062,6 +1087,7 @@ fn twofa_card(error: Option<&str>, redirect: Option<&str>, recovery_mode: bool) 
     )
 }
 
+// SPEC-12.51.1, SPEC-12.51.2: needs the pending-challenge cookie
 pub async fn twofa_verify_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1089,6 +1115,7 @@ pub async fn twofa_verify_get(
     .await
 }
 
+// SPEC-12.51.3, SPEC-12.51.4, SPEC-12.51.5: clear the challenge cookie on success
 pub async fn twofa_verify_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1159,6 +1186,7 @@ fn login_approval_card(error: Option<&str>, redirect: Option<&str>) -> Markup {
     )
 }
 
+// SPEC-12.51.1: needs the pending-approval cookie
 pub async fn login_approval_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1185,6 +1213,7 @@ pub async fn login_approval_get(
     .await
 }
 
+// SPEC-12.51.3, SPEC-12.51.6: clear the approval cookie on success
 pub async fn login_approval_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1255,6 +1284,7 @@ fn invite_password_card(token: &str, email: &str, error: Option<&str>) -> Markup
     )
 }
 
+// SPEC-12.52.1, SPEC-12.52.2: pre-accept decides the page
 pub async fn invite_accept_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1307,6 +1337,7 @@ pub async fn invite_accept_get(
     }
 }
 
+// SPEC-12.52.3, SPEC-12.52.4: mismatch checked before policy
 pub async fn invite_accept_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1358,6 +1389,7 @@ pub async fn invite_accept_post(
 // Email change confirm / email verification (token links)
 // ===========================================================================
 
+// SPEC-12.52.5: email-change confirmation
 pub async fn confirm_email(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1397,6 +1429,7 @@ pub async fn confirm_email(
     auth_page(&st, &headers, "Confirm email", card).await
 }
 
+// SPEC-12.52.6, SPEC-12.52.7, SPEC-12.52.8: tier copy, rotate stale JWT claims
 pub async fn verify_email(
     State(st): State<AppState>,
     headers: HeaderMap,

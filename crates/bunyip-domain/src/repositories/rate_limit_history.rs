@@ -45,6 +45,7 @@ impl RateLimitHistoryRepository {
     /// enforcement row's `window_start`. Carrying `expires_at` on the
     /// history row means the admin page can show "fired 11:03, released
     /// 11:18" without a second query.
+    // SPEC-7.3.166
     pub async fn record(
         pool: &PgPool,
         action: &str,
@@ -71,6 +72,7 @@ impl RateLimitHistoryRepository {
 
     /// List throttle events in `[since, now]`, newest first, capped at
     /// `limit`. The admin page's past-throttles section reads through this.
+    // SPEC-7.3.167
     pub async fn list(
         pool: &PgPool,
         since: DateTime<Utc>,
@@ -94,6 +96,7 @@ impl RateLimitHistoryRepository {
 
     /// Delete rows older than `retention_seconds`. Returns the number of
     /// rows deleted, matching `RateLimitRepository::cleanup_expired`.
+    // SPEC-7.3.168
     pub async fn sweep(pool: &PgPool, retention_seconds: i64) -> Result<u64, AppError> {
         let horizon = Utc::now() - Duration::seconds(retention_seconds);
         let result = sqlx::query("DELETE FROM rate_limit_history WHERE fired_at < $1")

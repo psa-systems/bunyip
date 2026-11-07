@@ -10,6 +10,7 @@ pub struct NotificationRepository;
 
 impl NotificationRepository {
     /// Create a new admin notification
+    // SPEC-7.3.127
     pub async fn create(
         pool: &PgPool,
         data: CreateAdminNotification,
@@ -33,6 +34,7 @@ impl NotificationRepository {
     }
 
     /// List unread notifications
+    // SPEC-7.3.128
     pub async fn list_unread(pool: &PgPool) -> Result<Vec<AdminNotification>, AppError> {
         let notifications = sqlx::query_as::<_, AdminNotification>(
             r#"
@@ -48,6 +50,7 @@ impl NotificationRepository {
     }
 
     /// List all notifications with pagination
+    // SPEC-7.3.129
     pub async fn list_paginated(
         pool: &PgPool,
         page: i32,
@@ -56,6 +59,7 @@ impl NotificationRepository {
         // BUNYIP-995: compute the offset in i64 and saturate, mirroring
         // BUNYIP-946 F14, so a page value large enough to overflow an i32
         // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        // SPEC-7.3.3
         let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         let notifications = sqlx::query_as::<_, AdminNotification>(
@@ -78,6 +82,7 @@ impl NotificationRepository {
     }
 
     /// Mark notification as read
+    // SPEC-7.3.130
     pub async fn mark_as_read(
         pool: &PgPool,
         notification_id: Uuid,
@@ -99,6 +104,7 @@ impl NotificationRepository {
     }
 
     /// Mark all notifications as read
+    // SPEC-7.3.130
     pub async fn mark_all_as_read(pool: &PgPool, admin_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -115,6 +121,7 @@ impl NotificationRepository {
     }
 
     /// Count unread notifications
+    // SPEC-7.3.128
     pub async fn count_unread(pool: &PgPool) -> Result<i64, AppError> {
         let count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM admin_notifications WHERE is_read = FALSE")
@@ -125,6 +132,7 @@ impl NotificationRepository {
     }
 
     /// Delete old notifications (cleanup)
+    // SPEC-7.3.131
     pub async fn delete_old(pool: &PgPool, days: i32) -> Result<u64, AppError> {
         let result = sqlx::query(
             r#"

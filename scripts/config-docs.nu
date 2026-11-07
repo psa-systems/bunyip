@@ -58,6 +58,7 @@ def release-anchor [v: string] {
 # -- Inputs ---------------------------------------------------------------------
 
 # Every name declared in WRITTEN_ENV_INVENTORY, in source order.
+# SPEC-3.32.2
 def parse-inventory [text: string] {
     let body_pos = ($text | str index-of "static WRITTEN_ENV_INVENTORY")
     if $body_pos < 0 {
@@ -87,6 +88,7 @@ def parse-inventory [text: string] {
 
 # Catalog rows merge inventory names with [[variable]] facts (and [[removed]]
 # tombstones for variables the server no longer reads).
+# SPEC-3.32.3
 def build-catalog [inventory: list, meta: record] {
     let by_name = ($meta.variable? | default [] | each {|v|
         {
@@ -119,6 +121,7 @@ def build-catalog [inventory: list, meta: record] {
     $rows | append $removed
 }
 
+# SPEC-3.32.3
 def catalog-errors [inventory: list, catalog: list] {
     mut errors = []
     let inv_names = ($inventory | get name)
@@ -155,6 +158,7 @@ def default-action [e: record] {
     if $e.required { "Required: set it before the server starts." } else { "Optional. Leave it unset to keep the default." }
 }
 
+# SPEC-3.32.4
 def build-entries [catalog: list, meta: record] {
     mut auto = []
     for v in $catalog {
@@ -220,6 +224,7 @@ def build-entries [catalog: list, meta: record] {
 # variable backfilled from history) is listed in All variables but is not
 # forced to carry authored wording, because the ticket that introduced it
 # predates this gate.
+# SPEC-3.32.5
 def validate-breaking [entries: list, tags: list] {
     let w = (window $entries $tags)
     let covered = ($w.unreleased | append $w.released)
@@ -482,10 +487,12 @@ def fail-on [errors: list, what: string] {
 }
 
 def main [] {
+    # SPEC-3.32.1
     print "usage: nu scripts/config-docs.nu <generate|check|since <version>|release-notes <version>|self-test>"
 }
 
 def "main generate" [] {
+    # SPEC-3.32.6
     let repo = (load-repo)
     fail-on $repo.errors "the configuration facts are inconsistent"
     let doc = (open --raw $DOC_FILE | decode utf-8)
@@ -496,6 +503,7 @@ def "main generate" [] {
 }
 
 def "main check" [] {
+    # SPEC-3.32.7
     let repo = (load-repo)
     let lines = (open --raw $DOC_FILE | decode utf-8 | lines)
     let errors = (
@@ -511,6 +519,7 @@ def "main since" [
     version: string
     --json
 ] {
+    # SPEC-3.32.8
     let repo = (load-repo)
     let after = ($repo.entries | where {|e| (vnum $e.release) > (vnum $version) })
     let sorted = ($after | sort-by {|e| $"((vnum $e.release) + 1000000000)(level-rank $e.level)($e.var)" })
@@ -540,6 +549,7 @@ def "main release-notes" [
     version: string
     --ref: string
 ] {
+    # SPEC-3.32.9
     let repo = (load-repo)
     let ref = ($ref | default $version)
     let rows = ($repo.entries | where release == $version)
@@ -623,6 +633,7 @@ def generated [f: record] {
 }
 
 def "main self-test" [] {
+    # SPEC-3.32.10
     let f = (fixture)
     let good = (generated $f)
     let cases = [

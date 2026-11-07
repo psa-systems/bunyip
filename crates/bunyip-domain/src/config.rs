@@ -8,6 +8,7 @@ use url::Url;
 /// as it stands, so the default resolution is unchanged.
 use crate::config_providers::{ConfigProviderKind, ConfigStack, DatabaseProvider};
 
+// SPEC-7.1.22: keep the shared file-or-env secret reader resolvable here
 /// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
 /// every dunite consumer. Re-exported here so existing `secret_env(...)` and
 /// `crate::config::secret_env(...)` call sites keep resolving unchanged.
@@ -136,6 +137,7 @@ pub struct Config {
     pub secrets_provider: SecretsProvider,
 }
 
+// SPEC-7.1.52: closed set; unknown spellings are a startup failure
 /// BUNYIP-542: where a deployment keeps its governed integration secrets.
 ///
 /// Declared by `SECRETS_STORAGE` and required, because inferring it from what
@@ -184,6 +186,7 @@ impl SecretsProvider {
         }
     }
 
+    // SPEC-7.1.53: environment is read-only by nature, not by policy
     /// Whether the admin pages can write a governed secret to this provider.
     ///
     /// `environment` is the one read-only provider: a process cannot set an
@@ -200,6 +203,7 @@ impl std::fmt::Display for SecretsProvider {
     }
 }
 
+// SPEC-7.1.54: name() doubles as the Infisical key
 /// BUNYIP-542: an integration secret with more than one possible provider, and
 /// so governed by `SECRETS_STORAGE`.
 ///
@@ -254,6 +258,7 @@ impl GovernedSecret {
         }
     }
 
+    // SPEC-7.1.56: text shown when no provider holds the secret
     /// What stops working when no provider holds this secret.
     pub fn feature(self) -> &'static str {
         match self {
@@ -283,6 +288,7 @@ impl GovernedSecret {
         }
     }
 
+    // SPEC-7.1.55: failed saves report against the field the admin typed into
     /// The admin form field this secret is typed into, so a failed save reports
     /// against the field the admin is looking at.
     pub fn form_field(self) -> &'static str {
@@ -296,6 +302,7 @@ impl GovernedSecret {
         }
     }
 
+    // SPEC-7.1.55: target emitted by secrets-migrate --to environment
     /// The `environment`-provider secret file this value belongs in, as the
     /// `{NAME}_FILE` target `secrets-migrate --to environment` emits.
     pub fn secret_file(self) -> &'static str {
@@ -309,6 +316,7 @@ impl GovernedSecret {
         }
     }
 
+    // SPEC-7.1.57: plain variable deliberately not consulted
     /// This secret's value in the `environment` provider.
     ///
     /// File-backed ONLY: the plain variable is deliberately not consulted. A
@@ -321,6 +329,7 @@ impl GovernedSecret {
     }
 }
 
+// SPEC-7.1.57: unreadable path is logged, never silent
 /// Read one secret from a `{NAME}_FILE` compose secret, and only from there
 /// (BUNYIP-542). An unreadable path is reported at `error` and treated as
 /// absent, so the boot enforcement below turns it into either the fatal
@@ -377,6 +386,7 @@ pub struct InfisicalSettings {
 }
 
 impl InfisicalSettings {
+    // SPEC-7.1.58: Infisical connection settings
     /// Load from the environment. `client_id` / `client_secret` are credentials
     /// and honour the `{NAME}_FILE` convention via `secret_env`.
     pub fn from_env() -> Self {
@@ -406,6 +416,7 @@ pub enum SmtpTls {
 }
 
 impl SmtpTls {
+    // SPEC-7.1.61: stable slug stored in email_config.smtp_tls
     /// Stable lowercase slug used in the DB (`email_config.smtp_tls`), the admin
     /// API, and audit metadata. Inverse of the match in `smtp_tls_from`, which
     /// is what the database provider's value is read back through.
@@ -467,6 +478,7 @@ pub struct EmailConfig {
 }
 
 impl EmailConfig {
+    // SPEC-7.1.59: env-only resolution
     /// Load email configuration from the environment provider alone.
     ///
     /// The same resolution [`Self::resolve`] performs, through a stack holding
@@ -475,6 +487,7 @@ impl EmailConfig {
         Self::resolve(&ConfigStack::environment_only(), None, is_production)
     }
 
+    // SPEC-7.1.69: holds only columns that win the old per-field fallback
     /// The `email_config` row as a configuration provider (BUNYIP-643).
     ///
     /// This is where `from_db_row`'s per-field fallback went. A column is held
@@ -526,6 +539,7 @@ impl EmailConfig {
         Ok(db)
     }
 
+    // SPEC-7.1.60: smtp_password is passed in, never a config key
     /// Resolve the email configuration through the provider stack (BUNYIP-643).
     ///
     /// BUNYIP-542: `smtp_password` is passed in, already resolved from the ONE
@@ -542,6 +556,7 @@ impl EmailConfig {
         smtp_password: Option<String>,
         is_production: bool,
     ) -> Self {
+        // SPEC-7.1.64: token logging never reaches production
         // EMAIL_LOG_TOKENS lets local development log the full magic-link /
         // reset / email-change URL (token included) at DEBUG when email sending
         // is disabled. It defaults off and is forced off in production so the
@@ -551,9 +566,11 @@ impl EmailConfig {
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false);
 
+        // SPEC-7.1.61: TLS mode
         // SMTP_TLS: "implicit" (port 465) or "starttls" (port 587).
         let smtp_tls = smtp_tls_from(stack.get("SMTP_TLS").as_deref());
 
+        // SPEC-7.1.62: port default follows the deployment TLS mode
         // The port default follows the TLS mode the DEPLOYMENT providers
         // declare, not the database's. That is what `from_db_row` did (its port
         // fallback came from `from_env`, whose default followed the environment
@@ -574,6 +591,7 @@ impl EmailConfig {
             .unwrap_or_else(|| "localhost".to_string());
         let has_smtp = !smtp_host.is_empty() && smtp_host != "localhost";
 
+        // SPEC-7.1.63: environment EMAIL_ENABLED only force-enables
         // EMAIL_ENABLED is a force-ON switch in the environment, not a plain
         // value: `EMAIL_ENABLED=false` never turned sending off, it left the
         // production-and-SMTP rule to decide. So the environment's value feeds
@@ -594,10 +612,12 @@ impl EmailConfig {
             smtp_tls,
             smtp_username: stack.get("SMTP_USERNAME").unwrap_or_default(),
             smtp_password: smtp_password.unwrap_or_default(),
+            // SPEC-7.1.67: environment-only
             smtp_ehlo_name: env::var("SMTP_EHLO_NAME")
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
+            // SPEC-7.1.65: sender and URL defaults
             from_email: stack
                 .get("SMTP_FROM_EMAIL")
                 .unwrap_or_else(|| "noreply@localhost".to_string()),
@@ -610,6 +630,7 @@ impl EmailConfig {
             enabled,
             log_tokens,
             app_name: env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string()),
+            // SPEC-7.1.66: comma list
             admin_notification_emails: stack
                 .get("ADMIN_NOTIFICATION_EMAILS")
                 .unwrap_or_default()
@@ -624,6 +645,7 @@ impl EmailConfig {
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty()),
+            // SPEC-7.1.68: IMAP poller settings
             // BUNYIP-571: inbound IMAP poller config. The poll interval is the
             // one field with no database column, so it stays an env read.
             imap_host: stack.get("SUPPORT_IMAP_HOST").unwrap_or_default(),
@@ -644,6 +666,7 @@ impl EmailConfig {
         }
     }
 
+    // SPEC-7.1.70: undecryptable ciphertext is logged, not fatal
     /// The `database` provider's copy of the SMTP password: the decrypted
     /// `email_config.smtp_password` ciphertext (BUNYIP-542).
     ///
@@ -676,6 +699,7 @@ impl EmailConfig {
         }
     }
 
+    // SPEC-7.1.70: undecryptable ciphertext is logged, not fatal
     /// Decrypt the governed IMAP password from the DB row (BUNYIP-571),
     /// mirroring [`Self::db_smtp_password`]. A ciphertext no key decrypts is
     /// treated as no password, not a fatal, so a stale row never blocks boot.
@@ -702,6 +726,7 @@ impl EmailConfig {
         }
     }
 
+    // SPEC-7.1.71: relays reject a container-id EHLO name
     /// Resolve the EHLO/HELO name announced on every SMTP session (BUNYIP-507).
     ///
     /// Order: `SMTP_EHLO_NAME`, else the host of `base_url` (`APP_URL`), else
@@ -739,6 +764,7 @@ impl EmailConfig {
     }
 }
 
+// SPEC-7.1.61: anything but starttls is implicit
 /// The SMTP TLS mode a provider's raw value names. Anything but `starttls`
 /// (case-insensitively) is implicit TLS, which is what the environment read has
 /// always done; the database provider only ever holds one of the two spellings.
@@ -749,6 +775,7 @@ fn smtp_tls_from(raw: Option<&str>) -> SmtpTls {
     }
 }
 
+// SPEC-7.1.71: IP literals go on the wire as address literals
 /// Wrap a host in the right `ClientId` variant: an IP literal must go on the
 /// wire as an address literal (`[10.0.0.1]`), per RFC 5321 4.1.3.
 fn client_id_from_host(host: &str) -> ClientId {
@@ -761,6 +788,7 @@ fn client_id_from_host(host: &str) -> ClientId {
     }
 }
 
+// SPEC-7.1.72: address half of SMTP_FROM
 /// Parse email address from SMTP_FROM.
 /// Supports "Display Name <email>" or plain "email" format.
 pub(crate) fn parse_smtp_from_email(smtp_from: &str) -> String {
@@ -772,6 +800,7 @@ pub(crate) fn parse_smtp_from_email(smtp_from: &str) -> String {
     smtp_from.trim().to_string()
 }
 
+// SPEC-7.1.72: display-name half of SMTP_FROM
 /// Parse display name from SMTP_FROM.
 /// Returns the part before `<`, or "localhost" if no display name is present.
 pub(crate) fn parse_smtp_from_name(smtp_from: &str) -> String {
@@ -784,6 +813,7 @@ pub(crate) fn parse_smtp_from_name(smtp_from: &str) -> String {
     "localhost".to_string()
 }
 
+// SPEC-7.1.34: bad entries are warned and skipped
 /// Parse a comma-separated list of CIDR ranges into trusted-proxy networks.
 /// Invalid entries are logged and skipped rather than aborting startup, so a
 /// single typo cannot take the whole service down; an empty or all-invalid
@@ -802,6 +832,7 @@ fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
         .collect()
 }
 
+// SPEC-7.1.74: Copy for the hot request path
 /// Auto-ban configuration
 ///
 /// `Copy` so the [`AutoBanService`](crate::middleware::auto_ban::AutoBanService)
@@ -825,6 +856,7 @@ impl AutoBanConfig {
         Self::resolve(&ConfigStack::environment_only())
     }
 
+    // SPEC-7.1.73: negative or over-wide values are not held
     /// The `auto_ban_config` row as a configuration provider (BUNYIP-643).
     ///
     /// The `BIGINT` columns are stored as `i64` and narrowed back to the
@@ -857,6 +889,7 @@ impl AutoBanConfig {
         Ok(db)
     }
 
+    // SPEC-7.1.74: defaults 5 / 3600 s / 86400 s, enabled
     /// Resolve the auto-ban configuration through the provider stack.
     pub fn resolve(stack: &ConfigStack) -> Self {
         Self {
@@ -921,6 +954,7 @@ impl TierConfig {
         Self::resolve(&ConfigStack::environment_only(), None)
     }
 
+    // SPEC-7.1.75: only the four slot and trial columns have two providers
     /// The `tier_config` row as a configuration provider (BUNYIP-643).
     ///
     /// Only the four slot/trial columns are here. The price and product ids and
@@ -954,6 +988,7 @@ impl TierConfig {
         Ok(db)
     }
 
+    // SPEC-7.1.76: price ids and switches are database only
     /// Resolve the tier configuration through the provider stack.
     ///
     /// `row` carries the database-only columns; `None` is the no-database
@@ -1001,6 +1036,7 @@ pub struct DownloadConfig {
 }
 
 impl DownloadConfig {
+    // SPEC-7.1.77: download proxy settings
     pub fn from_env() -> Self {
         Self {
             // Trimmed like its paired token so a stray trailing newline/space
@@ -1031,6 +1067,7 @@ impl DownloadConfig {
         }
     }
 
+    // SPEC-7.1.77: needs both base URL and token
     pub fn enabled(&self) -> bool {
         self.forgejo_base_url.is_some() && self.forgejo_api_token.is_some()
     }
@@ -1062,6 +1099,7 @@ pub struct OciConfig {
 }
 
 impl OciConfig {
+    // SPEC-7.1.79: derived from the service host
     /// The realm URL Docker clients must hit to exchange credentials for a
     /// registry bearer token.
     pub fn realm_url(&self) -> String {
@@ -1070,6 +1108,7 @@ impl OciConfig {
             .unwrap_or_else(|| format!("https://{}/auth/token", self.service))
     }
 
+    // SPEC-7.1.80: fail fast instead of opaque docker-login failures
     /// Validate the realm/service pair. Called at startup when the registry is
     /// enabled so misconfiguration fails fast instead of surfacing as opaque
     /// docker-login failures.
@@ -1118,6 +1157,7 @@ impl OciConfig {
         Ok(())
     }
 
+    // SPEC-7.1.78: OCI registry settings
     pub fn from_env() -> Self {
         Self {
             enabled: env::var("OCI_REGISTRY_ENABLED")
@@ -1209,6 +1249,7 @@ pub struct OidcConfig {
 }
 
 impl OidcConfig {
+    // SPEC-7.1.81: OIDC provider settings
     pub fn from_env() -> Self {
         let issuer = env::var("OIDC_ISSUER").ok().filter(|s| !s.is_empty());
         Self {
@@ -1219,6 +1260,7 @@ impl OidcConfig {
                 .unwrap_or_else(|_| "dev-key".to_string()),
             jwt_public_keys_dir: env::var("OIDC_JWT_PUBLIC_KEYS_DIR")
                 .unwrap_or_else(|_| "secrets".to_string()),
+            // SPEC-7.1.82: clamped to 60..=900
             access_token_ttl_secs: env::var("OIDC_ACCESS_TOKEN_TTL_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -1232,6 +1274,7 @@ impl OidcConfig {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(1_209_600),
+            // SPEC-7.1.82: capped at 120
             code_ttl_secs: env::var("OIDC_CODE_TTL_SECONDS")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -1256,12 +1299,14 @@ impl OidcConfig {
         }
     }
 
+    // SPEC-7.1.83: no issuer means the OIDC endpoints are off
     pub fn enabled(&self) -> bool {
         self.issuer.is_some()
     }
 }
 
 impl Config {
+    // SPEC-7.1.23: the .env load is kept apart from parsing
     /// Load configuration from environment variables
     ///
     /// # Errors
@@ -1275,6 +1320,7 @@ impl Config {
         Self::from_env_inner()
     }
 
+    // SPEC-7.1.25: collect every failure, then decide once
     /// Parse configuration from the current process environment only.
     ///
     /// Unlike [`Config::from_env`], this does NOT load a `.env` file; it reads
@@ -1285,6 +1331,7 @@ impl Config {
     /// # Errors
     /// Returns an error if required environment variables are missing.
     pub fn from_env_inner() -> Result<Self, ConfigError> {
+        // SPEC-7.1.24: unset means production
         let environment = env::var("ENVIRONMENT").unwrap_or_else(|_| "production".to_string());
         let is_production = environment == "production";
 
@@ -1310,6 +1357,7 @@ impl Config {
         // out.
         let sys = crate::sys_config::SysConfig::load(&deployment);
 
+        // SPEC-7.1.28: secrets honour the _FILE convention
         // DATABASE_URL embeds the postgres password, so it supports the
         // DATABASE_URL_FILE secret convention like every other secret. Its
         // absence is already recorded by the audit above; the placeholder here
@@ -1324,8 +1372,10 @@ impl Config {
         // Password used to self-provision the `bunyip_app` RLS role (BUNYIP-360).
         let app_password = secret_env("BUNYIP_APP_PASSWORD");
 
+        // SPEC-7.1.27: bind defaults
         let host = env::var("HOST_IP").unwrap_or_else(|_| "0.0.0.0".to_string());
 
+        // SPEC-7.1.26: invalid port is a reported failure
         let port = match env::var("APP_PORT")
             .unwrap_or_else(|_| "4000".to_string())
             .parse::<u16>()
@@ -1345,6 +1395,7 @@ impl Config {
 
         let log_level = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
 
+        // SPEC-7.1.29: system-level origins come from the environment only
         let cors_origin = sys.cors_origin.clone();
 
         // BUNYIP_WEB_ORIGIN is the single absolute URL of the bunyip-web login
@@ -1363,10 +1414,12 @@ impl Config {
                 .to_string()
         });
 
+        // SPEC-7.1.30: bootstrap product name
         let app_name = env::var("APP_NAME").unwrap_or_else(|_| "localhost".to_string());
 
         let email = EmailConfig::resolve(&deployment, None, is_production);
 
+        // SPEC-7.1.31: unknown value is a failure, absent is audited
         // BUNYIP-542: the declared provider for every governed integration secret.
         // Absence is reported by the presence audit above, so the placeholder in
         // that arm is never observed: a non-empty `failures` returns Err before
@@ -1389,6 +1442,7 @@ impl Config {
             None => SecretsProvider::Database,
         };
 
+        // SPEC-7.1.32: degraded start with a warning, not a failure
         // BUNYIP-623: a self-hosted production deployment with email not yet
         // configured must start, degraded, rather than refuse. A missing
         // integration key must never disable the application (Yousif, 2026-08-24
@@ -1412,6 +1466,7 @@ impl Config {
         // Cookie domain: must be set explicitly via COOKIE_DOMAIN env var.
         // None means cookies are scoped to the exact hostname (suitable for localhost).
         let cookie_domain = sys.cookie_domain.clone();
+        // SPEC-7.1.33: opt-in cross-subdomain cookie
         // BUNYIP-266: opt-in cross-subdomain cookie sharing. When unset,
         // the OP session cookie is host-scoped even if `cookie_domain` is
         // set. Mismatch (cookie_domain Some + shared false) logs a warn so
@@ -1429,9 +1484,11 @@ impl Config {
         }
 
         let auto_ban = AutoBanConfig::resolve(&deployment);
+        // SPEC-7.1.34: empty list trusts no forwarding header
         let trusted_proxies =
             parse_trusted_proxies(&env::var("TRUSTED_PROXY_CIDR").unwrap_or_default());
 
+        // SPEC-7.1.35: loader failure is collected, not returned early
         let app_encryption_key = match Self::load_app_encryption_key(&environment) {
             Ok(key) => key,
             Err(failure) => {
@@ -1439,6 +1496,7 @@ impl Config {
                 [0u8; 32]
             }
         };
+        // SPEC-7.1.36: previous keys, newest first
         let app_encryption_key_prev =
             match Self::load_previous_encryption_keys("APP_ENCRYPTION_KEY_PREV") {
                 Ok(keys) => keys,
@@ -1447,6 +1505,7 @@ impl Config {
                     Vec::new()
                 }
             };
+        // SPEC-7.1.38: version stamped on newly written rows
         let app_key_version: i16 = env::var("APP_KEY_VERSION")
             .ok()
             .and_then(|v| v.parse().ok())
@@ -1457,6 +1516,7 @@ impl Config {
         let oci = OciConfig::from_env();
         let oidc = OidcConfig::from_env();
 
+        // SPEC-7.1.39: a dev- kid in production is a paste error
         // BUNYIP-258: a `dev-` kid in production is the paste-error case (a
         // staging .env copied into prod). Tokens minted under it are advertised
         // by JWKS and consumed by RPs as legitimate, masking the
@@ -1479,6 +1539,7 @@ impl Config {
             });
         }
 
+        // SPEC-7.1.40: normalized to compare equal to stored emails
         // BUNYIP-290: the bootstrap admin email. Trimmed + lowercased so it
         // compares equal to stored emails (which `normalize_email` lowercases)
         // and to the rows returned by `find_admin_emails`. Empty = None.
@@ -1487,6 +1548,7 @@ impl Config {
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty());
 
+        // SPEC-7.1.41: empty disables the feature
         // BUNYIP-366: IP2Location DB path for login-location alerts (optional).
         let ip2location_db_path = env::var("IP2LOCATION_DB_PATH")
             .ok()
@@ -1499,6 +1561,7 @@ impl Config {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
 
+        // SPEC-7.1.42: resolved through the provider stack
         // BUNYIP-373: opt-in switch for the suspicious-login approval gate.
         // Default false (the gate can withhold a login; enable per deployment).
         let login_approval_enabled = sys.login_approval_enabled;
@@ -1545,11 +1608,13 @@ impl Config {
             secrets_provider,
         };
 
+        // SPEC-7.1.25: the single place startup failures are reported
         // BUNYIP-537: the one place startup failures are reported. Every branch
         // above pushes instead of returning, so a deployment missing four
         // variables learns about all four in this run.
         finish_startup_audit(failures)?;
 
+        // SPEC-7.1.43: no secret value in the boot line
         info!(
             host = %config.host,
             port = %config.port,
@@ -1562,11 +1627,13 @@ impl Config {
         Ok(config)
     }
 
+    // SPEC-7.1.24: exact match on production
     /// Returns true if running in production environment
     pub fn is_production(&self) -> bool {
         self.environment == "production"
     }
 
+    // SPEC-7.1.45: false means forwarded IPs are ignored
     /// Whether any trusted proxy is configured, i.e. whether bunyip-api will
     /// honour a forwarded client IP at all (BUNYIP-476).
     ///
@@ -1582,6 +1649,7 @@ impl Config {
         !self.trusted_proxies.is_empty()
     }
 
+    // SPEC-7.1.46: the transport decides, not ENVIRONMENT
     /// Whether a cookie issued for `req` must carry the `Secure` attribute
     /// (BUNYIP-426 F4).
     ///
@@ -1622,6 +1690,7 @@ impl Config {
                 .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
     }
 
+    // SPEC-7.1.47: host-scoped unless sharing is opted in
     /// BUNYIP-266: cookie `Domain` applied to the OP session cookie.
     /// Returns the configured `cookie_domain` only when the operator has
     /// explicitly enabled cross-subdomain sharing via
@@ -1635,6 +1704,7 @@ impl Config {
         }
     }
 
+    // SPEC-7.1.48: hard delete can never fire in production
     /// True when this process may HARD-delete e2e test accounts: a real
     /// non-production environment AND the operator-set
     /// `BUNYIP_E2E_BOOTSTRAP_ALLOW=true`. Mirrors the `bunyip-e2e-bootstrap`
@@ -1647,6 +1717,7 @@ impl Config {
         e2e_env_allows_purge(&self.environment) && allowed
     }
 
+    // SPEC-7.1.44: one key set for every encrypted column
     /// BUNYIP-483: the one at-rest key set, built from `APP_ENCRYPTION_KEY`,
     /// `APP_ENCRYPTION_KEY_PREV` and `APP_KEY_VERSION`. Every consumer (TOTP,
     /// Stripe, email) gets this same set.
@@ -1658,6 +1729,7 @@ impl Config {
         }
     }
 
+    // SPEC-7.1.35: zero key only outside production
     /// Load the at-rest key from APP_ENCRYPTION_KEY (env var or _FILE secret,
     /// hex-encoded 32 bytes). In development, defaults to 32 zero bytes.
     ///
@@ -1685,6 +1757,7 @@ impl Config {
         }
     }
 
+    // SPEC-7.1.36: comma list, blank entries skipped
     /// Load the previous at-rest keys (comma-separated hex, 32 bytes each) from
     /// an env var or its `_FILE` secret. Empty when unset: nothing to fall back
     /// to. A list rather than one key because the consolidation window has to
@@ -1705,12 +1778,14 @@ impl Config {
             .collect()
     }
 
+    // SPEC-7.1.27: host:port
     /// Get the server bind address
     pub fn server_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 }
 
+// SPEC-7.1.49: Startup carries every collected failure
 /// Configuration errors
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -1732,6 +1807,7 @@ pub enum ConfigError {
 }
 
 impl ConfigError {
+    // SPEC-7.1.50: report, not a crash
     /// Log this error as operator-facing lines: one `tracing::error!` per
     /// failure naming the variable, why it is required, and how to supply it.
     /// The caller exits non-zero afterwards; nothing here panics, so the
@@ -1754,6 +1830,7 @@ impl ConfigError {
     }
 }
 
+// SPEC-7.1.51: variable, reason, remedy
 /// One operator-facing startup-configuration failure: which variable, why the
 /// api will not start without it, and what to do about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1780,6 +1857,7 @@ pub enum EnvClass {
     Defaulted,
 }
 
+// SPEC-7.1.9: inventory entry invariants
 /// One classified environment variable the api reads.
 #[derive(Clone, Copy)]
 pub struct EnvVarSpec {
@@ -1847,6 +1925,7 @@ impl EnvVarSpec {
         self
     }
 
+    // SPEC-7.1.18: shape of an absent-required failure
     /// The failure this variable produces when it is required and absent.
     fn failure(&self) -> ConfigFailure {
         ConfigFailure {
@@ -1857,6 +1936,7 @@ impl EnvVarSpec {
     }
 }
 
+// SPEC-7.1.10, SPEC-7.1.11, SPEC-7.1.12: classification of required variables
 /// The one classified inventory of every environment variable bunyip-api reads
 /// (BUNYIP-537). A new variable is added here with its classification, gated
 /// feature and remediation text, or `env_inventory_covers_every_env_read`
@@ -1924,6 +2004,7 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
          OIDC_JWT_PRIVATE_KEY_PATH.",
     )
     .gated_by("OIDC_ISSUER"),
+    // SPEC-7.1.13, SPEC-7.1.14: warn-only variables and their gates
     // ---- Feature-gating ---------------------------------------------------
     EnvVarSpec::gating(
         "APP_DATABASE_URL",
@@ -2180,6 +2261,7 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
          exported or imported (BUNYIP-356)",
         "Set it to mokosh-server's tenant export/import base URL.",
     ),
+    // SPEC-7.1.15: everything else, bunyip-web included, is Defaulted
     // ---- Defaulted (documented in docs/configuration.md; no boot-time log) --
     EnvVarSpec::defaulted(
         "ENVIRONMENT",
@@ -2438,6 +2520,7 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     ),
 ];
 
+// SPEC-7.1.8: written entries plus the generated rate-limit family
 /// The inventory: the variables written down above, plus the generated
 /// `RATE_LIMIT_{ACTION}_*` family (BUNYIP-645).
 ///
@@ -2462,11 +2545,13 @@ pub static ENV_INVENTORY: std::sync::LazyLock<Vec<EnvVarSpec>> = std::sync::Lazy
         .collect()
 });
 
+// SPEC-7.1.20: inventory lookup
 /// Look up one variable's spec.
 pub fn env_spec(name: &str) -> Option<&'static EnvVarSpec> {
     ENV_INVENTORY.iter().find(|spec| spec.name == name)
 }
 
+// SPEC-7.1.20: generic fallback for an unclassified name
 /// The failure for an inventory variable that is required and absent. Falls
 /// back to a generic message for a name the inventory does not carry, which the
 /// coverage test in `bunyip-api/tests/env_inventory.rs` prevents.
@@ -2481,6 +2566,7 @@ fn required_failure(name: &'static str) -> ConfigFailure {
     }
 }
 
+// SPEC-7.1.21: one failure per variable
 /// Turn the collected failures into the startup error, one entry per variable.
 /// A variable reported by both the presence audit and a value-level check
 /// (`APP_ENCRYPTION_KEY` absent in production, say) appears once.
@@ -2493,12 +2579,14 @@ fn finish_startup_audit(mut failures: Vec<ConfigFailure>) -> Result<(), ConfigEr
     Err(ConfigError::Startup(failures))
 }
 
+// SPEC-7.1.17: plain or _FILE, non-empty
 /// True when the variable resolves to a non-empty value, through either the
 /// `{NAME}_FILE` secret convention or the plain variable.
 fn env_present(name: &str) -> bool {
     secret_env(name).is_some()
 }
 
+// SPEC-7.1.16: presence pass over required entries
 /// The startup presence pass: every [`EnvClass::Required`] /
 /// [`EnvClass::RequiredInProduction`] variable that is absent, in one report
 /// (BUNYIP-537). Gated entries only count when their gate is set, so an
@@ -2517,6 +2605,7 @@ pub fn audit_required(is_production: bool) -> Vec<ConfigFailure> {
         .collect()
 }
 
+// SPEC-7.1.19: absent feature-gating variables
 /// The feature-gating variables that are absent, in inventory order. Pure, so
 /// the classification is testable without a log subscriber;
 /// [`log_feature_gaps`] is the thin emitting half.
@@ -2529,6 +2618,7 @@ pub fn feature_gaps() -> Vec<&'static EnvVarSpec> {
         .collect()
 }
 
+// SPEC-7.1.19: one warn per gap
 /// Emit one `tracing::warn!` per absent feature-gating variable, naming the
 /// functionality that is off. Defaulted variables log nothing. Called once at
 /// startup, after the config loads, so the message for each variable lives in
@@ -2545,6 +2635,7 @@ pub fn log_feature_gaps() {
     }
 }
 
+// SPEC-7.1.37: malformed key is a failure, never a panic
 /// Decode one hex-encoded 32-byte at-rest key. Returns an operator-facing
 /// failure (never a panic) on malformed material rather than silently
 /// encrypting under a key the operator did not intend.
@@ -2563,6 +2654,7 @@ fn parse_encryption_key(env_var: &'static str, hex_str: &str) -> Result<[u8; 32]
     })
 }
 
+// SPEC-7.1.48: empty counts as production
 /// Pure half of [`Config::e2e_purge_enabled`]: the environment must be a real
 /// non-production name. Empty / unset (which `Config` treats as production) and
 /// `production` both forbid e2e hard-deletes (BUNYIP-246). `ENVIRONMENT` has

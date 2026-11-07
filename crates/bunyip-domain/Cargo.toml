@@ -1,6 +1,7 @@
 [package]
 name = "bunyip-domain"
 description = "Bunyip (PSA Systems) core domain layer: config, models, repositories, business services, and domain middleware (auth, auto-ban). Builds on the generic dunite-core kernel (errors, responses, validation, request-id/security-headers middleware, encryption/password/JWT-config services), re-exported under their original module names so domain sources keep using crate::errors, crate::responses, crate::services::{jwt,password,encryption}, etc."
+# SPEC-7.1.7: package metadata and lints come from the workspace
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -24,15 +25,18 @@ workspace = true
 # (A1/A3/A6/A7 only moved into dunite-oci, dunite-webhook, and a new leaf), but
 # the whole graph pins one rev so dunite-oci's `AppError` and bunyip-domain's
 # `AppError` are the same type after the bump.
+# SPEC-7.1.4, SPEC-7.1.5: rev pin, shared by the whole dunite graph
 dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
 # rate limiting). Bunyip implements its store traits over Postgres. Moves
 # with dunite-core.
+# SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # OIDC OP-session kernel: the shared `check_op_session_alive` tri-arm liveness
 # predicate (BUNYIP-885). bunyip-oidc already pins this crate at the same rev;
 # the hub refresh path here calls the same predicate so the two op-session
 # checks cannot drift apart again. Moves with dunite-core.
+# SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
 # signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
@@ -48,11 +52,13 @@ dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90f
 # in `get_customer_subscription`, so a canceled+active customer resolves to
 # active) and DUNITE-17 (`list_products`/`list_prices` walk `has_more` instead
 # of silently truncating to the first 100 rows).
+# SPEC-7.1.4, SPEC-7.1.6: moves in lock-step with dunite-stripe
 dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted
 # from this crate's own superset into dunite so a8n-tools can share it. Pinned to
 # the branch rev that introduced the crate. The dunite pins collapse to one
 # merged rev in a follow-up.
+# SPEC-7.1.4: rev pin
 dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # Shared Stripe service layer (DEV-495 / DEV-515). This slice provides the
 # async-stripe response DTOs, re-exported from this crate's models; the service
@@ -64,34 +70,41 @@ dunite-feedback = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c
 # plus the `list_webhook_endpoints` 403-check that BUNYIP-516's `stripe_err`
 # permission mapping depends on. Moves in lock-step with dunite-stripe-core above.
 # BUNYIP-822/823: bumped to 91e27f2 for the DUNITE-16 / DUNITE-17 fixes.
+# SPEC-7.1.4, SPEC-7.1.6: moves in lock-step with dunite-stripe-core
 dunite-stripe = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared account vocabulary (DEV-495 / DEV-517): the role / membership-status /
 # subscription-tier enums and the tier-settings response, re-exported from this
 # crate's models. The User row + repository stay here (a8n's schema has not
 # caught up) and nothing in the crate derives FromRow (a8n is on sqlx 0.7).
 # Pinned to the branch rev that introduced it.
+# SPEC-7.1.4: rev pin
 dunite-user-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # DEV-531: the login-location signal (IP2Location lookup, the non-public-address
 # filter, the record/unchanged/alert branch) extracted from this crate in
 # DEV-525 and shared with a8n-tools.
+# SPEC-7.1.4: rev pin
 dunite-geoip = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # BUNYIP-437: the ASN / VPN enrichment counterpart to dunite-geoip. Reads an
 # IP2Proxy PX .BIN (address -> ASN, owning org, network category, VPN/proxy
 # likelihood); advisory only, never a spam verdict. Same offline, leaf, owns-its-
 # error contract as dunite-geoip.
+# SPEC-7.1.4: rev pin
 dunite-ipenrich = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "ae62c276ab187852578daad1c4b9c823579b194a" }
 # DEV-527: the HIBP k-anonymity password-breach check and the outbound
 # HMAC-signed webhook sender, extracted from this crate's services. Leaf crates
 # (own their types, no dunite-core dep), so they pin independently of the
 # dunite-core graph rev.
+# SPEC-7.1.4: rev pin
 dunite-hibp = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "82f9baa96c61e682269d9ff43c8042cb6882f5d1" }
 # Wave 1 bump: dunite-webhook moves to 8617fc8 for the new inbound HMAC
 # signature verifier (DUNITE-22, mirrors the outbound signing scheme).
+# SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-webhook = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # BUNYIP-553/827: the semaphore-bounded blocking-pool wrapper that keeps a
 # ~100 ms / 64 MiB Argon2 hash off the request future. Extracted from
 # bunyip-domain into its own leaf (DUNITE-20); this crate's `argon2_offload`
 # module is now a thin shim mapping `OffloadError` to `AppError`.
+# SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # Wave 2 bump: shared mailer vocabulary (BUNYIP-602/603/604) extracted into
 # its own leaf (DUNITE-24): the `SuppressionList` + `SuppressionReason` +
@@ -99,9 +112,11 @@ dunite-argon2-offload = { git = "https://dev.a8n.run/psa-systems/dunite", rev = 
 # `services/mailer_relay.rs` and `services/mailer_webhook.rs` used to carry
 # locally. Bunyip keeps `MailerRelay`, `DbSuppressionList`, and
 # `MailerSuppressionRepository`.
+# SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-mailer = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # DEV-528: the in-process event bus + SSE framing (generic over the event type),
 # extracted from services/event_bus.rs + handlers/events.rs. Leaf crate.
+# SPEC-7.1.4: rev pin
 dunite-events = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "1f536a2fa32b4db3df95945c444ee3ad7530fc57" }
 async-trait = "0.1"
 

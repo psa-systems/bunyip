@@ -13,6 +13,7 @@ use crate::models::branding::{BrandingAssetSlot, BrandingRow};
 pub struct BrandingRepository;
 
 impl BrandingRepository {
+    // SPEC-7.3.17
     pub async fn get(pool: &PgPool) -> Result<BrandingRow, AppError> {
         let row = sqlx::query_as::<_, BrandingRow>("SELECT * FROM branding WHERE id = 1")
             .fetch_one(pool)
@@ -25,6 +26,7 @@ impl BrandingRepository {
     /// description, Open Graph image or palette entry, and "leave it alone"
     /// would make clearing impossible. The asset markers are NOT touched here;
     /// they belong to [`Self::set_asset`] / [`Self::clear_asset`].
+    // SPEC-7.3.18
     pub async fn update(
         pool: &PgPool,
         brand_name: &str,
@@ -71,6 +73,7 @@ impl BrandingRepository {
 
     /// BUNYIP-560: the stored bytes for one asset key, or `None` when the slot
     /// is unset. The only read that transfers a BYTEA.
+    // SPEC-7.3.19
     pub async fn get_asset(
         pool: &PgPool,
         kind: &str,
@@ -90,6 +93,7 @@ impl BrandingRepository {
     /// its source plus the whole derived set here, so a partially derived icon
     /// set can never be observed, and a failure anywhere leaves the previous
     /// brand intact rather than half-replaced.
+    // SPEC-7.3.5, SPEC-7.3.20
     pub async fn set_asset(
         pool: &PgPool,
         slot: BrandingAssetSlot,
@@ -121,6 +125,7 @@ impl BrandingRepository {
 
         // The column name comes from the slot enum, never from a request, so
         // the format! is over a fixed alphabet of three identifiers.
+        // SPEC-7.3.4, SPEC-7.3.22: column name comes from the slot enum only
         let row = sqlx::query_as::<_, BrandingRow>(&format!(
             "UPDATE branding SET {} = NOW(), updated_at = NOW(), updated_by = $1 \
              WHERE id = 1 RETURNING *",
@@ -136,6 +141,7 @@ impl BrandingRepository {
 
     /// BUNYIP-560: clear every key a slot owns and null its version marker, in
     /// one transaction. Idempotent.
+    // SPEC-7.3.21
     pub async fn clear_asset(
         pool: &PgPool,
         slot: BrandingAssetSlot,
@@ -148,6 +154,7 @@ impl BrandingRepository {
                 .execute(&mut *tx)
                 .await?;
         }
+        // SPEC-7.3.4, SPEC-7.3.22: column name comes from the slot enum only
         let row = sqlx::query_as::<_, BrandingRow>(&format!(
             "UPDATE branding SET {} = NULL, updated_at = NOW(), updated_by = $1 \
              WHERE id = 1 RETURNING *",

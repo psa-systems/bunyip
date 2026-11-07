@@ -35,9 +35,11 @@
     if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
   }
 
+  // SPEC-11.38.5
   var tag = document.currentScript || document.querySelector('script[data-api-origin]');
   var origin = tag && tag.getAttribute('data-api-origin');
   if (!origin || !window.EventSource) return;
+  // SPEC-11.38.6
   var es;
   try {
     es = new EventSource(origin + '/v1/events', { withCredentials: true });
@@ -47,6 +49,7 @@
     report('error', 'live event stream could not be opened; this tab updates only on navigation', e);
     return;
   }
+  // SPEC-11.38.8
   window.addEventListener('pagehide', function () {
     try {
       es.close();
@@ -56,6 +59,7 @@
       report('warn', 'live event stream could not be closed on pagehide', e);
     }
   });
+  // SPEC-11.38.7
   var reload = function () {
     window.location.reload();
   };

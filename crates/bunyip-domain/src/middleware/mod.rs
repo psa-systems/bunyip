@@ -2,6 +2,7 @@
 //! kernel middleware (request-id, security-headers) re-exported from dunite-core
 //! so `crate::middleware::request_id::*` / `::security_headers::*` paths resolve.
 
+// SPEC-7.4.1
 pub mod auth;
 pub mod auto_ban;
 

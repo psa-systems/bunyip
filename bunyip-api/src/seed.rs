@@ -37,6 +37,7 @@ use crate::repositories::{
 };
 use crate::services::{argon2_offload, PasswordService};
 
+// SPEC-9.34.1: other versions are rejected
 /// Canonical schema version this build understands. A file declaring any other
 /// version is rejected rather than silently mis-read.
 pub const SEED_SCHEMA_VERSION: u32 = 1;
@@ -64,6 +65,7 @@ pub struct SeedTemplate {
     pub json: &'static str,
 }
 
+// SPEC-9.34.13: embedded templates
 /// The template library. Each `json` is a committed file under `seed/`, embedded
 /// via `include_str!`; a test asserts every one parses + validates.
 pub const SEED_TEMPLATES: &[SeedTemplate] = &[
@@ -79,11 +81,13 @@ pub const SEED_TEMPLATES: &[SeedTemplate] = &[
     },
 ];
 
+// SPEC-9.34.13: exact name match only
 /// Look up a template by name.
 pub fn find_template(name: &str) -> Option<&'static SeedTemplate> {
     SEED_TEMPLATES.iter().find(|t| t.name == name)
 }
 
+// SPEC-9.34.2: every seed type denies unknown fields
 /// A parsed seed file. Section order is irrelevant; the loader resolves
 /// cross-references (app -> group, entitlement -> user/app) by slug/email.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -142,6 +146,7 @@ impl SeedOwns {
         self.domains.is_empty() && self.emails.is_empty()
     }
 
+    // SPEC-9.34.4: @-anchored suffix match
     /// True when `email` sits under an owned domain or matches an owned email
     /// (both case-insensitive). Domain matching anchors on `@` so a sibling
     /// domain (`x@evil-demo.psa-systems.test`) can never sneak in.
@@ -284,6 +289,7 @@ pub fn is_seed_email(email: &str) -> bool {
         .ends_with(&format!("@{SEED_EMAIL_DOMAIN}"))
 }
 
+// SPEC-9.34.12: allow flag plus non-production
 /// Refuse to run against anything that could be production. Mirrors the
 /// `bunyip-e2e-bootstrap` gate: an explicit `allow` flag AND a non-production
 /// environment. An empty/unset environment is treated as production and
@@ -306,6 +312,7 @@ pub fn seed_guard(environment: &str, allow: bool) -> Result<(), SeedError> {
     Ok(())
 }
 
+// SPEC-9.34.1, SPEC-9.34.2: version check, then full validation
 /// Parse and validate a seed file. Returns the [`SeedFile`] only when the
 /// version matches and every structural + referential invariant holds, so the
 /// loader can insert without re-checking.
@@ -322,6 +329,7 @@ pub fn parse(json: &str) -> Result<SeedFile, SeedError> {
 }
 
 impl SeedFile {
+    // SPEC-9.34.3: omitted owns means the reserved domain
     /// The file's declared reclaim scope, or the reserved-domain default when
     /// it declares none (PSA-56 back-compat). Validation, the loader's
     /// feedback-clear, and reset all key on this.
@@ -333,11 +341,13 @@ impl SeedFile {
         }
     }
 
+    // SPEC-9.34.5: reports every problem at once
     /// Structural + referential integrity. Collects every problem so the
     /// operator sees them all at once, not one per run.
     pub fn validate(&self) -> Result<(), SeedError> {
         let mut errs: Vec<String> = Vec::new();
 
+        // SPEC-9.34.6: slug and group reference checks
         // Unique slugs / emails (case-insensitive for emails).
         let mut group_slugs: HashSet<&str> = HashSet::new();
         for g in &self.application_groups {
@@ -360,6 +370,7 @@ impl SeedFile {
             }
         }
 
+        // SPEC-9.34.7: only the reserved domain may be reset by domain
         let owns = self.effective_owns();
         // `owns.domains` may only name the reserved domain: a whole-domain reset
         // is refused for any other (real) domain, so a real domain must be
@@ -381,6 +392,7 @@ impl SeedFile {
                     u.email, owns.domains, owns.emails
                 ));
             }
+            // SPEC-9.34.8: owns coverage, duplicate email, password_env
             if !user_emails.insert(lower) {
                 errs.push(format!("duplicate user email '{}'", u.email));
             }
@@ -390,6 +402,7 @@ impl SeedFile {
                     errs.push(format!("user '{}' has an empty password_env", u.email));
                 }
             }
+            // SPEC-9.34.9: closed sets for role, status and tier
             // Reject enum typos loudly (the loader would otherwise map an unknown
             // value to a silent default: subscriber / none / free).
             if !VALID_ROLES.contains(&u.role.to_ascii_lowercase().as_str()) {
@@ -416,6 +429,7 @@ impl SeedFile {
             }
         }
 
+        // SPEC-9.34.10: references resolve inside the file
         // Entitlements must reference a user and an app declared in this file.
         for e in &self.entitlements {
             if !user_emails.contains(&e.user_email.to_ascii_lowercase()) {
@@ -432,6 +446,7 @@ impl SeedFile {
             }
         }
 
+        // SPEC-9.34.11: owned email is required so reset can reclaim it
         // Feedback must carry a message and a seed-owned author email. The email
         // is REQUIRED (not just validated when present): the reset and the
         // idempotent re-import clear seed feedback by that email, so a row with
@@ -468,6 +483,7 @@ pub enum SeedError {
     Guard(String),
 }
 
+// SPEC-9.34.1, SPEC-9.34.2, SPEC-9.34.5: exact operator-facing texts
 impl fmt::Display for SeedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -593,6 +609,7 @@ fn parse_role(role: &str) -> UserRole {
 
 /// Map a template tier string to a [`MembershipTier`]. `lifetime = true`
 /// forces `Lifetime`; an unknown/absent tier falls back to `Free`.
+// SPEC-9.35.5: lifetime flag forces the lifetime tier
 fn parse_tier(tier: Option<&str>, lifetime: bool) -> MembershipTier {
     if lifetime {
         return MembershipTier::Lifetime;
@@ -605,6 +622,7 @@ fn parse_tier(tier: Option<&str>, lifetime: bool) -> MembershipTier {
     }
 }
 
+// SPEC-9.35.5: invalid RFC 3339 is a BadTimestamp error
 fn parse_ts(value: &Option<String>, source: &str) -> Result<Option<DateTime<Utc>>, LoadError> {
     match value {
         None => Ok(None),
@@ -617,6 +635,7 @@ fn parse_ts(value: &Option<String>, source: &str) -> Result<Option<DateTime<Utc>
     }
 }
 
+// SPEC-9.35.3: unset or empty password fails before any write
 /// Resolve a seed user's password: an env-var reference (a secret, `_FILE`-aware
 /// via `secret_env`) wins, then a literal per-user password, then the file
 /// default. Rejects an unset env var and an empty resolved value so a
@@ -640,6 +659,7 @@ fn resolve_password(user: &SeedUser, default_password: Option<&str>) -> Result<S
     Ok(raw)
 }
 
+// SPEC-9.35.1, SPEC-9.35.8: idempotent, ordered load
 /// Load a validated [`SeedFile`] into the database through the domain
 /// repositories. Idempotent: users are upserted by email, groups and
 /// applications are created-if-absent, entitlement grants are upserts, and seed
@@ -671,6 +691,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.groups += 1;
     }
 
+    // SPEC-9.35.2: container_name defaults to the slug
     // 2. Applications (create-if-absent), then link each to its group.
     for a in &file.applications {
         let app_id = match ApplicationRepository::find_by_slug(pool, &a.slug).await? {
@@ -724,6 +745,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.applications += 1;
     }
 
+    // SPEC-9.35.5: upsert and membership state
     // 3. Users (upsert by email), then apply verified/profile/membership state.
     //
     // Resolve the password: an env-var reference (a secret, `_FILE`-aware via
@@ -731,6 +753,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
     // default. Trimmed before hashing so a newline from a secret store does not
     // diverge from what the login path sends (PSA-56).
     //
+    // SPEC-9.35.4: Argon2 off the request future
     // Every hash runs up front in ONE blocking task: `load` is reachable from
     // the admin seed endpoint, so N sequential Argon2 hashes on the request
     // future would stall the whole actix arbiter (BUNYIP-553).
@@ -800,6 +823,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.users += 1;
     }
 
+    // SPEC-9.35.6: source SEED; unresolved refs fail
     // 4. Entitlements (upsert grants).
     for e in &file.entitlements {
         let user = UserRepository::find_by_email(pool, &e.user_email)
@@ -816,6 +840,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
         summary.entitlements += 1;
     }
 
+    // SPEC-9.35.7: clear then insert keeps re-import idempotent
     // 5. Feedback: clear prior owned feedback, then insert fresh, so re-import
     //    stays idempotent (feedback has no natural key).
     delete_owned_feedback(pool, &file.effective_owns()).await?;
@@ -843,6 +868,7 @@ pub async fn load(pool: &PgPool, file: &SeedFile) -> Result<LoadSummary, LoadErr
     Ok(summary)
 }
 
+// SPEC-9.34.7, SPEC-9.35.9: guard against deleting a real domain
 /// Whether a domain may be reset by a whole-domain delete. Only the reserved
 /// seed domain qualifies; any other (potentially real) domain must be reset via
 /// explicit `owns.emails`, so a file can never delete every account under a real
@@ -852,6 +878,7 @@ fn domain_reset_allowed(domain: &str) -> bool {
     domain.eq_ignore_ascii_case(SEED_EMAIL_DOMAIN)
 }
 
+// SPEC-9.35.9: domain delete only for the reserved domain
 /// Delete the users an `owns` scope covers (guardrailed): whole-domain delete
 /// for the reserved domain, exact-email delete for explicit emails. A
 /// non-reserved domain is refused. Returns the rows removed.
@@ -871,6 +898,7 @@ async fn delete_owned_users(pool: &PgPool, owns: &SeedOwns) -> Result<u64, LoadE
     Ok(removed)
 }
 
+// SPEC-9.35.9, SPEC-9.35.7: same guardrail as users
 /// Delete the feedback an `owns` scope covers, with the same guardrail as
 /// [`delete_owned_users`]. Used by both reset and the loader's idempotent
 /// feedback-clear.
@@ -890,6 +918,7 @@ async fn delete_owned_feedback(pool: &PgPool, owns: &SeedOwns) -> Result<u64, Lo
     Ok(removed)
 }
 
+// SPEC-9.35.9: catalog is never removed
 /// Remove all seed data an `owns` scope reclaims: the seed users (with their
 /// cascaded dependencies) and their feedback. Catalog groups/applications are
 /// shared config and are left intact - deleting a catalog app could orphan a
@@ -901,6 +930,7 @@ pub async fn reset(pool: &PgPool, owns: &SeedOwns) -> Result<ResetSummary, LoadE
     Ok(ResetSummary { users, feedback })
 }
 
+// SPEC-9.35.10: no password hashes are exported
 /// Serialize the current seed-owned data back into a [`SeedFile`] (PSA-52
 /// export): users and feedback under the reserved domain, plus the full catalog
 /// of groups/applications (catalog is shared config, not email-scoped).

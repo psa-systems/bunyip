@@ -34,6 +34,7 @@ pub struct UpdateFeatureToggleRequest {
     pub enabled: bool,
 }
 
+// SPEC-10.16.1: registry-driven listing; a missing row reads as off.
 /// Every registered feature, stored state or default-off, in registry order.
 fn entries(rows: &[FeatureToggleRow], emails: &HashMap<Uuid, String>) -> Vec<FeatureToggleEntry> {
     Feature::ALL
@@ -70,6 +71,7 @@ async fn actor_emails(
     Ok(pairs.into_iter().collect())
 }
 
+// SPEC-10.16.4: a failed re-read is logged and keeps the last good snapshot.
 /// Re-read the table into the process snapshot. A failure keeps the last good snapshot.
 pub async fn refresh_snapshot(pool: &PgPool, snapshot: &FeatureToggleSnapshot) {
     match FeatureToggleRepository::load(pool).await {
@@ -81,6 +83,7 @@ pub async fn refresh_snapshot(pool: &PgPool, snapshot: &FeatureToggleSnapshot) {
     }
 }
 
+// SPEC-10.16.1: any admin may list.
 /// GET /v1/admin/feature-toggles
 pub async fn list_feature_toggles(
     req: HttpRequest,
@@ -93,6 +96,7 @@ pub async fn list_feature_toggles(
     Ok(success(entries(&rows, &emails), request_id))
 }
 
+// SPEC-10.16.2, SPEC-10.16.3, SPEC-10.16.5: super-admin flip, row and audit in one transaction.
 /// PUT /v1/admin/feature-toggles/{key}
 ///
 /// Upserts the row and its audit entry in one transaction, then refreshes this

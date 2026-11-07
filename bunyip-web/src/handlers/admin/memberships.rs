@@ -11,6 +11,7 @@ use crate::web::{redirect, redirect_cookies, AppState};
 
 use super::PageQuery;
 
+// SPEC-12.7.5: old links land on the users list with the tier filter
 /// BUNYIP-410: the standalone Memberships page was consolidated into the users
 /// list (which now shows tier + verified with a filter bar). `/admin/memberships`
 /// redirects to the users list, preserving any tier filter as `?tier=` so old
@@ -31,6 +32,7 @@ pub async fn memberships(Query(q): Query<PageQuery>) -> Response {
     }
 }
 
+// SPEC-12.7.6
 /// POST /admin/memberships/{user_id}/grant - grant a free admin-override
 /// membership (sets `membership_override_by`). Forwards to the existing API
 /// endpoint; redirects back to the listing. BUNYIP-118.
@@ -64,6 +66,7 @@ pub async fn membership_grant(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.7.6
 /// POST /admin/memberships/{user_id}/revoke - revoke an admin-override
 /// membership (resets tier to standard, clears `membership_override_by`).
 /// BUNYIP-118.

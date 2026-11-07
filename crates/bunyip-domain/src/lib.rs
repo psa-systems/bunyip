@@ -8,6 +8,7 @@
 //! `crate::services::{jwt, password, encryption}` unchanged. The OCI and OIDC
 //! verticals live in their own crates (`bunyip-oci`, `bunyip-oidc`).
 
+// SPEC-7.1.1: domain sources keep their original module paths
 // Generic kernel, re-exported from the dunite-core framework crate.
 pub use dunite_core::{errors, responses, validation};
 
@@ -22,10 +23,12 @@ pub mod repositories;
 pub mod services;
 pub mod sys_config;
 
+// SPEC-7.1.3: test builds only
 // Shared test utilities (env-var lock); test builds only.
 #[cfg(test)]
 pub(crate) mod test_support;
 
+// SPEC-7.1.2: crate-root re-exports
 // Re-export commonly used types.
 pub use config::Config;
 pub use errors::AppError;

@@ -12,6 +12,7 @@ pub struct TotpRepository;
 impl TotpRepository {
     /// Store a new unverified secret plus the setup token hash (BUNYIP-886).
     /// Never replaces a verified row: `None` means two-factor is already on.
+    // SPEC-7.3.271
     pub async fn upsert_totp(
         pool: &PgPool,
         user_id: Uuid,
@@ -49,6 +50,7 @@ impl TotpRepository {
 
     /// Unconditional upsert for trusted provisioning only (`enroll_preset`, the
     /// E2E bootstrap): replaces even a verified row. Never call from a handler.
+    // SPEC-7.3.272
     pub async fn replace_totp(
         pool: &PgPool,
         user_id: Uuid,
@@ -79,6 +81,7 @@ impl TotpRepository {
 
     /// Mark verified, burn the setup token and enable 2FA in one transaction.
     /// Guarded on the token hash, so `false` means the token was not live (BUNYIP-886).
+    // SPEC-7.3.273
     pub async fn complete_setup(
         pool: &PgPool,
         user_id: Uuid,
@@ -114,6 +117,7 @@ impl TotpRepository {
     }
 
     /// Update encryption data for a specific TOTP record (used during key rotation).
+    // SPEC-7.3.274
     pub async fn update_encryption(
         pool: &PgPool,
         id: Uuid,
@@ -141,6 +145,7 @@ impl TotpRepository {
     /// is encrypted under the same at-rest key, so a key rotation or the
     /// BUNYIP-483 consolidation pass must rewrite it too or the pending secret
     /// becomes unreadable when the old key is dropped.
+    // SPEC-7.3.274
     pub async fn update_pending_encryption(
         pool: &PgPool,
         id: Uuid,
@@ -171,6 +176,7 @@ impl TotpRepository {
     /// touching the active secret or `verified`, so the current authenticator
     /// keeps working until the user confirms the new one. Overwrites any prior
     /// in-flight pending secret.
+    // SPEC-7.3.275
     pub async fn stage_pending_secret(
         pool: &PgPool,
         user_id: Uuid,
@@ -202,6 +208,7 @@ impl TotpRepository {
     /// clear the pending state, keeping `verified` intact. Only runs when a
     /// complete pending secret is present, so it can never null out the active
     /// secret. Returns the number of rows updated (0 = no pending re-key).
+    // SPEC-7.3.276
     pub async fn promote_pending_secret(pool: &PgPool, user_id: Uuid) -> Result<u64, AppError> {
         let res = sqlx::query(
             r#"
@@ -232,6 +239,7 @@ impl TotpRepository {
     /// two concurrent submissions of the same code cannot both win. Returns the
     /// number of rows updated (0 = already consumed, treat as a failed
     /// verification).
+    // SPEC-7.3.277
     pub async fn claim_totp_step(pool: &PgPool, user_id: Uuid, step: i64) -> Result<u64, AppError> {
         let res = sqlx::query(
             r#"
@@ -249,6 +257,7 @@ impl TotpRepository {
     }
 
     /// Find TOTP configuration by user ID
+    // SPEC-7.3.278
     pub async fn find_by_user_id(
         pool: &PgPool,
         user_id: Uuid,
@@ -261,6 +270,7 @@ impl TotpRepository {
     }
 
     /// Mark TOTP as verified and enable 2FA on the user
+    // SPEC-7.3.279
     pub async fn mark_verified(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         let mut tx = pool.begin().await?;
 
@@ -281,6 +291,7 @@ impl TotpRepository {
     }
 
     /// Delete TOTP configuration and disable 2FA on the user
+    // SPEC-7.3.280
     pub async fn delete_by_user_id(pool: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         let mut tx = pool.begin().await?;
 
@@ -306,6 +317,7 @@ impl TotpRepository {
     }
 
     /// Insert recovery codes (deletes old ones first)
+    // SPEC-7.3.281
     pub async fn insert_recovery_codes(
         pool: &PgPool,
         user_id: Uuid,
@@ -332,6 +344,7 @@ impl TotpRepository {
     }
 
     /// Find all unused recovery codes for a user (max 8)
+    // SPEC-7.3.282
     pub async fn find_all_unused_recovery_codes(
         pool: &PgPool,
         user_id: Uuid,
@@ -346,6 +359,7 @@ impl TotpRepository {
     }
 
     /// Find an unused recovery code by hash
+    // SPEC-7.3.282
     pub async fn find_unused_recovery_code(
         pool: &PgPool,
         user_id: Uuid,
@@ -365,6 +379,7 @@ impl TotpRepository {
     /// NULL` guard makes `rows_affected` the race arbiter, the same shape as
     /// [`crate::repositories::TokenRepository::mark_magic_link_token_used`]:
     /// exactly one of N concurrent redemptions of the same code gets `true`.
+    // SPEC-7.3.7, SPEC-7.3.283
     pub async fn mark_recovery_code_used(pool: &PgPool, code_id: Uuid) -> Result<bool, AppError> {
         let result = sqlx::query(
             "UPDATE recovery_codes SET used_at = NOW() WHERE id = $1 AND used_at IS NULL",
@@ -376,6 +391,7 @@ impl TotpRepository {
     }
 
     /// Count unused recovery codes for a user
+    // SPEC-7.3.282
     pub async fn count_unused_recovery_codes(
         pool: &PgPool,
         user_id: Uuid,

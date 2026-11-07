@@ -9,6 +9,7 @@
 //! when the UA is absent or unrecognisable, so the caller keeps its
 //! "Unknown device" fallback.
 
+// SPEC-7.1.134: more specific token first: Edge and Opera carry Chrome
 /// Best-effort browser name from a User-Agent. Order matters: several UAs nest
 /// tokens (Edge and Opera both carry `Chrome`; Chrome carries `Safari`), so the
 /// more specific token is checked first.
@@ -28,6 +29,7 @@ fn browser_name(ua: &str) -> Option<&'static str> {
     }
 }
 
+// SPEC-7.1.135: mobile before the desktop families it can match
 /// Best-effort operating-system name from a User-Agent. iOS/Android are checked
 /// before the desktop families they can otherwise match (an iPhone UA contains
 /// `like Mac OS X`).
@@ -49,6 +51,7 @@ fn os_name(ua: &str) -> Option<&'static str> {
     }
 }
 
+// SPEC-7.1.133, SPEC-7.1.136: None keeps the caller's Unknown device fallback
 /// Derive a friendly device label from a raw User-Agent, or `None` when it is
 /// absent, blank, or unrecognisable (the caller then shows "Unknown device").
 ///

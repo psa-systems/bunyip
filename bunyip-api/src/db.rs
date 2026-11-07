@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::errors::AppError;
 
+// SPEC-9.16.1
 /// The self-service connection pool, wrapped in a newtype so Actix app state can
 /// distinguish it from the primary `web::Data<PgPool>` system pool. Cloning is
 /// cheap (an `Arc` clone of the underlying `PgPool`).
@@ -33,6 +34,7 @@ impl AppPool {
     }
 }
 
+// SPEC-9.16.2, SPEC-9.16.3
 /// Open a transaction with the per-user RLS GUC `app.current_user_id` set
 /// transaction-locally.
 ///
@@ -56,6 +58,7 @@ pub async fn begin_with_user(
     Ok(tx)
 }
 
+// SPEC-9.4.8
 /// Idempotently create the `bunyip_app` role as a GRANT-only shell, BEFORE
 /// migrations run. Any migration that names the role in a `GRANT ... TO
 /// bunyip_app` statement needs it to exist by the time `sqlx::migrate!` fires;
@@ -77,6 +80,7 @@ pub async fn ensure_app_role_shell(pool: &PgPool) -> Result<(), AppError> {
 
 /// The idempotent `DO` block used by [`ensure_app_role_shell`]. Factored out so
 /// the shape can be pinned in a unit test without a running database.
+// SPEC-9.4.8
 fn shell_role_statement() -> &'static str {
     "DO $do$ BEGIN \
      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bunyip_app') \
@@ -84,6 +88,7 @@ fn shell_role_statement() -> &'static str {
      END IF; END $do$"
 }
 
+// SPEC-9.4.10, SPEC-9.4.11
 /// Idempotently provision the unprivileged `bunyip_app` role that activates the
 /// per-user RLS policies (BUNYIP-360).
 ///
@@ -122,6 +127,7 @@ pub async fn provision_app_role(pool: &PgPool, password: &str) -> Result<(), App
     Ok(())
 }
 
+// SPEC-9.4.10, SPEC-9.4.11: statement text embeds the password
 /// The provisioning statements, each paired with a stable label.
 ///
 /// Two of them embed the password as an SQL literal, so the statement text is a
@@ -178,6 +184,7 @@ fn provisioning_statements(password: &str, db_name: &str) -> Vec<(&'static str, 
     ]
 }
 
+// SPEC-9.4.11: label only, never the statement
 /// Build the error for a failed provisioning step. Names the step by label only;
 /// the statement text is never interpolated, because two of the statements carry
 /// `BUNYIP_APP_PASSWORD` in plaintext and this error is logged at `error!`.

@@ -9,6 +9,7 @@ import { env } from './lib/env';
 // would trip it within a handful of specs.
 const HUB_STORAGE_STATE = './.auth/hub-state.json';
 
+// SPEC-3.36.6
 export default defineConfig({
   testDir: './tests',
   // Teardown deletes this run's records and sweeps stale residue.
@@ -91,6 +92,7 @@ export default defineConfig({
       ],
     },
   },
+  // SPEC-3.36.7
   projects: [
     // 0. Aggregate-all-missing env-var check. Runs first so a misconfigured CI
     //    names every gap in one round trip instead of dying at the first key.

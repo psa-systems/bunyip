@@ -90,6 +90,7 @@ const EXCEPTIONS = [
 # install issued as a separate command is thrown away before the audit runs: when
 # a runner fronts cargo, the two have to share one invocation. Binstall output
 # goes to stderr to keep stdout pure JSON.
+# SPEC-3.12.3
 def audit-argv [prefix: list<string>]: nothing -> list<string> {
     if ($prefix | is-empty) { return ["cargo" "audit" "--json"] }
     let install = $"cargo binstall --no-confirm --locked cargo-audit@($AUDIT_VERSION_REQ)"
@@ -100,6 +101,7 @@ def audit-argv [prefix: list<string>]: nothing -> list<string> {
 # What arrived on stdout, bounded, saying so when it was cut. An empty stdout reads as
 # `(empty)` rather than as a blank line, because "nothing arrived" and "something
 # unreadable arrived" are different failures that would otherwise read identically.
+# SPEC-3.12.5
 def excerpt [raw: string]: nothing -> string {
     if ($raw | str trim | is-empty) { return "(empty)" }
     let len = ($raw | str length)
@@ -112,6 +114,7 @@ def excerpt [raw: string]: nothing -> string {
 # would otherwise surface as a parse failure with no hint that nothing was ever
 # installed. The bootstrap test runs first on purpose: a real bootstrap failure also
 # leaves stdout empty, so the empty-stdout rule would otherwise swallow it.
+# SPEC-3.12.4
 def classify-failure [result: record, parsed: record]: nothing -> record {
     if ($result.exit_code == $BOOTSTRAP_EXIT) or ($result.stderr | str contains $BOOTSTRAP_MARKER) {
         return {
@@ -136,6 +139,7 @@ def run-through [argv: list<string>]: nothing -> record {
 # runner in front, an install persists, so do it here: binstall when the image
 # carries it (seconds), source build otherwise. CI caches the result with the
 # rest of CARGO_HOME.
+# SPEC-3.12.2
 def ensure-audit [prefix: list<string>] {
     if ($prefix | is-not-empty) { return }
     if (run-through ["cargo" "audit" "--version"]).exit_code == 0 { return }
@@ -211,6 +215,7 @@ def findings [doc: record]: nothing -> record {
 }
 
 # An exception row that cannot be checked is as bad as no exception at all.
+# SPEC-3.12.9
 def malformed [row: record]: nothing -> list<string> {
     mut found = []
     if not ($row.id =~ '^RUSTSEC-\d{4}-\d{4}$') {
@@ -227,6 +232,7 @@ def malformed [row: record]: nothing -> list<string> {
 
 # Every way the audit is a failure: an uncovered vulnerability, an exception past
 # its date, an exception covering nothing, an unreadable exception row.
+# SPEC-3.12.6, SPEC-3.12.7, SPEC-3.12.8
 def violations [report: record, exceptions: list<any>, today: datetime]: nothing -> list<string> {
     mut found = ($exceptions | each {|row| malformed $row} | flatten)
     if ($found | is-not-empty) { return $found }
@@ -305,6 +311,7 @@ def expect-rejected [label: string, report: record, exceptions: list<any>, today
 # Prove the classifier still fails on each shape it exists to fail on. Without
 # it a drifted parser reports "no vulnerabilities" for every run, which is the
 # same blindness one level up that this guard exists to remove.
+# SPEC-3.12.11
 def run-self-test [] {
     # A time-of-day well past midnight, so a test that compares $today to a
     # review_by date actually exercises the boundary: using a bare midnight
@@ -445,6 +452,7 @@ export def main [
     --runner: string = "" # command that fronts `cargo`, e.g. a `docker compose run` wrapper
     --self-test # check the guard still detects an uncovered advisory, then exit
 ] {
+    # SPEC-3.12.1, SPEC-3.12.10
     if $self_test {
         run-self-test
         return

@@ -11,6 +11,7 @@ use actix_web::web;
 
 use crate::handlers;
 
+// SPEC-9.26.3: both paths are in the floor EXEMPT_PATHS
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/mailer")

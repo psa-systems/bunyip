@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+// SPEC-9.1.8: env override wins; else git/date; else "unknown"
 fn main() {
     let commit = resolve("GIT_COMMIT", &["git", "rev-parse", "--short", "HEAD"]);
     let tag = resolve(
@@ -30,6 +31,7 @@ fn main() {
 // HEAD and resolves refs to the common directory, so a linked worktree and a
 // submodule work too. Watch `refs/heads` + `refs/tags`, not all of `refs`, so a
 // `git fetch` that only moves a remote-tracking ref does not recompile the crate.
+// SPEC-9.1.9: watch real git paths only, so builds are not perpetually stale
 fn emit_git_rerun_triggers() {
     let output = Command::new("git")
         .args([
@@ -59,6 +61,7 @@ fn emit_git_rerun_triggers() {
     }
 }
 
+// SPEC-9.1.8
 fn resolve(env_var: &str, cmd: &[&str]) -> String {
     if let Ok(value) = std::env::var(env_var) {
         if !value.is_empty() {

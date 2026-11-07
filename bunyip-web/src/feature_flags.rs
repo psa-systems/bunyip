@@ -28,15 +28,18 @@ use crate::views::layout::{install_features, install_orgs_enabled};
 #[cfg(test)]
 pub(crate) static FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+// SPEC-11.6.4
 /// How often the BFF re-reads the flags. An admin change is live within one
 /// interval; that is documented in the admin help text rather than worked
 /// around.
 pub const FLAGS_REFRESH_SECS: u64 = 60;
 
+// SPEC-11.6.3, SPEC-2.3.1
 /// Cap on the startup read. Short: an unreachable API must not hold the listener
 /// closed, it must serve with the feature dark and keep retrying.
 pub const FLAGS_STARTUP_TIMEOUT_SECS: u64 = 5;
 
+// SPEC-11.6.1, SPEC-11.6.5
 /// Read the flags and install them. `true` when a reading was published.
 ///
 /// BUNYIP-555's rule (chrome payloads are read through `AppState`'s TTL caches,
@@ -56,6 +59,7 @@ async fn refresh(api: &Api, startup: bool) -> bool {
     }
 }
 
+// SPEC-11.6.2: a failed read never turns a feature on.
 fn report(e: &ApiError, startup: bool) {
     if startup {
         tracing::error!(
@@ -79,6 +83,7 @@ fn report(e: &ApiError, startup: bool) {
     }
 }
 
+// SPEC-11.6.3, SPEC-2.3.1
 /// One bounded read before the listener binds, so the first render already has
 /// the flags.
 pub async fn load_at_startup(api: &Api) {
@@ -103,6 +108,7 @@ pub async fn load_at_startup(api: &Api) {
     }
 }
 
+// SPEC-11.6.4
 /// Background refresh, so flipping the admin switch reaches the nav and the
 /// routes without a restart.
 pub fn spawn_refresh(api: Api) {

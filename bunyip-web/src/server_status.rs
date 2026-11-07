@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use maud::{html, Markup};
 
+// SPEC-11.7.1
 /// Process-global "bunyip-api reachable" flag. `true` (reachable) on boot.
 static API_REACHABLE: AtomicBool = AtomicBool::new(true);
 
@@ -33,6 +34,7 @@ fn set_reachable(reachable: bool) {
     API_REACHABLE.store(reachable, Ordering::Relaxed);
 }
 
+// SPEC-11.7.2: any response, even 4xx, proves reachability; only 5xx marks the API down.
 /// Classify a completed API response. Any response at all - even a `4xx` -
 /// proves the API is reachable and clears the down state. A `5xx` is treated as
 /// "down" per BUNYIP-243 (the server is up but failing, surfaced like an
@@ -42,6 +44,7 @@ pub fn note_status(status: u16) {
     set_reachable(!(500..600).contains(&status));
 }
 
+// SPEC-11.7.3
 /// Classify a transport-level failure (connection refused, DNS, timeout: the
 /// `reqwest` send error mapped to `ApiError::network` / `status: 0`) as the API
 /// being unreachable. This is also the opaque failure the browser console
@@ -51,6 +54,7 @@ pub fn note_transport_error() {
     set_reachable(false);
 }
 
+// SPEC-11.7.4
 /// Full-width "service unavailable" banner, rendered at the top of every page
 /// from the shared `document()` shell. Renders nothing while the API is
 /// reachable, so healthy pages are unaffected; when down it shows on every
@@ -71,6 +75,7 @@ pub fn banner() -> Markup {
     }
 }
 
+// SPEC-11.7.5
 /// Spawn the background recovery poll. While the API is marked unreachable, this
 /// hits bunyip-api `GET /health` (liveness, no auth/DB) on an interval and
 /// clears the down state on the first success. While healthy it does nothing

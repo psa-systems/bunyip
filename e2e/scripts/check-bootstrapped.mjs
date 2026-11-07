@@ -49,6 +49,7 @@ if (!opBaseURL) {
   process.exit(0);
 }
 
+// SPEC-3.37.8
 const url = `${opBaseURL}/e2e-bootstrapped`;
 const TIMEOUT_MS = 15_000;
 const controller = new AbortController();
@@ -75,4 +76,5 @@ try {
   clearTimeout(timer);
 }
 
+// SPEC-3.37.9: fail-open by design: a missing seed skips coverage, never blocks
 process.exit(0);

@@ -37,6 +37,7 @@ struct StatusResponse {
     build_date: &'static str,
 }
 
+// SPEC-9.21.1: shared body of / and /v1/version
 fn status_payload() -> StatusResponse {
     StatusResponse {
         service: SERVICE_NAME,
@@ -47,12 +48,14 @@ fn status_payload() -> StatusResponse {
     }
 }
 
+// SPEC-9.21.1, SPEC-9.20.2: root status
 /// Root status endpoint at /
 #[get("/")]
 pub async fn root_status() -> HttpResponse {
     HttpResponse::Ok().json(status_payload())
 }
 
+// SPEC-9.21.2, SPEC-9.20.2: liveness only, no dependency touched
 /// Health check endpoint at /health
 #[get("/health")]
 pub async fn health_check() -> HttpResponse {
@@ -67,6 +70,7 @@ struct E2eBootstrappedResponse {
     bootstrapped: bool,
 }
 
+// SPEC-9.21.3, SPEC-9.21.4, SPEC-9.20.2: false in production without a query
 /// E2E readiness probe at /e2e-bootstrapped (BUNYIP-163).
 ///
 /// Reports whether the two fixed E2E test accounts (`crate::E2E_ACCOUNT_EMAILS`)
@@ -93,12 +97,14 @@ pub async fn e2e_bootstrapped(pool: web::Data<PgPool>, config: web::Data<Config>
         .collect();
     let bootstrapped = match UserRepository::count_active_by_emails(&pool, &emails).await {
         Ok(n) => n as usize == crate::E2E_ACCOUNT_EMAILS.len(),
+        // SPEC-9.21.5: violation: a failed count reads as not bootstrapped, unlogged
         Err(_) => false,
     };
 
     HttpResponse::Ok().json(E2eBootstrappedResponse { bootstrapped })
 }
 
+// SPEC-9.21.2: liveness under /v1
 /// Health check endpoint at /v1/health
 #[get("/health")]
 async fn health_check_v1() -> HttpResponse {
@@ -108,6 +114,7 @@ async fn health_check_v1() -> HttpResponse {
     })
 }
 
+// SPEC-9.21.1: same body as /
 /// Version endpoint at /v1/version
 #[get("/version")]
 async fn version_v1() -> HttpResponse {

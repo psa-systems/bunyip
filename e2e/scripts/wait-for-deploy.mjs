@@ -45,6 +45,7 @@ import { execFileSync } from 'node:child_process';
 //
 // migrations are not listed separately: there is no top-level migrations dir
 // (they live under bunyip-api/migrations/), so `bunyip-api` already covers them.
+// SPEC-3.37.5
 const BUILD_TRIGGER_PATHS = [
   'bunyip-api', // bunyip-api/**
   'bunyip-web', // bunyip-web/**
@@ -129,6 +130,7 @@ function buildShaQuery(headSha) {
 // filters that strip the trees `git log -- <path>` needs, so self-heal in
 // two stages: unshallow first if the clone is shallow, then refetch
 // without filter if the path query still finds nothing.
+// SPEC-3.37.2
 function resolveBuildSha(headSha) {
   let sha = buildShaQuery(headSha);
   if (sha) return sha;
@@ -160,6 +162,7 @@ function resolveBuildSha(headSha) {
 
 // Required: no domain is hardcoded as a fallback. Inject the per-environment
 // hub host (staging `https://a8n.systems`, prod `https://psa.systems`).
+// SPEC-3.37.1
 const hubBaseURL = pick(process.env.E2E_BASE_URL);
 if (!hubBaseURL) {
   console.error('E2E_BASE_URL is unset; set it to the hub host (see e2e/.env.example). Aborting.');
@@ -181,6 +184,7 @@ if (!headSha) {
   process.exit(1);
 }
 
+// SPEC-3.37.3: skip with a loud warning rather than poll for a SHA never served
 let expectedSha;
 try {
   expectedSha = resolveBuildSha(headSha);
@@ -226,6 +230,7 @@ async function fetchCommit() {
   }
 }
 
+// SPEC-3.37.4
 const deadline = Date.now() + TIMEOUT_MS;
 console.log(`Waiting for ${versionUrl} to report ${expectedSha} (timeout 10m)...`);
 

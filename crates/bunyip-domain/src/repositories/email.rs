@@ -9,6 +9,7 @@ use crate::models::email::EmailConfigRow;
 pub struct EmailConfigRepository;
 
 impl EmailConfigRepository {
+    // SPEC-7.3.81
     pub async fn get(pool: &PgPool) -> Result<EmailConfigRow, AppError> {
         let row = sqlx::query_as::<_, EmailConfigRow>("SELECT * FROM email_config WHERE id = 1")
             .fetch_one(pool)
@@ -19,6 +20,7 @@ impl EmailConfigRepository {
     /// Clears the encrypted SMTP password (and its nonce) from the DB. Called
     /// when decryption fails (e.g. the encryption key was rotated), mirroring
     /// `StripeConfigRepository::clear_secrets`.
+    // SPEC-7.3.84
     pub async fn clear_password(pool: &PgPool) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -37,6 +39,7 @@ impl EmailConfigRepository {
     /// Rewrite the stored SMTP password ciphertext under a new key version,
     /// touching nothing else (BUNYIP-483 re-encrypt pass). `updated_by` is left
     /// alone: re-encryption is not an operator edit of the configuration.
+    // SPEC-7.3.8, SPEC-7.3.85
     pub async fn update_password_encryption(
         pool: &PgPool,
         smtp_password: &[u8],
@@ -65,6 +68,7 @@ impl EmailConfigRepository {
     /// value unchanged (COALESCE). The SMTP password is passed as a
     /// pre-encrypted (ciphertext, nonce) pair; when present, `key_version` is
     /// updated alongside it.
+    // SPEC-7.3.82, SPEC-7.3.83
     #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &PgPool,
@@ -123,6 +127,7 @@ impl EmailConfigRepository {
     /// Write the encrypted IMAP password (ciphertext + nonce) under
     /// `key_version` as an operator edit (BUNYIP-571), mirroring how `update`
     /// writes the SMTP password. Non-password IMAP columns are left untouched.
+    // SPEC-7.3.86
     pub async fn update_imap_password(
         pool: &PgPool,
         imap_password: &[u8],
@@ -154,6 +159,7 @@ impl EmailConfigRepository {
     /// Update only the non-secret IMAP settings that are `Some` (COALESCE);
     /// `None` leaves the existing value (BUNYIP-571). The password is written
     /// separately through the governed-secret path.
+    // SPEC-7.3.87
     pub async fn update_imap_settings(
         pool: &PgPool,
         imap_host: Option<String>,
@@ -190,6 +196,7 @@ impl EmailConfigRepository {
 
     /// Rewrite the stored IMAP password ciphertext under a new key version
     /// (re-encrypt / secrets-migrate pass), touching nothing else.
+    // SPEC-7.3.85
     pub async fn update_imap_password_encryption(
         pool: &PgPool,
         imap_password: &[u8],

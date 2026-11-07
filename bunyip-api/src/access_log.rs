@@ -15,6 +15,7 @@ use actix_web::middleware::Logger;
 
 use crate::middleware::extract_client_ip;
 
+// SPEC-9.14.1, SPEC-9.14.2
 /// Render the external client IP for an access-log line, falling back to `-`
 /// (the common-log-format empty field) when it cannot be determined.
 fn client_ip_field(req: &ServiceRequest) -> String {
@@ -23,6 +24,7 @@ fn client_ip_field(req: &ServiceRequest) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+// SPEC-9.14.1
 /// A request access `Logger` that logs the trusted external client IP in place
 /// of the socket peer (`%a`). Otherwise it mirrors actix's default format:
 /// request line, status, response size, referer, user-agent, and time taken.

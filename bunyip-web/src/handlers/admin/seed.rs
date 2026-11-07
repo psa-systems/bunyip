@@ -35,6 +35,7 @@ pub struct SeedTemplateForm {
     pub template: String,
 }
 
+// SPEC-12.21.1, SPEC-12.21.3, SPEC-12.21.4: template list, export link and import form
 /// Admin data import/export page (PSA-52): download the current seed-owned data
 /// as a canonical file, or paste one to load it. Import is enforced
 /// non-production by the API; the note here sets that expectation.
@@ -43,11 +44,13 @@ pub async fn seed_data(
     headers: HeaderMap,
     Query(q): Query<SeedQuery>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
     };
     let data = admin_api::seed_templates(&st.api, c.forward.as_deref()).await;
+    // SPEC-12.21.2: a failed template fetch stays distinct from an empty list
     let fetch_error = data.as_ref().err().cloned();
     let templates = data.unwrap_or_default();
     let content = html! {
@@ -102,9 +105,11 @@ pub async fn seed_data(
     admin_response(&c, &user, "/admin/seed", "Seed Data", content)
 }
 
+// SPEC-12.21.5, SPEC-12.21.6, SPEC-12.21.7: streamed download with hardening headers
 /// Stream the API's seed export straight to the browser as a file download
 /// (mirrors `feedback_export`). Admin-gated; the API redacts secrets.
 pub async fn seed_export(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -138,6 +143,7 @@ pub async fn seed_export(State(st): State<AppState>, headers: HeaderMap) -> Resp
     }
 }
 
+// SPEC-12.21.8, SPEC-12.21.9, SPEC-12.20.2, SPEC-12.20.3: JSON checked before the API call
 /// Handle the paste-and-import form: validate the text is JSON, forward it to
 /// the API loader, and report the section counts (or the error) back on the
 /// page.
@@ -146,6 +152,7 @@ pub async fn seed_import(
     headers: HeaderMap,
     Form(f): Form<SeedImportForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -180,6 +187,7 @@ pub async fn seed_import(
     }
 }
 
+// SPEC-12.21.10, SPEC-12.21.11, SPEC-12.20.2: named starter template load
 /// Load a named starter template (PSA-57): forward the selected name to the API
 /// loader and report the section counts (or the error) back on the page.
 pub async fn seed_load_template(
@@ -187,6 +195,7 @@ pub async fn seed_load_template(
     headers: HeaderMap,
     Form(f): Form<SeedTemplateForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,

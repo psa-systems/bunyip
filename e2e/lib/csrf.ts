@@ -33,6 +33,7 @@ import { env } from './env';
  * Reads `env.baseURL` at call time so a test that swaps `BASE_URL` mid-run
  * still picks up the right value.
  */
+// SPEC-3.38.9
 export function bunyipWebPostHeaders(): Record<string, string> {
   return { Origin: new URL(env.baseURL).origin };
 }
