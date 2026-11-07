@@ -123,7 +123,7 @@ tracing = "0.1"
 tracing-actix-web = "0.7"
 
 # Errors.
-thiserror = "1"
+thiserror = "2.0.21"
 anyhow = "1"
 
 # Auth / crypto / encoding (JwtService + token hashing live here; the primitive
@@ -147,7 +147,7 @@ hex = "0.4"
 data-encoding = "2"
 
 # Templating + static init (email templates).
-tera = "1"
+tera = "2.4.0"
 lazy_static = "1.4"
 
 # HTTP client / IO.
@@ -167,7 +167,7 @@ validator = { version = "0.18", features = ["derive"] }
 
 # Billing / 2FA / email.
 async-stripe = { version = "0.37", features = ["runtime-tokio-hyper", "checkout", "billing", "webhook-events"] }
-totp-rs = { version = "5", features = ["gen_secret", "otpauth"] }
+totp-rs = { version = "6.0.0", features = ["gen_secret", "otpauth"] }
 lettre = { version = "0.11", features = ["tokio1-native-tls", "builder"] }
 
 [dev-dependencies]

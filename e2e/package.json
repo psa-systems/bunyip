@@ -11,9 +11,9 @@
   },
   "devDependencies": {
     "@playwright/test": "1.60.0",
-    "@types/node": "22.10.2",
-    "dotenv": "16.4.7",
-    "otplib": "^12.0.1",
-    "typescript": "5.7.2"
+    "@types/node": "26.6.6",
+    "dotenv": "18.0.9",
+    "otplib": "^13.6.0",
+    "typescript": "7.0.2"
   }
 }

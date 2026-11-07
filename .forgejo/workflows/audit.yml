@@ -29,7 +29,7 @@ jobs:
 
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
 
       - name: Cache Rust build
         # For CARGO_HOME, so the cargo-audit install is paid for once rather than
