@@ -45,10 +45,12 @@ all iterate the registry and the table.
 | Key                | Feature                                                                                        |
 |--------------------|------------------------------------------------------------------------------------------------|
 | `tenant_hostnames` | tenant hostnames (BUNYIP-591). Nothing reads it yet; the routing writer that will gate on it is BUNYIP-679 |
+| `pricing`          | pricing surface (BUNYIP-841). Public pricing surface at `/pricing`; `tier_config.pricing_enabled` stays the writer `GET /v1/pricing` reads |
 
-Organizations and teams (`tier_config.orgs_enabled`, BUNYIP-493) and `pricing_enabled` are still `tier_config`
-columns, not registry entries. BUNYIP-840 deliberately leaves them there so that reverting it restores today's behavior
-exactly; moving `pricing_enabled` in is BUNYIP-841.
+Organizations and teams (`tier_config.orgs_enabled`, BUNYIP-493) are still a `tier_config` column, not a registry
+entry. `pricing_enabled` gained a registry entry via BUNYIP-841 (surface-only: the admin page and the setup-status
+probe read it, but `tier_config.pricing_enabled` stays the writer `GET /v1/pricing` reads); the writer cutover is a
+separate follow-up migration, not yet filed.
 
 ## Operator notes
 
