@@ -74,15 +74,15 @@ const EXCEPTIONS = [
         id: "RUSTSEC-2026-0258"
         package: "h2"
         issue: "BUNYIP-909"
-        review_by: "2026-11-07"
-        reason: "A fixed version (>=0.4.16) exists but the actix-http dep chain holds h2 at 0.3.27 even after the 3.20.0 bump; tracked for a follow-up actix-http upgrade or workspace patch."
+        review_by: "2027-02-07"
+        reason: "A fixed version (>=0.4.16) exists but the actix-http dep chain still holds h2 at 0.3.27 even after bumping actix-http to 3.20.5 (the latest release on the `4` actix-web line); tracked for a follow-up actix-http upgrade or workspace patch."
     }
     {
         id: "RUSTSEC-2024-0421"
         package: "idna"
         issue: "BUNYIP-909"
-        review_by: "2026-11-07"
-        reason: "A fixed version (>=1.0.0) exists but transitive deps still pin idna 0.5.0 after the Cargo.lock bump; tracked for a follow-up."
+        review_by: "2027-02-07"
+        reason: "A fixed version (>=1.0.0) exists but transitive deps still pin idna 0.5.0 even after bumping actix-http to 3.20.5 (the latest release on the `4` actix-web line); tracked for a follow-up."
     }
 ]
 
