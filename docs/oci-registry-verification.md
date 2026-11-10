@@ -2,8 +2,8 @@
 
 How to run and verify the bunyip OCI registry proxy against the private
 Forgejo instance, end to end, on a dev box. Production wiring (Traefik
-subdomain, secrets) is BUNYIP-32; this document covers the local loop and
-records what the production deployment must reproduce.
+subdomain, secrets) shipped in BUNYIP-32; this document covers the local loop
+and records what the production deployment reproduces.
 
 ## What is being verified
 
