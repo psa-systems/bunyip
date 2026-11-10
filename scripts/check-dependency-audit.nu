@@ -84,6 +84,13 @@ const EXCEPTIONS = [
         review_by: "2026-12-06"
         reason: "A fixed version (>=1.0.0) exists but validator 0.18.1 (the pinned version in crates/bunyip-domain and bunyip-api) depends on idna ^0.5; moving to a fixed idna needs a validator major bump, tracked separately."
     }
+    {
+        id: "RUSTSEC-2026-0459"
+        package: "libsqlite3-sys"
+        issue: "BUNYIP-1068"
+        review_by: "2027-02-07"
+        reason: "libsqlite3-sys is in Cargo.lock only through sqlx-sqlite, which sqlx lists unconditionally regardless of enabled features; no bunyip crate enables sqlx's `sqlite` feature (all take only `postgres`), and `cargo tree --workspace -i libsqlite3-sys` prints nothing, confirming nothing compiles it, the same shape as the RUSTSEC-2023-0071/rsa/sqlx-mysql row above."
+    }
 ]
 
 # `docker compose run --rm` gives every invocation its own container, so an
