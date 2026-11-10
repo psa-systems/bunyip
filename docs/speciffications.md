@@ -205,8 +205,8 @@ live from Stripe.
   `BUNYIP_WEBHOOK_SIGNING_SECRET`, `SECRETS_STORAGE`, and the five `INFISICAL_*` keys. Startup secrets are read from
   files named by `{NAME}_FILE`.
 - **Stripe** configuration is database-only; no `STRIPE_*` environment surface is allowed.
-- **Feature toggles:** a registry of `Feature` rows, off by default, stored in `feature_toggles.key`. One feature is
-  registered (`tenant_hostnames`). Flips are super-admin only.
+- **Feature toggles:** a registry of `Feature` rows, off by default, stored in `feature_toggles.key`. Two features are
+  registered (`pricing`, `tenant_hostnames`). Flips are super-admin only.
 - **Settings archive:** settings move as one passphrase-encrypted file; import replaces, never merges.
 - Full variable reference: [`docs/configuration.md`](configuration.md).
 
