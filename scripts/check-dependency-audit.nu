@@ -73,16 +73,23 @@ const EXCEPTIONS = [
     {
         id: "RUSTSEC-2026-0258"
         package: "h2"
-        issue: "BUNYIP-909"
-        review_by: "2027-02-07"
-        reason: "A fixed version (>=0.4.16) exists but the actix-http dep chain still holds h2 at 0.3.27 even after bumping actix-http to 3.20.5 (the latest release on the `4` actix-web line); tracked for a follow-up actix-http upgrade or workspace patch."
+        issue: "BUNYIP-1066"
+        review_by: "2026-12-06"
+        reason: "A fixed version (>=0.4.16) exists but actix-http 3.20.5, the latest on crates.io after BUNYIP-1064's `cargo update --package actix-http`, still depends on h2 ^0.3, so h2 0.3.27 stays in Cargo.lock until actix-http itself moves off it or a workspace patch forces the bump."
     }
     {
         id: "RUSTSEC-2024-0421"
         package: "idna"
-        issue: "BUNYIP-909"
+        issue: "BUNYIP-1066"
+        review_by: "2026-12-06"
+        reason: "A fixed version (>=1.0.0) exists but validator 0.18.1 (the pinned version in crates/bunyip-domain and bunyip-api) depends on idna ^0.5; moving to a fixed idna needs a validator major bump, tracked separately."
+    }
+    {
+        id: "RUSTSEC-2026-0459"
+        package: "libsqlite3-sys"
+        issue: "BUNYIP-1068"
         review_by: "2027-02-07"
-        reason: "A fixed version (>=1.0.0) exists but transitive deps still pin idna 0.5.0 even after bumping actix-http to 3.20.5 (the latest release on the `4` actix-web line); tracked for a follow-up."
+        reason: "libsqlite3-sys is in Cargo.lock only through sqlx-sqlite, which sqlx lists unconditionally regardless of enabled features; no bunyip crate enables sqlx's `sqlite` feature (all take only `postgres`), and `cargo tree --workspace -i libsqlite3-sys` prints nothing, confirming nothing compiles it, the same shape as the RUSTSEC-2023-0071/rsa/sqlx-mysql row above."
     }
 ]
 
