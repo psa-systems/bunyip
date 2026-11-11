@@ -105,7 +105,10 @@ cargo registry and target dir (so repeated runs stay incremental).
 
 The image's rustup honours `rust-toolchain.toml`, so the pin (not the image
 default) decides the compiler version. CI (`.forgejo/workflows/check.yml`)
-runs the same fmt/clippy/build/test sequence on every PR and push to main.
+runs fmt/clippy/build/test on every push to main; on a pull request, the
+shared `classify-diff` action (BUNYIP-1040) skips Clippy, the lockfile-sync
+check, Unit tests and the docker build when the diff is non-code, and skips
+`cargo fmt` too when the diff has no comment changes either.
 
 ## Critical conventions
 
