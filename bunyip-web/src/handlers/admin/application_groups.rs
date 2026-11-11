@@ -333,7 +333,10 @@ pub async fn application_group_delete(
     };
     let target = match admin_api::delete_application_group(&st.api, c.forward.as_deref(), &id).await
     {
-        Ok(_) => "/admin/application-groups".to_string(),
+        Ok(_) => format!(
+            "/admin/application-groups?toast_ok={}",
+            urlenc("Application group deleted")
+        ),
         Err(e) => {
             tracing::warn!(group_id = %id, error = ?e, "admin delete application group failed");
             format!(

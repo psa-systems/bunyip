@@ -81,7 +81,10 @@ pub async fn membership_revoke(
     }
     // BUNYIP-410: return to the user detail (the Memberships page is gone).
     let target = match admin_api::revoke_membership(&st.api, c.forward.as_deref(), &user_id).await {
-        Ok(_) => format!("/admin/users/{user_id}"),
+        Ok(_) => format!(
+            "/admin/users/{user_id}?toast_ok={}",
+            urlenc("Membership revoked")
+        ),
         Err(e) => {
             tracing::warn!(user_id = %user_id, error = ?e, "admin revoke membership failed");
             format!(
