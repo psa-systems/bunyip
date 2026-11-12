@@ -806,7 +806,7 @@ pub async fn user_role(
     }
     let target =
         match admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await {
-            Ok(_) => "/admin/users".to_string(),
+            Ok(_) => format!("/admin/users?toast_ok={}", urlenc("User role updated")),
             Err(e) => {
                 tracing::warn!(user_id = %id, error = ?e, "admin update user role failed");
                 format!(
@@ -832,7 +832,7 @@ pub async fn user_delete(
         return refusal;
     }
     let target = match admin_api::delete_user(&st.api, c.forward.as_deref(), &id).await {
-        Ok(_) => "/admin/users".to_string(),
+        Ok(_) => format!("/admin/users?toast_ok={}", urlenc("User deleted")),
         Err(e) => {
             tracing::warn!(user_id = %id, error = ?e, "admin delete user failed");
             format!("/admin/users?toast_err={}", urlenc("Could not delete user"))
@@ -856,7 +856,7 @@ pub async fn user_suspend(
         return refusal;
     }
     let target = match admin_api::suspend_user(&st.api, c.forward.as_deref(), &id).await {
-        Ok(_) => "/admin/users".to_string(),
+        Ok(_) => format!("/admin/users?toast_ok={}", urlenc("User suspended")),
         Err(e) => {
             tracing::warn!(user_id = %id, error = ?e, "admin suspend user failed");
             format!(

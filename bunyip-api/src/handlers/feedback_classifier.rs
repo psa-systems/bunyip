@@ -1,8 +1,8 @@
 //! BUNYIP-934: composite spam classifier for feedback intake.
 //!
-//! Three signals, each a weak contributor; the composite flags when any
+//! Four signals, each a weak contributor; the composite flags when any
 //! one fires. Each firing contributes a short human-readable fragment to
-//! the returned `spam_reason` so the admin UI can show WHY. All three
+//! the returned `spam_reason` so the admin UI can show WHY. All four
 //! signals are pure functions of the submitted row, so the classifier
 //! itself holds no state and no DB round-trip.
 //!
@@ -26,7 +26,7 @@
 //!    un-flagged by this signal so a DNS outage never drops real feedback.
 //!
 //! The classifier short-circuits on the FIRST firing signal and does not
-//! enumerate every match: a submission that trips all three is still one
+//! enumerate every match: a submission that trips all four is still one
 //! `spam_reason` row keyed on its first match's label. Rationale: an
 //! admin reviewing a flagged row needs to know whether to trust the
 //! classifier, not the full enumeration; and the "which signal fired

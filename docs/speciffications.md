@@ -460,9 +460,9 @@ trigger list.
 ## 12. Feedback
 
 `POST /v1/feedback` (rate-limited) stores feedback with request metadata. A pure classifier flags spam on the first of
-three signals: sender-domain mimicry, a URL with three or more tags, or a hosting-provider network name. The reason is
-stored in `feedback_spam_reasons`. Admins review, mark or unmark spam, archive, restore, export, respond (verified
-admin), and download attachments.
+four signals: sender-domain mimicry, a URL with three or more tags, a hosting-provider network name, or a sender
+domain with no MX records (BUNYIP-925). The reason is stored in `feedback_spam_reasons`. Admins review, mark or
+unmark spam, archive, restore, export, respond (verified admin), and download attachments.
 
 ## 13. Web front-end (bunyip-web)
 
