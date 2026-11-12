@@ -102,6 +102,14 @@ impl HickoryMxResolver {
 
     fn cache_put(&self, domain: String, outcome: MxLookupOutcome) {
         let mut guard = self.cache.write();
+        // BUNYIP-1078: this is the only write path, so sweeping expired
+        // entries here (amortized into the write lock already taken on
+        // every miss) bounds the resident set to the domains active within
+        // `MX_CACHE_TTL`, instead of growing with every distinct domain
+        // ever seen since process start. The endpoint's volume does not
+        // warrant a TTL-aware cache crate (e.g. `moka`) for an O(n) sweep
+        // on a write-miss path; revisit if that cost becomes measurable.
+        guard.retain(|_, (at, _)| at.elapsed() < MX_CACHE_TTL);
         guard.insert(domain, (Instant::now(), outcome));
     }
 }
@@ -194,5 +202,58 @@ mod tests {
             outcome: MxLookupOutcome::NoMx,
         };
         assert_eq!(r.lookup("example.com").await, MxLookupOutcome::NoMx);
+    }
+
+    // BUNYIP-1078: `cache_put` is the only write path, so it is the only
+    // place that can bound the cache's resident size. These poke the
+    // private `cache` map directly (same module) to simulate an entry past
+    // its TTL without waiting a real hour.
+    #[test]
+    fn cache_put_evicts_entries_past_the_ttl() {
+        let resolver = HickoryMxResolver::new();
+        resolver.cache.write().insert(
+            "stale.example".to_string(),
+            (
+                Instant::now() - MX_CACHE_TTL - Duration::from_secs(1),
+                MxLookupOutcome::HasMx,
+            ),
+        );
+        resolver.cache.write().insert(
+            "fresh.example".to_string(),
+            (Instant::now(), MxLookupOutcome::NoMx),
+        );
+
+        resolver.cache_put("new.example".to_string(), MxLookupOutcome::Unknown);
+
+        let guard = resolver.cache.read();
+        assert!(
+            !guard.contains_key("stale.example"),
+            "a write should sweep entries past MX_CACHE_TTL"
+        );
+        assert!(
+            guard.contains_key("fresh.example"),
+            "a write must not evict entries still inside the TTL"
+        );
+        assert!(guard.contains_key("new.example"));
+    }
+
+    #[test]
+    fn cache_put_does_not_grow_without_bound_across_many_stale_domains() {
+        let resolver = HickoryMxResolver::new();
+        let ancient = Instant::now() - MX_CACHE_TTL - Duration::from_secs(60);
+        for i in 0..50 {
+            resolver.cache.write().insert(
+                format!("old-{i}.example"),
+                (ancient, MxLookupOutcome::HasMx),
+            );
+        }
+
+        resolver.cache_put("newest.example".to_string(), MxLookupOutcome::HasMx);
+
+        assert_eq!(
+            resolver.cache.read().len(),
+            1,
+            "every entry older than the TTL must be swept on the next write"
+        );
     }
 }
