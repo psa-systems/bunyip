@@ -96,7 +96,8 @@ pub async fn assign_user_tenant(
 /// DELETE /v1/admin/oauth-clients/{client_id}/user-tenants/{assignment_id}
 ///
 /// Hard-delete the assignment. Idempotent: deleting an already-deleted
-/// row returns 204, matching the repository semantic. The audit log
+/// row returns a 200 with the success envelope (no data), matching this
+/// repo's house style for admin mutators. The audit log
 /// row carries the assignment_id even on a no-op so security review
 /// can reconstruct "who deleted what when."
 pub async fn unassign_user_tenant(
