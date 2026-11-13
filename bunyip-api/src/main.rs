@@ -637,8 +637,22 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let email_enabled = email_config.enabled;
+    // BUNYIP-1052: in production, a failed EmailService::new used to fall
+    // through to new_dev() and ship a silent-mail server; the sibling
+    // `email_config.enabled` check above is already fatal on disabled
+    // email, so a construction failure must be fatal for the same reason.
+    // Dev / staging keep the new_dev() fallback so a local box without a
+    // real SMTP still boots.
+    let is_prod = config.is_production();
     // SPEC-9.7.1: suppression list guards every send path
     let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
+        if is_prod {
+            fatal_config_error(
+                "SMTP_HOST",
+                &format!("EmailService could not be constructed in a production deployment: {e}"),
+                "Review the SMTP credentials on the admin Email page or in the api environment.",
+            );
+        }
         tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
         EmailService::new_dev()
     }));
