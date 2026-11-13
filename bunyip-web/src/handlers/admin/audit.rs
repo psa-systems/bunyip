@@ -17,6 +17,7 @@ use crate::web::AppState;
 
 use super::title_case;
 
+// SPEC-12.8.1
 #[derive(Clone, Deserialize, Default)]
 pub struct AuditQuery {
     pub page: Option<u32>,
@@ -38,6 +39,7 @@ pub struct AuditQuery {
     pub q: Option<String>,
 }
 
+// SPEC-12.8.5
 /// BUNYIP-930: public so the user-detail page can render the user's own
 /// activity using the same row shape as the global audit page.
 pub fn audit_row(log: &AdminAuditLog) -> Markup {
@@ -91,6 +93,7 @@ const SEVERITY_OPTIONS: &[(&str, &str)] = &[
     ("critical", "Critical"),
 ];
 
+// SPEC-12.8.4
 /// BUNYIP-936: the action-name values the Action chip offers. Covers the
 /// categories that appear across the admin paths without listing every
 /// enum variant (there are 50+). A free-text search covers the long tail.
@@ -112,6 +115,7 @@ const ACTION_OPTIONS: &[(&str, &str)] = &[
     ("admin_feature_toggle_updated", "Feature toggle"),
 ];
 
+// SPEC-12.8.3
 /// BUNYIP-936: hidden inputs that preserve the filter query string across
 /// the Admin-actions-only toggle link and the pager. Rendered inside the
 /// clickable toggle so the toggle doesn't drop the active filters.
@@ -135,6 +139,7 @@ fn preserved_hidden(q: &AuditQuery) -> Markup {
     }
 }
 
+// SPEC-12.8.3: paging must not drop an active filter
 /// Build the pager base URL carrying every active filter. The pager
 /// appends `&page=N`.
 fn pager_base(q: &AuditQuery, admin_only: bool) -> String {
@@ -164,6 +169,7 @@ fn pager_base(q: &AuditQuery, admin_only: bool) -> String {
     }
 }
 
+// SPEC-12.8.1, SPEC-12.8.2, SPEC-12.8.4, SPEC-12.8.6
 pub async fn audit_logs(
     State(st): State<AppState>,
     headers: HeaderMap,

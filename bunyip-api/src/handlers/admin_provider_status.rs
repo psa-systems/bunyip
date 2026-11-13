@@ -24,6 +24,7 @@ use crate::middleware::AdminUser;
 use crate::responses::{get_request_id, success};
 use crate::secrets::InfisicalProbe;
 
+// SPEC-10.9.1, SPEC-10.9.2, SPEC-10.9.3: admin-only aggregate; every application is a row.
 /// GET /v1/admin/providers/status
 pub async fn get_provider_status(
     req: HttpRequest,

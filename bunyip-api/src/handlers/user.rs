@@ -46,6 +46,7 @@ use uuid::Uuid;
 /// Only for a read that may predate the handler. A read that must observe a
 /// write made LATER in the same handler keeps its own query, because this
 /// snapshot was taken before the handler started.
+// SPEC-10.24.1: reuse the row the token check already read, never another subject's
 pub(crate) async fn self_user(
     req: &HttpRequest,
     pool: &PgPool,
@@ -124,6 +125,7 @@ pub struct ConfirmEmailVerificationBody {
 
 /// GET /v1/users/me
 /// Get current user profile
+// SPEC-10.24.2: own profile read
 pub async fn get_current_user(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -159,6 +161,7 @@ pub struct UpdateProfileRequest {
 
 const PROFILE_FIELD_MAX_LEN: usize = 64;
 
+// SPEC-10.24.3, SPEC-10.24.4: absent keeps, empty clears, long is rejected
 fn normalize_profile_field(
     field: &str,
     raw: &Option<String>,
@@ -205,6 +208,7 @@ pub struct GrantConsentRequest {
 /// not validate that the scopes are in `client.allowed_scopes` because the
 /// authorize handler already filters that on the next round-trip; storing
 /// a stale scope here is harmless.
+// SPEC-10.24.10, SPEC-10.24.11, SPEC-10.24.12: scopes filtered to the client's allowlist
 pub async fn grant_consent(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -294,6 +298,7 @@ pub struct ClientIdentityResponse {
 /// signed-in caller purely to match the rest of `/users/me/*`; the returned
 /// fields are the same ones every relying party's authorize redirect already
 /// discloses to the browser.
+// SPEC-10.24.13: display identity comes from the server, not a query string
 pub async fn get_client_identity(
     req: HttpRequest,
     _user: AuthenticatedUser,
@@ -328,6 +333,7 @@ pub async fn get_client_identity(
 ///
 /// No OIDC claim emission yet - that lands in BUNYIP-140 alongside the
 /// `profile` + `phone` scope plumbing.
+// SPEC-10.24.5, SPEC-10.24.6, SPEC-10.24.7, SPEC-10.24.8: profile save
 pub async fn update_current_user_profile(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -409,6 +415,7 @@ pub async fn update_current_user_profile(
 /// BUNYIP-482: `free_price_id` comes from the live `TierConfig`
 /// (`tier_config.free_price_id`, admin tier-settings page). `None` means no $0
 /// price is configured, so the subscription is skipped.
+// SPEC-10.24.9: best-effort $0 subscription
 async fn maybe_create_lifetime_subscription(
     pool: &PgPool,
     stripe: &StripeService,
@@ -460,6 +467,7 @@ async fn maybe_create_lifetime_subscription(
 
 /// PUT /v1/users/me/password
 /// Change current user's password
+// SPEC-10.25.1, SPEC-10.25.2: fresh 2FA code first
 pub async fn change_password(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -517,6 +525,7 @@ pub struct PageQuery {
     pub per_page: Option<i32>,
 }
 
+// SPEC-10.24.14, SPEC-10.24.15: no token hash is ever returned
 pub async fn list_sessions(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -567,6 +576,7 @@ pub async fn list_sessions(
 
 /// DELETE /v1/users/me/sessions/{session_id}
 /// Revoke a specific session
+// SPEC-10.24.16: ownership check
 pub async fn revoke_session(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -595,6 +605,7 @@ pub async fn revoke_session(
 /// Revoke every active session for the current user except the one the
 /// presented refresh-token cookie belongs to ("log out all other devices",
 /// BUNYIP-137).
+// SPEC-10.24.17, SPEC-10.24.18: nil keep-id revokes all when current is unknown
 pub async fn revoke_other_sessions(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -632,6 +643,7 @@ pub async fn revoke_other_sessions(
 
 /// POST /v1/users/me/email
 /// Request email change
+// SPEC-10.25.3, SPEC-10.25.4, SPEC-10.25.5: email change request
 pub async fn request_email_change(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -693,6 +705,7 @@ pub async fn request_email_change(
 
 /// POST /v1/users/me/email/confirm
 /// Confirm email change (token-based, no auth required)
+// SPEC-10.25.6: token-gated, notifies the old address
 pub async fn confirm_email_change(
     req: HttpRequest,
     auth_service: web::Data<Arc<AuthService>>,
@@ -725,6 +738,7 @@ pub async fn confirm_email_change(
 
 /// POST /v1/users/me/email/verify
 /// Request email verification (auth required, 2FA must be enabled)
+// SPEC-10.25.7: verification mail
 pub async fn request_email_verification(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -755,6 +769,7 @@ pub async fn request_email_verification(
 
 /// POST /v1/users/me/email/verify/confirm
 /// Confirm email verification (token-based, no auth required)
+// SPEC-10.25.8, SPEC-10.25.9: may close the tier-grant gate
 pub async fn confirm_email_verification(
     req: HttpRequest,
     auth_service: web::Data<Arc<AuthService>>,
@@ -811,6 +826,7 @@ pub async fn confirm_email_verification(
 /// and recording the per-app outcome. Called from a spawned task after the
 /// soft delete commits, and reused as the loop body has the same shape as the
 /// single-app admin replay.
+// SPEC-10.25.16: no webhook endpoint is skipped, not failed
 pub(crate) async fn fan_out_account_deleted(
     pool: &PgPool,
     webhook_service: &WebhookService,
@@ -844,6 +860,7 @@ pub(crate) async fn fan_out_account_deleted(
 /// Always writes an audit row (per-app status); on exhaustion also writes a
 /// replayable `account_delete_dispatch_failures` row. Shared by the delete
 /// fan-out and the admin replay so the two paths cannot record differently.
+// SPEC-10.25.17, SPEC-10.25.18: shared by delete and admin replay
 pub(crate) async fn record_account_delete_dispatch(
     pool: &PgPool,
     user_id: Uuid,
@@ -888,6 +905,7 @@ pub(crate) async fn record_account_delete_dispatch(
 
 /// DELETE /v1/users/me
 /// Delete current user's account (soft delete)
+// SPEC-10.25.10, SPEC-10.25.11, SPEC-10.25.12, SPEC-10.25.13, SPEC-10.25.14, SPEC-10.25.15: self delete
 pub async fn delete_account(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -1072,6 +1090,7 @@ pub async fn delete_account(
 
 /// GET /v1/users/me/trusted-devices
 /// List the caller's active trusted devices (BUNYIP-138).
+// SPEC-10.24.19, SPEC-10.24.14: per-user RLS transaction
 pub async fn list_trusted_devices(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -1105,6 +1124,7 @@ pub async fn list_trusted_devices(
 /// POST /v1/users/me/trusted-devices/{id}/revoke
 /// Revoke a single trusted device. Only the caller's own devices may be
 /// revoked; revoking re-arms the TOTP prompt on that device.
+// SPEC-10.24.20: foreign ids answer 404
 pub async fn revoke_trusted_device(
     req: HttpRequest,
     user: AuthenticatedUser,

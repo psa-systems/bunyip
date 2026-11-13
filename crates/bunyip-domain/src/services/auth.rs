@@ -93,6 +93,7 @@ pub enum AcceptInviteResult {
 /// Absolute refresh-token lifetime: 30 days with "remember me", else 1 day.
 /// Applied at login; `create_tokens` carries the resulting deadline across
 /// rotation rather than recomputing it, so the ceiling does not roll forward.
+// SPEC-8.7.1
 fn refresh_absolute_ttl(remember: bool) -> Duration {
     if remember {
         Duration::days(30)
@@ -108,6 +109,7 @@ fn refresh_absolute_ttl(remember: bool) -> Duration {
 /// `refresh_tokens`'s op-session read hits exactly this case when a revoke
 /// commits during the wait, and the caller treats it as a refusal rather than
 /// an internal error.
+// SPEC-8.7.7
 fn is_serialization_failure(e: &sqlx::Error) -> bool {
     e.as_database_error()
         .and_then(|d| d.code())
@@ -119,11 +121,13 @@ fn is_serialization_failure(e: &sqlx::Error) -> bool {
 /// Rolling window, in seconds, over which email-verify and email-change resend
 /// requests are counted. Single source of truth shared by both limiters and
 /// reusable by the admin read path (BUNYIP-315).
+// SPEC-8.15.1
 pub const RESEND_LIMIT_WINDOW_SECS: i64 = 3600;
 
 /// Maximum resend requests permitted within [`RESEND_LIMIT_WINDOW_SECS`]; the
 /// next request past this count is throttled. Shared source of truth for both
 /// limiters and the admin read path (BUNYIP-315).
+// SPEC-8.15.1
 pub const RESEND_LIMIT_MAX: i64 = 3;
 
 /// Seconds until a throttled user may resend, given the oldest in-window
@@ -133,6 +137,7 @@ pub const RESEND_LIMIT_MAX: i64 = 3;
 /// (BUNYIP-313). Pure and unit-testable: no clock or DB dependency. Also reused
 /// by the admin read path (BUNYIP-315) to report `retry_after` for the two
 /// email-resend limiters consistently with what the enforcement path returns.
+// SPEC-8.15.2
 pub fn resend_retry_after_secs(oldest: DateTime<Utc>, now: DateTime<Utc>) -> u64 {
     (oldest + Duration::seconds(RESEND_LIMIT_WINDOW_SECS) - now)
         .num_seconds()
@@ -143,12 +148,14 @@ pub fn resend_retry_after_secs(oldest: DateTime<Utc>, now: DateTime<Utc>) -> u64
 
 /// How long a remembered device may skip the login TOTP prompt. Using the
 /// device does not extend this; the deadline is fixed at creation.
+// SPEC-8.10.9
 const TRUSTED_DEVICE_TTL_DAYS: i64 = 30;
 
 /// Whether a presented trusted device permits skipping the login TOTP prompt.
 /// Pure decision (unit-testable): only subscribers may skip, and only when a
 /// valid (non-revoked, non-expired, owner-matched) device row was found.
 /// Admins always complete full 2FA.
+// SPEC-8.10.4: admins never skip the second factor
 fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
     has_valid_device && role == UserRole::Subscriber.as_str()
 }
@@ -157,11 +164,13 @@ fn trusted_device_allows_skip(role: &str, has_valid_device: bool) -> bool {
 
 /// How long an emailed login-approval code stays valid before the user must
 /// restart login to get a fresh one.
+// SPEC-8.11.4, SPEC-8.19.5: email text hardcodes 15; keep in sync
 const LOGIN_APPROVAL_TTL_MINUTES: i64 = 15;
 
 /// Wrong-code attempts tolerated against a single approval challenge before it
 /// is dead. Bounds brute force on the 6-digit (1e6-space) code; combined with
 /// the 15-minute TTL and single-use rows the guessing budget is negligible.
+// SPEC-8.11.7
 const LOGIN_APPROVAL_MAX_ATTEMPTS: i32 = 5;
 
 /// BUNYIP-373: outcome of assessing a login for suspicious signals. `flagged`
@@ -179,10 +188,12 @@ struct LoginRisk {
 
 /// How long a signup timing-challenge token stays valid; the register form must
 /// be submitted within this window of being rendered.
+// SPEC-8.9.1
 const SIGNUP_CHALLENGE_MAX_AGE_MINUTES: i64 = 30;
 
 /// Minimum seconds a human plausibly takes to fill the register form. A submit
 /// faster than this is treated as automated.
+// SPEC-8.9.2
 const SIGNUP_MIN_FILL_SECONDS: i64 = 2;
 
 /// BUNYIP-377: true when a register submit arrived sooner than a human could
@@ -194,6 +205,7 @@ fn signup_submitted_too_fast(issued_at: i64, now: i64) -> bool {
 /// BUNYIP-377: the single, uniform rejection for every signup bot-guard failure
 /// (a filled honeypot, or a missing / forged / expired / too-fast timing token)
 /// so none of the checks becomes an oracle a bot could tune against.
+// SPEC-8.9.2, SPEC-8.9.3: one uniform message so no check is an oracle
 fn signup_rejected() -> AppError {
     AppError::bad_request(
         "We couldn't complete your registration. Please reload the page and try again.",
@@ -208,6 +220,7 @@ fn signup_rejected() -> AppError {
 /// currently exists (`any_admin_exists == false`). The zero-admin gate is what
 /// scopes the env var to the FIRST admin only - once any admin exists it is
 /// inert - and what makes it self-healing if every admin is later removed.
+// SPEC-8.17.1
 fn bootstrap_promotion_needed(
     bootstrap_admin_email: Option<&str>,
     user_email: &str,
@@ -233,6 +246,7 @@ pub enum TierGrantTrigger {
     ProfileCompleted,
 }
 
+// SPEC-8.16.4
 impl TierGrantTrigger {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -278,6 +292,7 @@ pub struct AuthService {
 /// `deny` is always refused; when `allow` is non-empty, only countries in it are
 /// permitted. Codes compare case-insensitively as ISO 3166-1 alpha-2. Pure, so
 /// the allow/deny decision is unit-tested without a geoip database.
+// SPEC-8.8.1
 pub fn country_blocked(country: &str, allow: &[String], deny: &[String]) -> bool {
     let c = country.trim();
     if deny.iter().any(|d| d.eq_ignore_ascii_case(c)) {
@@ -289,6 +304,7 @@ pub fn country_blocked(country: &str, allow: &[String], deny: &[String]) -> bool
 /// BUNYIP-581 resolves the client IP to a country the same way the
 /// new-location alert does: no geoip service, no IP, or a private/loopback/
 /// link-local/unspecified address all resolve to no country.
+// SPEC-8.8.2
 fn resolve_country(geoip: Option<&GeoIpService>, ip_address: Option<IpAddr>) -> Option<String> {
     let geoip = geoip?;
     let ip = ip_address?;
@@ -306,6 +322,7 @@ fn resolve_country(geoip: Option<&GeoIpService>, ip_address: Option<IpAddr>) -> 
 /// unresolved country still passes (today's behaviour, now logged instead of
 /// silent). No-op, no log, when neither list is configured. Pure, so every
 /// branch is unit-tested without a geoip database.
+// SPEC-8.8.3, SPEC-8.8.4: unresolved country with an allow list is refused
 fn country_gate_decision(
     country: Option<&str>,
     allow: &[String],
@@ -383,6 +400,7 @@ impl AuthService {
     /// BUNYIP-726: the single country-gate call site every session-minting or
     /// account-creating method runs first, before any credential work, token
     /// claim, or row write. See [`country_gate_decision`] for the outcomes.
+    // SPEC-8.8.5
     fn enforce_country_gate(&self, ip_address: Option<IpAddr>) -> Result<(), AppError> {
         let country = resolve_country(self.geoip.as_deref(), ip_address);
         country_gate_decision(country.as_deref(), &self.country_allow, &self.country_deny)
@@ -395,6 +413,7 @@ impl AuthService {
     /// first login we can attribute to a country records it silently. Entirely
     /// best-effort: every failure is logged and swallowed so it can never block
     /// a login, and the whole check no-ops when no IP2Location DB is configured.
+    // SPEC-8.12.1, SPEC-8.12.2, SPEC-8.12.3, SPEC-8.12.4: best-effort: never fails the login
     async fn check_login_location(
         &self,
         user: &User,
@@ -460,6 +479,7 @@ impl AuthService {
     /// there is no GeoIP DB, no IP, or a non-public IP. Uses the long country
     /// name (e.g. "United States") rather than the terser code the login alert
     /// shows.
+    // SPEC-8.8.6
     pub fn country_name_for_ip(&self, ip_address: Option<IpAddr>) -> Option<String> {
         match (self.geoip.as_ref(), ip_address) {
             (Some(geoip), Some(ip)) if !is_non_public_ip(&ip) => geoip.country_name(ip),
@@ -476,6 +496,7 @@ impl AuthService {
     /// degrades to "not flagged" so the gate can only fail open, never lock a
     /// user out on infrastructure trouble. Callers gate on this only when
     /// `login_approval_enabled` is set.
+    // SPEC-8.11.2, SPEC-8.11.3
     async fn assess_login(
         &self,
         user: &User,
@@ -536,6 +557,7 @@ impl AuthService {
     /// email is best-effort like the location alert: a mail failure is logged
     /// but never turns the login into a 500 (the user can retry login for a
     /// fresh code).
+    // SPEC-8.11.4, SPEC-8.11.5: fail closed on a send failure
     async fn begin_login_approval(
         &self,
         user: &User,
@@ -596,6 +618,7 @@ impl AuthService {
     /// login from it is not treated as new. No-ops when the client sent no
     /// device id. Best-effort: a write failure is logged but must not fail the
     /// login that already succeeded.
+    // SPEC-8.11.10
     async fn record_login_device(
         &self,
         user: &User,
@@ -617,6 +640,7 @@ impl AuthService {
     /// as a normal login would and persist the approved country/device as the
     /// new baseline so the next login from here is not flagged again. Mirrors
     /// `complete_2fa_login`'s shape (challenge token in, tokens out).
+    // SPEC-8.11.6, SPEC-8.11.7, SPEC-8.11.8, SPEC-8.11.9: atomic cap and single-use claim
     pub async fn complete_login_approval(
         &self,
         challenge_token: &str,
@@ -735,11 +759,13 @@ impl AuthService {
     /// the active-sessions endpoint) can match a presented refresh-token cookie
     /// to its stored row without reaching into the private JWT service
     /// (BUNYIP-137).
+    // SPEC-8.7.11
     pub fn hash_token(&self, token: &str) -> String {
         self.jwt.hash_token(token)
     }
 
     /// Hot-reload the tier configuration (e.g. after admin update).
+    // SPEC-8.16.5
     pub fn reload_tier_config(&self, config: TierConfig) {
         let mut tc = self.tier_config.write().expect("TierConfig lock poisoned");
         *tc = config;
@@ -762,6 +788,7 @@ impl AuthService {
     /// outcome is still a single admin; no extra locking is required (the
     /// removed `setup_admin` had the same accepted race). Returns true when a
     /// promotion happened.
+    // SPEC-8.17.2
     async fn ensure_bootstrap_admin(&self, user: &mut User) -> Result<bool, AppError> {
         let bootstrap = self.bootstrap_admin_email.as_deref();
         // Cheap pre-filter so the admin-count query runs only for the bootstrap
@@ -793,6 +820,7 @@ impl AuthService {
 
     /// BUNYIP-377: mint a signup timing-challenge token for a freshly-rendered
     /// register form (served by `GET /v1/auth/register-challenge`).
+    // SPEC-8.9.1
     pub fn create_signup_challenge(&self) -> Result<String, AppError> {
         self.jwt
             .create_signup_challenge_token(Duration::minutes(SIGNUP_CHALLENGE_MAX_AGE_MINUTES))
@@ -804,6 +832,7 @@ impl AuthService {
     /// the honeypot is filled, or the token is missing / forged / expired, or the
     /// form was submitted faster than a human could fill it. Gated by the caller
     /// on `Config::signup_bot_guard_enabled`.
+    // SPEC-8.9.2
     pub fn verify_signup_not_bot(
         &self,
         honeypot: Option<&str>,
@@ -831,6 +860,7 @@ impl AuthService {
     /// and so cannot carry the minimum-fill-time signal that
     /// [`Self::verify_signup_not_bot`] applies. Fails with the same uniform
     /// message so it is not an oracle either.
+    // SPEC-8.9.3: no timing check: runs before the register submit
     pub fn verify_signup_challenge(&self, token: Option<&str>) -> Result<(), AppError> {
         let token = token.ok_or_else(signup_rejected)?;
         self.jwt
@@ -840,6 +870,7 @@ impl AuthService {
     }
 
     /// Register a new user
+    // SPEC-8.9.4, SPEC-8.9.5
     pub async fn register(
         &self,
         email: String,
@@ -847,6 +878,7 @@ impl AuthService {
         ip_address: Option<IpAddr>,
     ) -> Result<UserResponse, AppError> {
         // BUNYIP-726: refuse a gated country before any validation or write.
+        // SPEC-8.8.5: gate first, before validation or write
         self.enforce_country_gate(ip_address)?;
 
         // Validate password strength
@@ -915,6 +947,7 @@ impl AuthService {
     }
 
     /// Login with email and password
+    // SPEC-8.10.1, SPEC-8.10.3, SPEC-8.10.6
     #[allow(clippy::too_many_arguments)]
     pub async fn login(
         &self,
@@ -934,6 +967,7 @@ impl AuthService {
 
         // BUNYIP-726/BUNYIP-581: country allow/deny gate for spam prevention,
         // before any credential work.
+        // SPEC-8.8.5: gate before any credential work
         self.enforce_country_gate(ip_address)?;
 
         // Find user
@@ -961,6 +995,7 @@ impl AuthService {
         // path (trusted-device skip, 2FA challenge, normal login) reflects the
         // updated role and the issued JWT carries `role = "admin"`. No-op once
         // an admin exists or for any non-bootstrap email.
+        // SPEC-8.10.2: after password verify, before any 2FA branch
         self.ensure_bootstrap_admin(&mut user).await?;
 
         // Check if 2FA is enabled AND actually configured
@@ -974,6 +1009,7 @@ impl AuthService {
                 // device cookie may skip the SECOND factor only. The opaque
                 // cookie value is hashed and matched to a non-revoked, non-
                 // expired, owner-matched row. Admins never skip.
+                // SPEC-8.10.4
                 if let Some(token) = trusted_device_token.as_deref() {
                     let hash = self.jwt.hash_token(token);
                     if let Some(device) =
@@ -1016,6 +1052,7 @@ impl AuthService {
 
             // Flag is true but no verified TOTP exists - reset the flag so the
             // frontend can redirect to 2FA setup after login
+            // SPEC-8.10.5
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
 
@@ -1024,6 +1061,7 @@ impl AuthService {
         // second-factor protected. When enabled and this login looks suspicious
         // (new country or new device), withhold tokens and email a one-time
         // approval code instead of completing the login.
+        // SPEC-8.11.1: only non-2FA logins reach the gate
         let device_risk = if self.login_approval_enabled {
             let risk = self
                 .assess_login(&user, ip_address, device_id.as_deref())
@@ -1076,6 +1114,7 @@ impl AuthService {
     }
 
     /// Refresh tokens
+    // SPEC-8.7.3
     pub async fn refresh_tokens(
         &self,
         refresh_token: String,
@@ -1098,6 +1137,7 @@ impl AuthService {
         let token_hash = self.jwt.hash_token(&refresh_token);
 
         // Find token in database
+        // SPEC-8.7.4
         let stored_token =
             match TokenRepository::find_refresh_token_by_hash(&self.pool, &token_hash).await? {
                 Some(token) => token,
@@ -1139,6 +1179,7 @@ impl AuthService {
             };
 
         // Check if token is valid
+        // SPEC-8.7.5
         if !stored_token.is_valid() {
             tracing::warn!(
                 user_id = %claims.sub,
@@ -1168,6 +1209,7 @@ impl AuthService {
         // for "remember me"), carried across rotation below rather than
         // rolling forward.
         let mut refresh_expires_at = stored_token.expires_at;
+        // SPEC-8.7.6, SPEC-8.7.7
         if let Some(op_session_id) = stored_token.op_session_id {
             // BUNYIP-850: read, liveness-check and idle-slide the op_session
             // row inside one SERIALIZABLE transaction, matching
@@ -1233,6 +1275,7 @@ impl AuthService {
                 now,
             )
             .map_err(|_| AppError::InvalidCredentials)?;
+            // SPEC-8.7.8
             let slid_idle =
                 (now + Duration::seconds(session.idle_ttl_seconds as i64)).min(session.expires_at);
             sqlx::query!(
@@ -1252,6 +1295,7 @@ impl AuthService {
         }
 
         // Revoke old token
+        // SPEC-8.7.9
         TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
 
         // Create new tokens, carrying the rotated-out token's absolute deadline
@@ -1265,6 +1309,7 @@ impl AuthService {
         // Preserve the hub token's op_session_id link across rotation so the
         // NEXT rotation runs through the same gate. A link failure here is
         // warned and non-fatal, matching the login-path link behaviour.
+        // SPEC-8.7.9: relink failure is warned, not fatal
         if let Some(op_session_id) = stored_token.op_session_id {
             self.link_refresh_token_to_op_session(&tokens.refresh_token, user.id, op_session_id)
                 .await
@@ -1290,6 +1335,7 @@ impl AuthService {
     /// deadline on rotation until it is re-issued). The service owns the
     /// hashing so the HTTP handlers do not have to reach for
     /// `JwtService::hash_token` themselves.
+    // SPEC-8.7.11
     pub async fn link_refresh_token_to_op_session(
         &self,
         raw_refresh_token: &str,
@@ -1302,6 +1348,7 @@ impl AuthService {
     }
 
     /// Logout (revoke refresh token)
+    // SPEC-8.7.10
     pub async fn logout(
         &self,
         refresh_token: String,
@@ -1330,6 +1377,7 @@ impl AuthService {
     }
 
     /// Logout from all sessions
+    // SPEC-8.7.10
     pub async fn logout_all(
         &self,
         user_id: Uuid,
@@ -1356,6 +1404,7 @@ impl AuthService {
     }
 
     /// Request magic link
+    // SPEC-8.13.1, SPEC-8.13.2
     pub async fn request_magic_link(
         &self,
         email: String,
@@ -1407,6 +1456,7 @@ impl AuthService {
     ///
     /// Returns (tokens, user, is_new_user) so the caller can send
     /// an account-created email for newly registered users.
+    // SPEC-8.13.3: gate runs before the single-use token is claimed
     pub async fn verify_magic_link(
         &self,
         token: String,
@@ -1437,6 +1487,7 @@ impl AuthService {
             return Err(AppError::InvalidCredentials);
         }
 
+        // SPEC-8.13.4
         // Find or create user
         let (user, is_new_user) =
             match UserRepository::find_by_email(&self.pool, &magic_token.email).await? {
@@ -1481,6 +1532,7 @@ impl AuthService {
                 }
             };
 
+        // SPEC-8.13.5
         // Check if 2FA is enabled AND actually configured
         if user.two_factor_enabled {
             let totp_record = TotpRepository::find_by_user_id(&self.pool, user.id).await?;
@@ -1499,6 +1551,7 @@ impl AuthService {
             UserRepository::set_two_factor_enabled(&self.pool, user.id, false).await?;
         }
 
+        // SPEC-8.13.6, SPEC-8.11.1
         // BUNYIP-373: same suspicious-login gate as the password path. Reaches
         // here only for non-2FA accounts (2FA magic-link logins returned above).
         // A gated attempt is always an existing user - a brand-new magic-link
@@ -1535,6 +1588,7 @@ impl AuthService {
                 .await;
         }
 
+        // SPEC-8.13.7
         // Audit log
         let ip = ip_address.map(IpNetwork::from);
         AuditLogRepository::create(
@@ -1564,6 +1618,7 @@ impl AuthService {
     /// original `remember` choice so the caller can set the OP session's
     /// idle window from the same signal that already drives the refresh
     /// TTL (`refresh_absolute_ttl(remember)`).
+    // SPEC-8.10.7, SPEC-8.10.8: caller must have verified the TOTP or recovery code
     pub async fn complete_2fa_login(
         &self,
         challenge_token: &str,
@@ -1630,6 +1685,7 @@ impl AuthService {
     /// Create a trusted device for a user and return the opaque cookie secret
     /// (the caller sets it as the `bunyip_trusted_device` cookie). Only the
     /// SHA-256 hash of the secret is stored (BUNYIP-138).
+    // SPEC-8.10.9
     pub async fn issue_trusted_device(
         &self,
         user_id: Uuid,
@@ -1656,12 +1712,14 @@ impl AuthService {
 
     /// Revoke all of a user's trusted devices. Called on credential and 2FA
     /// changes so the TOTP prompt is re-armed on every device.
+    // SPEC-8.10.9
     pub async fn revoke_trusted_devices(&self, user_id: Uuid) -> Result<(), AppError> {
         TrustedDeviceRepository::revoke_all_for_user(&self.pool, user_id).await?;
         Ok(())
     }
 
     /// Request password reset
+    // SPEC-8.14.1: Ok(None) so the response does not reveal the email
     pub async fn request_password_reset(
         &self,
         email: String,
@@ -1726,6 +1784,7 @@ impl AuthService {
     }
 
     /// Verify password reset token (check only, don't consume)
+    // SPEC-8.14.2
     pub async fn verify_reset_token(&self, token: String) -> Result<Uuid, AppError> {
         let token_hash = self.jwt.hash_token(&token);
 
@@ -1745,6 +1804,7 @@ impl AuthService {
     ///
     /// Returns the user's email so the caller can send a
     /// password-changed notification.
+    // SPEC-8.14.3
     pub async fn complete_password_reset(
         &self,
         token: String,
@@ -1817,6 +1877,7 @@ impl AuthService {
     }
 
     /// Change password (for logged-in users)
+    // SPEC-8.14.4, SPEC-8.14.5
     pub async fn change_password(
         &self,
         user_id: Uuid,
@@ -1884,6 +1945,7 @@ impl AuthService {
     /// For verified users: creates a verification token and returns it.
     /// For unverified users: changes email immediately and returns None.
     /// Returns (old_email, Option<token>) so caller can send appropriate emails.
+    // SPEC-8.15.3
     pub async fn request_email_change(
         &self,
         user_id: Uuid,
@@ -1927,6 +1989,7 @@ impl AuthService {
             }
         }
 
+        // SPEC-8.15.4
         let old_email = user.email.clone();
 
         if user.email_verified {
@@ -1935,6 +1998,7 @@ impl AuthService {
             let count =
                 TokenRepository::count_recent_email_change_requests(&self.pool, user_id, since)
                     .await?;
+            // SPEC-8.15.1
             if count >= RESEND_LIMIT_MAX {
                 // Report the real time until the oldest in-window request ages
                 // out, not a hardcoded full window (BUNYIP-313).
@@ -1986,6 +2050,7 @@ impl AuthService {
 
             Ok((old_email, Some(token)))
         } else {
+            // SPEC-8.15.5
             // Unverified user: change email immediately, using a transaction
             // to prevent race conditions on the unique email constraint
             let mut tx = self.pool.begin().await?;
@@ -2026,6 +2091,7 @@ impl AuthService {
     /// Confirm email change using verification token
     ///
     /// Returns (old_email, new_email) so caller can send notification.
+    // SPEC-8.15.6
     pub async fn confirm_email_change(
         &self,
         token: String,
@@ -2101,6 +2167,7 @@ impl AuthService {
     ///
     /// Generates a token and returns it so the caller can send the verification email.
     /// Requires email to not already be verified.
+    // SPEC-8.15.7
     pub async fn request_email_verification(
         &self,
         user_id: Uuid,
@@ -2121,6 +2188,7 @@ impl AuthService {
         let count =
             TokenRepository::count_recent_email_verification_tokens(&self.pool, user_id, since)
                 .await?;
+        // SPEC-8.15.1
         if count >= RESEND_LIMIT_MAX {
             // Report the real time until the oldest in-window request ages out,
             // not a hardcoded full window (BUNYIP-313).
@@ -2178,6 +2246,7 @@ impl AuthService {
     /// trial. A verify that happens before the user has saved a name returns
     /// `Ok((..., None))`; the tier is granted later from
     /// `update_current_user_profile` once the names land. Either order wins.
+    // SPEC-8.15.8, SPEC-8.15.9: claim and verify write share one transaction
     pub async fn confirm_email_verification(
         &self,
         token: String,
@@ -2258,6 +2327,7 @@ impl AuthService {
     /// Called from `confirm_email_verification` (after the verify commits) and
     /// from `update_current_user_profile` (after a successful name save) so
     /// either order between "verify" and "fill in name" produces the grant.
+    // SPEC-8.16.1, SPEC-8.16.2, SPEC-8.16.3, SPEC-8.16.4: either verify or name-save order can trigger it
     pub async fn maybe_grant_initial_tier(
         &self,
         user_id: Uuid,
@@ -2368,6 +2438,7 @@ impl AuthService {
     }
 
     /// Create an admin invite
+    // SPEC-8.17.3
     pub async fn create_admin_invite(
         &self,
         email: String,
@@ -2421,6 +2492,7 @@ impl AuthService {
     }
 
     /// Accept an admin invite
+    // SPEC-8.17.4, SPEC-8.17.5, SPEC-8.17.6
     pub async fn accept_admin_invite(
         &self,
         token: String,
@@ -2575,6 +2647,7 @@ impl AuthService {
     }
 
     /// Revoke an admin invite
+    // SPEC-8.17.7
     pub async fn revoke_admin_invite(
         &self,
         invite_id: Uuid,
@@ -2609,6 +2682,7 @@ impl AuthService {
     /// tightened, never extended, once the account is an admin. For subscribers
     /// the deadline is recomputed (rolling 30-day window, the historical
     /// behavior) so subscriber sessions are unchanged (BUNYIP-137).
+    // SPEC-8.7.2
     async fn create_tokens(
         &self,
         user: &User,
@@ -2648,6 +2722,7 @@ impl AuthService {
 }
 
 /// Generate a cryptographically secure random token
+// SPEC-8.10.10
 pub(crate) fn generate_secure_token(length: usize) -> String {
     let mut bytes = vec![0u8; length];
     rand::thread_rng().fill_bytes(&mut bytes);

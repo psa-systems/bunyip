@@ -7,10 +7,12 @@
 
 use serde::Serialize;
 
+// SPEC-7.2.3: engine types re-exported for stable paths.
 pub use dunite_download::models::download::{
     ArtifactSource, DownloadCacheRow, NewCachedAsset, ReleaseAsset, ReleaseMetadata,
 };
 
+// SPEC-7.2.59: member-facing asset.
 /// API-facing asset (shown to members).
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DownloadAsset {
@@ -20,6 +22,7 @@ pub struct DownloadAsset {
     pub download_url: String,
 }
 
+// SPEC-7.2.60: JSON key stays release_tag.
 /// API-facing response for `GET /v1/applications/{slug}/downloads`.
 ///
 /// The JSON field stays `release_tag` for API stability (bunyip-web depends on
@@ -31,6 +34,7 @@ pub struct AppDownloadsResponse {
     pub assets: Vec<DownloadAsset>,
 }
 
+// SPEC-7.2.61: reference is registry/repository:tag.
 /// OCI pull coordinates for a product in the `/v1/downloads` response, so the
 /// downloads page can render copy-paste `docker login` / `docker pull`
 /// commands against the member-facing registry.
@@ -48,6 +52,7 @@ pub struct AppOciImage {
     pub reference: String,
 }
 
+// SPEC-7.2.62, SPEC-7.2.63, SPEC-7.2.64: string release_tag; locked card carries no coordinates.
 /// A group in the global `/v1/downloads` response.
 ///
 /// A product can carry binary assets (Forgejo downloads), an OCI image, or

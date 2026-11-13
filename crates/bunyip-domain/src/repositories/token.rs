@@ -33,6 +33,7 @@ impl TokenRepository {
     // =====================
 
     /// Create a new refresh token
+    // SPEC-7.3.241
     pub async fn create_refresh_token(
         pool: &PgPool,
         data: CreateRefreshToken,
@@ -66,6 +67,7 @@ impl TokenRepository {
     /// minted row's id so the caller does not have to thread that id back
     /// out of `create_tokens` for a change that already knows the raw
     /// refresh token.
+    // SPEC-7.3.242
     pub async fn link_refresh_to_op_session(
         pool: &PgPool,
         token_hash: &str,
@@ -86,6 +88,7 @@ impl TokenRepository {
     }
 
     /// Find refresh token by hash
+    // SPEC-7.3.243
     pub async fn find_refresh_token_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -104,6 +107,7 @@ impl TokenRepository {
     }
 
     /// Find refresh token by hash regardless of validity (for diagnostics)
+    // SPEC-7.3.243
     pub async fn find_refresh_token_by_hash_any(
         pool: &PgPool,
         token_hash: &str,
@@ -122,6 +126,7 @@ impl TokenRepository {
     }
 
     /// Find all active refresh tokens for a user
+    // SPEC-7.3.244
     pub async fn find_user_refresh_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -141,6 +146,7 @@ impl TokenRepository {
     }
 
     /// A page of a user's active refresh tokens, newest first (BUNYIP-177).
+    // SPEC-7.3.244
     pub async fn find_user_refresh_tokens_paginated(
         pool: &PgPool,
         user_id: Uuid,
@@ -165,6 +171,7 @@ impl TokenRepository {
     }
 
     /// Count of a user's active refresh tokens, for pagination totals (BUNYIP-177).
+    // SPEC-7.3.244
     pub async fn count_user_refresh_tokens(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
         let row: (i64,) = sqlx::query_as(
             r#"
@@ -180,6 +187,7 @@ impl TokenRepository {
     }
 
     /// Find refresh token by ID
+    // SPEC-7.3.243
     pub async fn find_refresh_token_by_id(
         pool: &PgPool,
         token_id: Uuid,
@@ -197,6 +205,7 @@ impl TokenRepository {
     }
 
     /// Update last used time for a refresh token
+    // SPEC-7.3.245
     pub async fn update_refresh_token_last_used(
         pool: &PgPool,
         token_id: Uuid,
@@ -214,6 +223,7 @@ impl TokenRepository {
     }
 
     /// Revoke a specific refresh token
+    // SPEC-7.3.245
     pub async fn revoke_refresh_token(pool: &PgPool, token_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -228,6 +238,7 @@ impl TokenRepository {
     }
 
     /// Revoke refresh token by hash
+    // SPEC-7.3.245
     pub async fn revoke_refresh_token_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -261,6 +272,7 @@ impl TokenRepository {
     /// the email-change flows that must revoke atomically with the email
     /// update). In the latter case `begin` opens a nested transaction
     /// (savepoint) so the three statements still commit or roll back together.
+    // SPEC-7.3.246
     pub async fn revoke_all_user_refresh_tokens<'a, A>(
         executor: A,
         user_id: Uuid,
@@ -319,6 +331,7 @@ impl TokenRepository {
     /// `oauth_client_user_tenants.oauth_client_id`. Returns the number of
     /// families revoked. Scoped to the OIDC v2 surface only; the legacy
     /// `refresh_tokens` table has no per-client binding.
+    // SPEC-7.3.247
     pub async fn revoke_client_user_refresh_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -359,6 +372,7 @@ impl TokenRepository {
     /// Scoped to the legacy `refresh_tokens` table, which is the surface the
     /// active-sessions panel lists; OIDC SSO sessions are managed separately.
     /// Returns the number of sessions revoked.
+    // SPEC-7.3.248
     pub async fn revoke_other_user_refresh_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -383,6 +397,7 @@ impl TokenRepository {
     // =====================
 
     /// Create a new magic link token
+    // SPEC-7.3.241
     pub async fn create_magic_link_token(
         pool: &PgPool,
         data: CreateMagicLinkToken,
@@ -405,6 +420,7 @@ impl TokenRepository {
     }
 
     /// Find magic link token by hash
+    // SPEC-7.3.249
     pub async fn find_magic_link_token_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -427,6 +443,7 @@ impl TokenRepository {
     /// The `used_at IS NULL` guard makes `rows_affected` the race arbiter, the
     /// same shape as [`Self::claim_login_approval_code`]: exactly one of N
     /// concurrent verifies of the same token gets `true`.
+    // SPEC-7.3.7, SPEC-7.3.250
     pub async fn mark_magic_link_token_used(
         pool: &PgPool,
         token_id: Uuid,
@@ -444,6 +461,7 @@ impl TokenRepository {
     }
 
     /// Count recent magic link tokens for an email (for rate limiting)
+    // SPEC-7.3.253
     pub async fn count_recent_magic_link_tokens(
         pool: &PgPool,
         email: &str,
@@ -468,6 +486,7 @@ impl TokenRepository {
     // =====================
 
     /// Create a new password reset token
+    // SPEC-7.3.241
     pub async fn create_password_reset_token(
         pool: &PgPool,
         data: CreatePasswordResetToken,
@@ -496,6 +515,7 @@ impl TokenRepository {
     /// live token per user at a time and matches the common UX ("only the
     /// most recent link works"); a user staring at three reset emails
     /// after triple-clicking the form gets a clear single-truth answer.
+    // SPEC-7.3.255
     pub async fn revoke_pending_password_reset_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -515,6 +535,7 @@ impl TokenRepository {
     }
 
     /// Find password reset token by hash
+    // SPEC-7.3.249
     pub async fn find_password_reset_token_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -536,6 +557,7 @@ impl TokenRepository {
     ///
     /// Returns `false` when another request already consumed it, so the caller
     /// must refuse rather than proceed to the password write.
+    // SPEC-7.3.250
     pub async fn mark_password_reset_token_used(
         pool: &PgPool,
         token_id: Uuid,
@@ -553,6 +575,7 @@ impl TokenRepository {
     }
 
     /// Count recent password reset tokens for a user (for rate limiting)
+    // SPEC-7.3.253
     pub async fn count_recent_password_reset_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -577,6 +600,7 @@ impl TokenRepository {
     // =========================
 
     /// Store a new login-approval challenge (a flagged login's pending code).
+    // SPEC-7.3.241
     pub async fn create_login_approval_code(
         pool: &PgPool,
         data: CreateLoginApprovalCode,
@@ -609,6 +633,7 @@ impl TokenRepository {
     /// token resolves its OWN row, not merely the user's newest pending code -
     /// with two concurrent gated logins, each emitted code completes only its
     /// own challenge.
+    // SPEC-7.3.257
     pub async fn find_valid_login_approval_code_by_jti(
         pool: &PgPool,
         user_id: Uuid,
@@ -635,6 +660,7 @@ impl TokenRepository {
     /// cap hold under concurrency: Postgres serializes the row updates, so
     /// concurrent wrong guesses can never push the counter past `max` the way a
     /// read-check-then-increment in the service could (BUNYIP-373).
+    // SPEC-7.3.258
     pub async fn increment_login_approval_attempts(
         pool: &PgPool,
         id: Uuid,
@@ -662,6 +688,7 @@ impl TokenRepository {
     /// or one at the attempt cap all return `false`. This is what guarantees
     /// exactly one login can complete from a given challenge, and that a correct
     /// code arriving after the cap is still refused (BUNYIP-373).
+    // SPEC-7.3.259
     pub async fn claim_login_approval_code(
         pool: &PgPool,
         id: Uuid,
@@ -689,6 +716,7 @@ impl TokenRepository {
 
     /// How many devices this user is already known to sign in from. Zero means
     /// the next device is a silent baseline, not a "new device" signal.
+    // SPEC-7.3.260
     pub async fn count_login_devices(pool: &PgPool, user_id: Uuid) -> Result<i64, AppError> {
         let count: (i64,) =
             sqlx::query_as(r#"SELECT COUNT(*) FROM login_devices WHERE user_id = $1"#)
@@ -700,6 +728,7 @@ impl TokenRepository {
     }
 
     /// Look up one known device by its hash for this user.
+    // SPEC-7.3.260
     pub async fn find_login_device(
         pool: &PgPool,
         user_id: Uuid,
@@ -718,6 +747,7 @@ impl TokenRepository {
 
     /// Remember a device the user just logged in from, refreshing `last_seen_at`
     /// on a repeat login (idempotent on the `(user_id, device_hash)` unique key).
+    // SPEC-7.3.261
     pub async fn record_login_device(
         pool: &PgPool,
         user_id: Uuid,
@@ -746,6 +776,7 @@ impl TokenRepository {
     // =====================
 
     /// Create a new email change request
+    // SPEC-7.3.241
     pub async fn create_email_change_request(
         pool: &PgPool,
         data: CreateEmailChangeRequest,
@@ -769,6 +800,7 @@ impl TokenRepository {
     }
 
     /// Find email change request by token hash
+    // SPEC-7.3.249
     pub async fn find_email_change_request_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -787,6 +819,7 @@ impl TokenRepository {
     }
 
     /// Cancel all pending email change requests for a user
+    // SPEC-7.3.256
     pub async fn cancel_pending_email_change_requests(
         pool: &PgPool,
         user_id: Uuid,
@@ -805,6 +838,7 @@ impl TokenRepository {
     }
 
     /// Confirm an email change request
+    // SPEC-7.3.251, SPEC-7.3.252
     pub async fn confirm_email_change_request<'e, E>(
         executor: E,
         request_id: Uuid,
@@ -825,6 +859,7 @@ impl TokenRepository {
     }
 
     /// Count recent email change requests for a user (for rate limiting)
+    // SPEC-7.3.253
     pub async fn count_recent_email_change_requests(
         pool: &PgPool,
         user_id: Uuid,
@@ -847,6 +882,7 @@ impl TokenRepository {
     /// Oldest email change request `created_at` within the window (for
     /// computing an accurate `retry_after`, BUNYIP-313). Returns `None` when
     /// there are no in-window requests.
+    // SPEC-7.3.254
     pub async fn oldest_recent_email_change_request(
         pool: &PgPool,
         user_id: Uuid,
@@ -871,6 +907,7 @@ impl TokenRepository {
     // ==============================
 
     /// Create a new email verification token
+    // SPEC-7.3.241
     pub async fn create_email_verification_token(
         pool: &PgPool,
         data: CreateEmailVerificationToken,
@@ -893,6 +930,7 @@ impl TokenRepository {
     }
 
     /// Find email verification token by hash
+    // SPEC-7.3.249
     pub async fn find_email_verification_token_by_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -914,6 +952,7 @@ impl TokenRepository {
     ///
     /// Takes the executor so the claim shares the caller's transaction with the
     /// `email_verified` write it guards.
+    // SPEC-7.3.250, SPEC-7.3.251
     pub async fn mark_email_verification_token_used<'e, E>(
         executor: E,
         token_id: Uuid,
@@ -934,6 +973,7 @@ impl TokenRepository {
     }
 
     /// Count recent email verification tokens for a user (for rate limiting)
+    // SPEC-7.3.253
     pub async fn count_recent_email_verification_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -956,6 +996,7 @@ impl TokenRepository {
     /// Oldest email verification token `created_at` within the window (for
     /// computing an accurate `retry_after`, BUNYIP-313). Returns `None` when
     /// there are no in-window tokens.
+    // SPEC-7.3.254
     pub async fn oldest_recent_email_verification_token(
         pool: &PgPool,
         user_id: Uuid,
@@ -980,6 +1021,7 @@ impl TokenRepository {
     /// the `oldest` in-window `created_at` (for an accurate `retry_after`).
     /// Backs the admin "currently rate-limited" view (BUNYIP-315). Only
     /// non-deleted users are returned. Highest count first.
+    // SPEC-7.3.262
     pub async fn list_email_verification_over_limit(
         pool: &PgPool,
         since: DateTime<Utc>,
@@ -1009,6 +1051,7 @@ impl TokenRepository {
     /// since `since`, joined to their email, with the request `count` and the
     /// `oldest` in-window `created_at`. Backs the admin "currently rate-limited"
     /// view (BUNYIP-315). Only non-deleted users are returned. Highest first.
+    // SPEC-7.3.262
     pub async fn list_email_change_over_limit(
         pool: &PgPool,
         since: DateTime<Utc>,
@@ -1039,6 +1082,7 @@ impl TokenRepository {
     /// `email_verification` pseudo-action: dropping the in-window rows takes the
     /// user's resend count below the shared threshold so their next
     /// verification request succeeds immediately. Returns the rows removed.
+    // SPEC-7.3.263
     pub async fn delete_recent_email_verification_tokens(
         pool: &PgPool,
         user_id: Uuid,
@@ -1062,6 +1106,7 @@ impl TokenRepository {
     /// `since` (BUNYIP-316). Backs the admin rate-limit reset for the
     /// `email_change` pseudo-action, dropping the in-window count below the
     /// shared resend threshold. Returns the rows removed.
+    // SPEC-7.3.263
     pub async fn delete_recent_email_change_requests(
         pool: &PgPool,
         user_id: Uuid,
@@ -1086,6 +1131,7 @@ impl TokenRepository {
     // =====================
 
     /// Clean up expired tokens (run periodically)
+    // SPEC-7.3.264
     pub async fn cleanup_expired_tokens(pool: &PgPool) -> Result<u64, AppError> {
         let mut total = 0u64;
 

@@ -19,6 +19,7 @@ const EM_DASH_CODEPOINT = "2014"
 
 # Committed migrations are immutable (sqlx checksums every byte, comments included),
 # so these two keep their em-dash. Exact paths: a new migration is still gated.
+# SPEC-3.29.2
 const IMMUTABLE_EXEMPT = [
     "bunyip-api/migrations/20260417000040_create_oidc_clients.sql"
     "bunyip-api/migrations/20260417000042_create_oidc_tokens.sql"
@@ -32,6 +33,7 @@ def em-dash []: nothing -> string {
 # treated as binary and skipped (counted, not inspected). Any other failure to
 # open or decode the file as UTF-8 is reported as an error naming the path,
 # instead of being silently treated as a clean, zero-line file.
+# SPEC-3.29.3
 def check-file [path: string, em_dash: string]: nothing -> record<problems: list<string>, skipped: bool, error: string> {
     let raw = (try { open --raw $path | into binary } catch {|err|
         return {problems: [], skipped: false, error: $"($path): could not be inspected: ($err.msg)"}
@@ -56,6 +58,7 @@ def check-file [path: string, em_dash: string]: nothing -> record<problems: list
     {problems: $problems, skipped: false, error: ""}
 }
 
+# SPEC-3.29.4
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
     let em_dash = (em-dash)
@@ -109,6 +112,7 @@ def self-test []: nothing -> nothing {
 def main [
     --self-test # prove the gate catches an em-dash and leaves a hyphen alone, then exit
 ]: nothing -> nothing {
+    # SPEC-3.29.1
     if $self_test {
         self-test
         return

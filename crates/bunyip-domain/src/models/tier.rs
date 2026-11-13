@@ -3,6 +3,7 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+// SPEC-7.2.57: NOT NULL switches have no env fallback.
 /// Database row for the `tier_config` singleton table.
 #[derive(Debug, sqlx::FromRow)]
 pub struct TierConfigRow {
@@ -38,8 +39,10 @@ pub struct TierConfigRow {
 // DEV-517: the response shape is shared with a8n-tools via `dunite-user-core`.
 // `TierConfigRow` above stays here because it derives `sqlx::FromRow` and the two
 // consumers are on different sqlx majors (a8n 0.7, bunyip 0.8).
+// SPEC-7.2.6: shared response, row stays local.
 pub use dunite_user_core::TierConfigResponse;
 
+// SPEC-7.2.58: shared shape flattened, bunyip fields appended.
 /// BUNYIP-487: the shared response plus bunyip's own `pricing_enabled` switch.
 /// Flattened, so the wire shape stays the shared one with one field added and
 /// `dunite-user-core` keeps a single definition for both consumers.

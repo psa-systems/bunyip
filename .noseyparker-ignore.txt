@@ -1,3 +1,4 @@
+# SPEC-14.38.4: paths excluded from secret scanning
 /.env.example
 /.forgejo/workflows/check.yml
 /bunyip-api/migrations/20260721000020_seed_mokosh_setup_docs.sql
@@ -32,6 +33,7 @@
 /crates/bunyip-domain/src/services/organizations_tests.rs
 /docs/host-secrets.md
 /docs/mailer-relay.md
+/docs/specification.md
 /e2e/lib/accounts.ts
 /e2e/tests/account/change-password.spec.ts
 /e2e/tests/auth/email-flows.spec.ts

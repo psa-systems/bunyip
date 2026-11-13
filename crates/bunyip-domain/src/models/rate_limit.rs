@@ -14,12 +14,14 @@ use uuid::Uuid;
 
 use crate::config_providers::ConfigStack;
 
+// SPEC-7.2.125: shared by enforcement and the admin read path.
 /// Prefix on the `rate_limits.key` for the per-account 2FA failure counter
 /// (BUNYIP-201). Single source of truth shared by the enforcement path
 /// (`bunyip-api` totp handler) and the admin read path (BUNYIP-315), which
 /// strips it to recover the `user_id`.
 pub const TWO_FACTOR_KEY_PREFIX: &str = "2fa_verify_user:";
 
+// SPEC-7.2.121: counter row.
 /// Rate limit database model
 #[derive(Debug, Clone, FromRow)]
 pub struct RateLimit {
@@ -31,6 +33,7 @@ pub struct RateLimit {
 }
 
 impl RateLimit {
+    // SPEC-7.2.122: in-window and at/over cap; pure, caller passes now.
     /// If this row is an *active* throttle under `config` at `now`, return the
     /// seconds until its window elapses (`retry_after`). A throttle is active
     /// when its window has not yet elapsed AND its count is at or over the cap
@@ -46,6 +49,7 @@ impl RateLimit {
     }
 }
 
+// SPEC-7.2.130: key shapes per action.
 /// How a `rate_limits.key` should be interpreted for a given action, so the
 /// admin read path can resolve it to a user where possible (BUNYIP-315).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +85,7 @@ pub enum KeySubject {
     Unknown(String),
 }
 
+// SPEC-7.2.123: preset shape and values below.
 /// Rate limit configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitConfig {
@@ -93,6 +98,7 @@ pub struct RateLimitConfig {
 }
 
 impl RateLimitConfig {
+    // SPEC-7.2.123: presets from here to ADMIN_DIAGNOSTICS carry the specified cap/window.
     /// Login: 10 requests per minute per email. The per-account 2FA failure
     /// cap (`TWO_FACTOR_VERIFY_FAILURES`, 5 per 15 minutes) is the
     /// independent brake against guessing, so this cap sits where a few
@@ -377,6 +383,7 @@ impl RateLimitConfig {
         key_kind: KeyKind::UserId,
     };
 
+    // SPEC-7.2.124: every preset must be listed.
     /// Every preset, so the admin read path can look one up by its stored
     /// `action` string (BUNYIP-315). Keep in lock-step with the consts above.
     pub const ALL: &'static [Self] = &[
@@ -406,6 +413,7 @@ impl RateLimitConfig {
         Self::ADMIN_DIAGNOSTICS,
     ];
 
+    // SPEC-7.2.126: unknown action is None; deployment overrides applied.
     /// Look up the preset for a stored `rate_limits.action` string. Returns
     /// `None` for an action with no matching preset (BUNYIP-315), so the caller
     /// can skip a row whose cap/window it cannot resolve rather than guessing.
@@ -420,6 +428,7 @@ impl RateLimitConfig {
             .map(Self::with_deployment_defaults)
     }
 
+    // SPEC-7.2.127: unusable held values defer to the next provider.
     /// This action's cap and window resolved through `stack` (BUNYIP-645).
     ///
     /// The declared provider order decides which one serves each half, and this
@@ -450,6 +459,7 @@ impl RateLimitConfig {
         rate_limit_vars().iter().find(|vars| vars.action == action)
     }
 
+    // SPEC-7.2.129: Some replaces, None keeps.
     /// Apply an override layer: each `Some` replaces the corresponding field,
     /// `None` keeps the current value. Pure, so a provider's contribution is
     /// unit-testable without env, a file or a database.
@@ -467,6 +477,7 @@ impl RateLimitConfig {
         self
     }
 
+    // SPEC-7.2.128: names are built from the action.
     /// The variable names carrying this action's cap and window. The generator
     /// [`rate_limit_vars`] materializes them for the whole preset list; a caller
     /// wanting one action's pair as `&'static str` uses [`Self::vars_for`].
@@ -478,6 +489,7 @@ impl RateLimitConfig {
         )
     }
 
+    // SPEC-7.2.130: unparseable keys degrade to Unknown, never panic.
     /// Interpret a `rate_limits.key` per this config's [`KeyKind`] into the
     /// subject it identifies (BUNYIP-315). Email/UserId subjects are resolvable
     /// to a user; IP is exposed as-is; an unparseable user-id key falls back to
@@ -525,6 +537,7 @@ pub struct RateLimitVars {
     pub window_seconds_setting: &'static str,
 }
 
+// SPEC-7.2.128: one generated variable pair per preset.
 /// The whole `RATE_LIMIT_*` variable family, generated once per process from
 /// [`RateLimitConfig::ALL`] (BUNYIP-645).
 ///

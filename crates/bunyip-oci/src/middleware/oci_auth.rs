@@ -15,6 +15,7 @@ use crate::errors::{internal_fault, OciError, OciErrorContext};
 use crate::repositories::UserRepository;
 use crate::services::{OciTokenService, RegistryTokenClaims};
 
+// SPEC-6.8.5: verified claims plus the live email and role
 #[derive(Debug, Clone)]
 pub struct OciBearerUser {
     pub claims: RegistryTokenClaims,
@@ -23,6 +24,7 @@ pub struct OciBearerUser {
 }
 
 impl OciBearerUser {
+    // SPEC-6.8.5: same role check as the domain admin gate
     /// Whether the bearer holds the admin role. Mirrors
     /// [`bunyip_domain::models::User::is_admin`] so both admin gates share the
     /// same role check.
@@ -30,6 +32,7 @@ impl OciBearerUser {
         self.role == "admin"
     }
 
+    // SPEC-6.8.6: exact match of repository:<slug>:pull; callers with a slug must call it
     pub fn assert_scope(&self, slug: &str) -> Result<(), OciError> {
         let expected = format!("repository:{slug}:pull");
         if self.claims.scope == expected {
@@ -40,6 +43,7 @@ impl OciBearerUser {
     }
 }
 
+// SPEC-6.8.1, SPEC-6.8.2, SPEC-6.8.3, SPEC-6.8.4: bearer is re-checked against the live user row on every request
 impl FromRequest for OciBearerUser {
     type Error = OciError;
     type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
@@ -53,17 +57,21 @@ impl FromRequest for OciBearerUser {
         let pool = req.app_data::<actix_web::web::Data<PgPool>>().cloned();
 
         Box::pin(async move {
+            // SPEC-6.8.4: missing wiring is a logged 500
             let svc = token_svc
                 .ok_or_else(|| internal_fault("resolve the OCI token service from the app data"))?;
             let pool =
                 pool.ok_or_else(|| internal_fault("resolve the database pool from the app data"))?;
 
+            // SPEC-6.8.1: absent or non-Bearer header is UNAUTHORIZED
             let raw = header
                 .and_then(|v| v.to_str().ok().map(str::to_string))
                 .ok_or(OciError::Unauthorized)?;
             let token = raw.strip_prefix("Bearer ").ok_or(OciError::Unauthorized)?;
+            // SPEC-6.8.2: audience, expiry and issuer are validated by the token service
             let claims = svc.verify(token)?;
 
+            // SPEC-6.8.3, SPEC-6.8.4: deleted or no-longer-entitled users lose access at once
             let user = UserRepository::find_by_id(pool.get_ref(), claims.sub)
                 .await
                 .internal_ctx(|| format!("load the bearer's user row {}", claims.sub))?

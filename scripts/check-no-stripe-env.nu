@@ -68,7 +68,9 @@ const GOVERNED = [
 ]
 
 def main [] {
+    # SPEC-3.20.1
     let pattern = '[A-Z0-9_]*STRIPE_[A-Z0-9_]+'
+    # SPEC-3.20.2
     let excluded = '^(bunyip-api/migrations/|e2e/|scripts/check-no-.*-env\.nu$)'
 
     mut failed = 0

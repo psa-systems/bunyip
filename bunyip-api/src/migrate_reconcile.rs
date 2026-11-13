@@ -39,6 +39,7 @@ use tracing::{info, warn};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
+// SPEC-9.4.3
 /// `(version, BUNYIP-79 pre-edit SHA-384 hex)`. Only rows whose recorded
 /// checksum still equals this original are reconciled. The replacement value is
 /// taken from the embedded migrator, not hardcoded, so it stays correct if a
@@ -57,6 +58,7 @@ const LEGACY_CHECKSUMS: &[(i64, &str)] = &[
     (20260605000010, "14fddc4a09df80aef5d7269d72f607f4fa5d829d374b72cfe62347b66765413c593dedee3a91e33a18cfd3a51a92bb04"),
 ];
 
+// SPEC-9.4.2, SPEC-9.4.3, SPEC-9.4.4, SPEC-9.4.7: must run before the migrator
 /// Reconcile the BUNYIP-79 in-place-edited migration checksums. Safe to run on
 /// every startup: it is a no-op once healed and on freshly-migrated databases.
 /// Must run BEFORE `Migrator::run`, which is where the mismatch would abort.
@@ -114,6 +116,7 @@ pub async fn reconcile_legacy_migration_checksums(pool: &PgPool) -> Result<(), s
     Ok(())
 }
 
+// SPEC-9.4.5, SPEC-9.4.6, SPEC-9.4.7: must run before the migrator
 /// BUNYIP-457: backfill the `application_entitlements_source_check` constraint
 /// that migration `20260605000010` added by an in-place edit but that
 /// `reconcile_legacy_migration_checksums` never retro-applies (see the module

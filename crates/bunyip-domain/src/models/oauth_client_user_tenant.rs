@@ -10,6 +10,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.48: tenant_id and role are opaque to bunyip.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct OAuthClientUserTenant {
     pub id: Uuid,
@@ -24,6 +25,7 @@ pub struct OAuthClientUserTenant {
     pub created_by: Option<Uuid>,
 }
 
+// SPEC-7.2.49: role optional.
 /// Payload for POST `/v1/admin/oauth-clients/{client_id}/user-tenants`.
 #[derive(Debug, serde::Deserialize)]
 pub struct CreateUserTenantAssignment {

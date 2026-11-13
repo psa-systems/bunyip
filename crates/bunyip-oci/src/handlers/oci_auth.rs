@@ -20,6 +20,7 @@ use crate::repositories::{
 };
 use crate::services::{argon2_offload, OciTokenService, PasswordService};
 
+// SPEC-6.3.3: service is accepted and ignored; scope is parsed after authentication
 #[derive(Debug, Deserialize)]
 pub struct TokenQuery {
     #[serde(default)]
@@ -28,6 +29,7 @@ pub struct TokenQuery {
     pub scope: Option<String>,
 }
 
+// SPEC-6.7.1: token and access_token carry the same bearer so both Docker client styles work
 #[derive(Debug, Serialize)]
 pub struct TokenResponse {
     pub token: String,
@@ -36,6 +38,7 @@ pub struct TokenResponse {
     pub issued_at: String,
 }
 
+// SPEC-6.5.1, SPEC-6.5.3: fixed Argon2id hash so an unknown email costs a real verify
 /// A pre-hashed Argon2id string used to perform constant-time verification
 /// on the "user not found" branch, preventing email enumeration via timing.
 fn dummy_hash() -> &'static str {
@@ -47,6 +50,7 @@ fn dummy_hash() -> &'static str {
     })
 }
 
+// SPEC-6.5.4, SPEC-6.5.5: timing padding runs on the blocking pool; failure is logged, not fatal
 /// Timing padding for the branches that have no real hash to check.
 ///
 /// The boolean is false by construction (the candidate is checked against a
@@ -65,6 +69,7 @@ async fn dummy_verify(password: &str) {
     }
 }
 
+// SPEC-6.3.2, SPEC-6.3.4, SPEC-6.7.1: GET /auth/token: Basic credentials in, bearer out
 /// GET /auth/token
 pub async fn issue_token(
     req: HttpRequest,
@@ -73,6 +78,7 @@ pub async fn issue_token(
     token_svc: web::Data<Arc<OciTokenService>>,
 ) -> Result<HttpResponse, OciError> {
     let ip = extract_client_ip(&req).map(IpNetwork::from);
+    // SPEC-6.3.2, SPEC-6.3.4: no usable Basic header is a 401 before any counter or lookup
     let (email, password) = parse_basic_auth(&req).ok_or(OciError::Unauthorized)?;
     let rate_key = email.to_lowercase();
 
@@ -93,6 +99,7 @@ pub async fn issue_token(
     // Per-email failure cap. `check` reads without incrementing, so compare the
     // read count directly (`>=`); do NOT switch this to the repo's
     // increment-oriented `exceeded` (`>`), which would allow one extra guess.
+    // SPEC-6.4.1: per-email failure brake runs before the Argon2 verify
     if failures_at_cap(
         pool.get_ref(),
         &rate_key,
@@ -113,6 +120,7 @@ pub async fn issue_token(
 
     // Per-IP failure cap (distributed-guessing brake). Skipped when no client
     // IP could be determined.
+    // SPEC-6.4.2: per-IP failure brake; skipped only when no client IP is known
     if let Some(ip_key) = ip_key.as_deref() {
         if failures_at_cap(
             pool.get_ref(),
@@ -133,6 +141,7 @@ pub async fn issue_token(
         }
     }
 
+    // SPEC-6.4.4, SPEC-6.4.6: throughput cap bounds Argon2 CPU; a counter error fails the request
     let (_throughput, throughput_exceeded) = RateLimitRepository::check_and_increment(
         pool.get_ref(),
         &rate_key,
@@ -156,6 +165,7 @@ pub async fn issue_token(
         .await
         .internal_ctx(|| "look up the account behind a registry token request")?;
 
+    // SPEC-6.5.1: unknown email: dummy verify, then a counted credential failure
     let user = match user {
         Some(u) => u,
         None => {
@@ -168,6 +178,7 @@ pub async fn issue_token(
         }
     };
 
+    // SPEC-6.6.1: authorization failure after the password check, not counted as a guess
     if user.deleted_at.is_some() {
         audit_failed(pool.get_ref(), &email, ip, "inactive_user").await;
         return Err(OciError::Unauthorized);
@@ -176,24 +187,30 @@ pub async fn issue_token(
     // Passwordless accounts (magic-link only) cannot use the registry. Still
     // perform a dummy verify to keep timing indistinguishable from the
     // password-check branch.
+    // SPEC-6.5.2: passwordless account: dummy verify keeps timing equal
     let Some(password_hash) = user.password_hash.clone() else {
         dummy_verify(&password).await;
         return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "no_password").await);
     };
 
+    // SPEC-6.5.4, SPEC-6.5.7: a verify that cannot run is a logged 500, not a bad password
     let password_ok = argon2_offload::verify_password(password, password_hash)
         .await
         .internal_ctx(|| format!("verify the registry password of user {}", user.id))?;
+    // SPEC-6.5.6: wrong password is a counted credential failure
     if !password_ok {
         return Err(fail_credential(pool.get_ref(), &rate_key, &email, ip, "bad_password").await);
     }
 
+    // SPEC-6.6.2: valid password without registry access is a 401, not counted
     if !user.is_access_allowed() {
         audit_failed(pool.get_ref(), &email, ip, "no_active_membership").await;
         return Err(OciError::Unauthorized);
     }
 
     // Scope validation: if provided, the target app must exist + be pullable.
+    // SPEC-6.3.5, SPEC-6.6.3, SPEC-6.6.5, SPEC-6.6.6:
+    //  scope is optional; when given the app must exist and be pullable
     let mut scope_str = String::new();
     let mut scope_app_id: Option<uuid::Uuid> = None;
     if let Some(raw_scope) = &query.scope {
@@ -208,6 +225,7 @@ pub async fn issue_token(
         // Per-product entitlement (BUNYIP-39), via the shared decision. Denial
         // surfaces as NameUnknown (404), matching the not-pullable branch, so
         // restricted-product existence does not leak by status code.
+        // SPEC-6.6.4: denial is NAME_UNKNOWN so a restricted product does not leak by status
         let allowed =
             EntitlementRepository::is_allowed(pool.get_ref(), user.id, user.is_admin(), &app)
                 .await
@@ -225,12 +243,14 @@ pub async fn issue_token(
         scope_str = format!("repository:{slug}:pull");
     }
 
+    // SPEC-6.7.2: subject is the user id; scope is the granted repository:<slug>:pull
     let token = token_svc.issue(user.id, &scope_str)?;
     let now = Utc::now();
 
     // Audit token issuance with the user AND the target application (when the
     // scope names one), so per-product pull activity is traceable from the
     // audit log without joining on per-blob requests.
+    // SPEC-6.7.3: issuance is audited with the target application when scoped
     let mut log = CreateAuditLog::new(AuditAction::OciLoginSucceeded)
         .with_actor(user.id, &user.email, &user.role)
         .with_ip(ip)
@@ -238,10 +258,12 @@ pub async fn issue_token(
     if let Some(app_id) = scope_app_id {
         log = log.with_resource("application", app_id);
     }
+    // SPEC-6.7.4, SPEC-6.16.3: audit loss is logged and never changes the outcome
     if let Err(e) = AuditLogRepository::create(pool.get_ref(), log).await {
         tracing::warn!(?e, "oci audit log write failed");
     }
 
+    // SPEC-6.7.1: success body
     Ok(HttpResponse::Ok().json(TokenResponse {
         token: token.clone(),
         access_token: token,
@@ -250,6 +272,7 @@ pub async fn issue_token(
     }))
 }
 
+// SPEC-6.3.1, SPEC-6.3.2: split at the first colon so a password may contain colons
 fn parse_basic_auth(req: &HttpRequest) -> Option<(String, String)> {
     let header = req
         .headers()
@@ -263,6 +286,7 @@ fn parse_basic_auth(req: &HttpRequest) -> Option<(String, String)> {
     Some((email.to_string(), password.to_string()))
 }
 
+// SPEC-6.3.5: only single-repository pull scopes are accepted
 fn parse_repository_pull_scope(scope: &str) -> Option<String> {
     // Docker sends scopes like "repository:my-app:pull" (possibly comma-separated).
     // We accept only single-repo pull scopes.
@@ -277,6 +301,8 @@ fn parse_repository_pull_scope(scope: &str) -> Option<String> {
     Some(slug.to_string())
 }
 
+// SPEC-6.4.8, SPEC-6.16.1, SPEC-6.16.2, SPEC-6.16.3:
+//  oci_login_failed with email and reason; write errors are only logged
 async fn audit_failed(pool: &PgPool, email: &str, ip: Option<IpNetwork>, reason: &str) {
     let log = CreateAuditLog::new(AuditAction::OciLoginFailed)
         .with_ip(ip)
@@ -286,6 +312,7 @@ async fn audit_failed(pool: &PgPool, email: &str, ip: Option<IpNetwork>, reason:
     }
 }
 
+// SPEC-6.4.1, SPEC-6.4.3, SPEC-6.4.5, SPEC-6.4.6: read-only, >= so the boundary blocks; DB errors fail closed
 /// Read (without incrementing) a failure counter and report whether it is at or
 /// over its cap. Uses `>=` against the read count deliberately: the failures
 /// are counted on the failure paths (`fail_credential`), not here, so the
@@ -306,6 +333,7 @@ async fn failures_at_cap(
     Ok(count >= config.max_requests)
 }
 
+// SPEC-6.4.7, SPEC-6.4.8: Retry-After comes from the counter that tripped; lookup failure advertises 60s
 /// Build a 429 for an exceeded limit: look up the reset window, audit, and
 /// return the error. `key` is the counter key that tripped (email or IP);
 /// `config` is the limit that tripped (failures / IP-failures / throughput);
@@ -340,6 +368,8 @@ async fn too_many(
     }
 }
 
+// SPEC-6.5.8, SPEC-6.5.9, SPEC-6.5.10:
+//  only credential failures feed the stuffing counters; increment errors are logged
 /// A credential-verification failure (wrong/absent password, unknown email):
 /// the credential-stuffing signal (BUNYIP-40). Increments BOTH the per-email
 /// and per-IP failure counters that gate the endpoint, audits, and returns 401.

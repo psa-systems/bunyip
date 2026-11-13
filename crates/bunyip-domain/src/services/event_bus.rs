@@ -18,12 +18,14 @@ use uuid::Uuid;
 
 /// The in-process event bus for bunyip's realtime events. Registered once at
 /// startup via `web::Data::new(Arc::new(EventBus::new()))`.
+// SPEC-8.2.1
 pub type EventBus = dunite_events::EventBus<BunyipEvent>;
 
 /// Typed event published by mutation handlers. Wire shape on SSE is a JSON
 /// object whose `type` field is the snake_case discriminant; the `event` SSE
 /// field carries the same name so a strict consumer can route purely on
 /// `event:` without parsing the body.
+// SPEC-8.2.2: wire shape the SPA consumes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum BunyipEvent {
@@ -49,6 +51,7 @@ pub enum BunyipEvent {
         user_id: Uuid,
         /// Short machine-readable reason: `admin_revoke`, `logout_all`,
         /// `role_change`, etc. Display-friendly text comes from the SPA.
+        // SPEC-8.2.4
         reason: &'static str,
     },
 
@@ -61,6 +64,7 @@ pub enum BunyipEvent {
 
 impl SseEvent for BunyipEvent {
     /// The SSE `event:` field name, also used as the `type` discriminant.
+    // SPEC-8.2.2: SSE event name equals the type discriminant
     fn name(&self) -> &'static str {
         match self {
             BunyipEvent::ClaimsChanged { .. } => "claims_changed",
@@ -74,6 +78,7 @@ impl SseEvent for BunyipEvent {
     /// The user this event targets, when applicable. Global events return
     /// `None` and the bus fans them out to every subscriber via the `global`
     /// channel instead of the per-user channel.
+    // SPEC-8.2.3: None means global fan-out
     fn target_user(&self) -> Option<Uuid> {
         match self {
             BunyipEvent::ClaimsChanged { user_id } => Some(*user_id),

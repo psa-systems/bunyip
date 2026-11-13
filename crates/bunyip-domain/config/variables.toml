@@ -7,6 +7,8 @@
 # `since` and the release that dropped it; a Breaking change later than `since`
 # is a [[change]] record naming the operator action and the originating issue.
 
+# SPEC-7.1.151, SPEC-7.1.152, SPEC-7.1.153: one record per inventory variable; required mirrors the Required classes
+
 [[variable]]
 name = "ADMIN_NOTIFICATION_EMAILS"
 since = "v0.2.1"

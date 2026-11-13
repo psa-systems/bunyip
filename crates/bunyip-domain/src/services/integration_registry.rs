@@ -35,6 +35,7 @@ pub enum IntegrationCapability {
     Invoicing,
 }
 
+// SPEC-8.20.5: wire tokens match the serde rename
 impl IntegrationCapability {
     /// Stable machine token, matching the `Serialize` rename.
     pub fn as_str(&self) -> &'static str {
@@ -45,6 +46,7 @@ impl IntegrationCapability {
     }
 }
 
+// SPEC-8.20.2: metadata only, no credentials
 /// One registered integration: its stable key, display name and declared
 /// capability set. Metadata only, no credentials (see the module docs).
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -66,6 +68,7 @@ impl RegisteredIntegration {
 
 use IntegrationCapability::{Invoicing, Payment};
 
+// SPEC-8.20.1
 /// The seeded registry (BUNYIP-661). Add a provider here and every
 /// capability-filtered screen picks it up with no call-site change.
 pub static INTEGRATION_REGISTRY: &[RegisteredIntegration] = &[
@@ -91,6 +94,7 @@ pub static INTEGRATION_REGISTRY: &[RegisteredIntegration] = &[
     },
 ];
 
+// SPEC-8.20.3: filters on capability, never provider id
 /// Every registered integration that supports `capability`, in registry order.
 ///
 /// This is what a payment or invoicing screen calls instead of naming providers:
@@ -104,6 +108,7 @@ pub fn integrations_with(
         .filter(move |i| i.supports(capability))
 }
 
+// SPEC-8.20.4
 /// The registered integration with `id`, if any.
 pub fn integration(id: &str) -> Option<&'static RegisteredIntegration> {
     INTEGRATION_REGISTRY.iter().find(|i| i.id == id)

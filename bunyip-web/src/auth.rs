@@ -27,11 +27,13 @@ use crate::api::{
     Api,
 };
 
+// SPEC-11.4.1
 /// Read the `Cookie` request header.
 pub fn req_cookie(headers: &HeaderMap) -> Option<String> {
     headers.get(COOKIE)?.to_str().ok().map(str::to_string)
 }
 
+// SPEC-11.4.2, SPEC-2.3.3: forward is the cookie later API calls in this request must use.
 pub struct AuthCtx {
     pub user: Option<User>,
     /// `Set-Cookie` strings to relay back to the browser (from a refresh).
@@ -45,11 +47,14 @@ pub struct AuthCtx {
 }
 
 impl AuthCtx {
+    // SPEC-11.4.10
     pub fn is_signed_in(&self) -> bool {
         self.user.is_some()
     }
 }
 
+// SPEC-11.4.2, SPEC-11.4.3, SPEC-11.4.4, SPEC-11.4.5, SPEC-11.4.6: refresh at most once;
+// a non-401 failure reads as signed out.
 pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
     let Some(cookie) = cookie else {
         return AuthCtx {
@@ -124,6 +129,7 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
     }
 }
 
+// SPEC-11.4.7: unverified decode, only to detect a stale role; the API still validates.
 /// BUNYIP-308: unverified decode of the `role` claim from an `access_token`
 /// cookie's JWT payload. Returns `None` when the cookie has no `access_token`
 /// entry, the token is not a well-formed three-segment JWT, the middle
@@ -144,6 +150,7 @@ fn access_token_role_claim(cookie_header: &str) -> Option<String> {
     value.get("role")?.as_str().map(str::to_string)
 }
 
+// SPEC-11.4.7
 fn cookie_value_from_header(header: &str, name: &str) -> Option<String> {
     for kv in header.split(';') {
         if let Some((n, v)) = kv.split_once('=') {
@@ -155,6 +162,7 @@ fn cookie_value_from_header(header: &str, name: &str) -> Option<String> {
     None
 }
 
+// SPEC-11.4.8: an unknown role never matches, which forces a refresh.
 /// Compare a `UserRole` (from the /users/me DB view) with the raw string
 /// pulled from the JWT `role` claim (bunyip-api mints the claim as
 /// `subscriber`, `admin`, ...). Returns true when they represent the same
@@ -175,6 +183,7 @@ fn cookie_name_value(set_cookie: &str) -> Option<(String, String)> {
     Some((n.trim().to_string(), v.trim().to_string()))
 }
 
+// SPEC-11.4.9
 /// Merge the original `Cookie` header with `Set-Cookie` values (later wins;
 /// empty value = deletion).
 pub fn merge_cookies(original: Option<&str>, set_cookies: &[String]) -> String {

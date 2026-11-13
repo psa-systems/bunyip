@@ -10,6 +10,7 @@ pub struct ApplicationRepository;
 
 impl ApplicationRepository {
     /// List all active applications
+    // SPEC-7.3.36
     pub async fn list_active(pool: &PgPool) -> Result<Vec<Application>, AppError> {
         let apps = sqlx::query_as::<_, Application>(
             r#"
@@ -26,6 +27,7 @@ impl ApplicationRepository {
 
     /// List active HOSTED applications (hub launch tiles). Excludes
     /// catalog-only distribution products (is_hosted = FALSE).
+    // SPEC-7.3.36
     pub async fn list_active_hosted(pool: &PgPool) -> Result<Vec<Application>, AppError> {
         let apps = sqlx::query_as::<_, Application>(
             r#"
@@ -41,6 +43,7 @@ impl ApplicationRepository {
     }
 
     /// Find application by ID
+    // SPEC-7.3.37
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Application>, AppError> {
         let app = sqlx::query_as::<_, Application>(
             r#"
@@ -55,6 +58,7 @@ impl ApplicationRepository {
     }
 
     /// Find application by slug
+    // SPEC-7.3.37
     pub async fn find_by_slug(pool: &PgPool, slug: &str) -> Result<Option<Application>, AppError> {
         let app = sqlx::query_as::<_, Application>(
             r#"
@@ -69,6 +73,7 @@ impl ApplicationRepository {
     }
 
     /// Find active application by slug
+    // SPEC-7.3.37
     pub async fn find_active_by_slug(
         pool: &PgPool,
         slug: &str,
@@ -91,6 +96,7 @@ impl ApplicationRepository {
     /// BUNYIP-945 F7: takes a generic executor so the handler can run this
     /// and `backfill_for_application` in one transaction, atomic against a
     /// backfill failure or a crash between the two statements.
+    // SPEC-7.3.38, SPEC-7.3.39
     pub async fn set_requires_entitlement<'e, E>(
         executor: E,
         app_id: Uuid,
@@ -119,6 +125,7 @@ impl ApplicationRepository {
     }
 
     /// Toggle maintenance mode
+    // SPEC-7.3.38, SPEC-7.3.40
     pub async fn set_maintenance_mode(
         pool: &PgPool,
         app_id: Uuid,
@@ -146,6 +153,7 @@ impl ApplicationRepository {
     }
 
     /// Toggle active status
+    // SPEC-7.3.6, SPEC-7.3.38
     pub async fn set_active(pool: &PgPool, app_id: Uuid, active: bool) -> Result<(), AppError> {
         let result = sqlx::query(
             r#"
@@ -172,6 +180,7 @@ impl ApplicationRepository {
     /// field and is called with partial bodies (e.g. an is_active toggle), so
     /// it can neither clear `group_id` to NULL nor be trusted to leave it
     /// untouched. A direct `SET group_id = $1` here both sets and clears.
+    // SPEC-7.3.38, SPEC-7.3.41
     pub async fn set_group(
         pool: &PgPool,
         app_id: Uuid,
@@ -197,6 +206,7 @@ impl ApplicationRepository {
     }
 
     /// Update application version
+    // SPEC-7.3.38
     pub async fn update_version(
         pool: &PgPool,
         app_id: Uuid,
@@ -222,6 +232,7 @@ impl ApplicationRepository {
     }
 
     /// Update application fields (admin)
+    // SPEC-7.3.42
     pub async fn update(
         pool: &PgPool,
         app_id: Uuid,
@@ -294,6 +305,7 @@ impl ApplicationRepository {
     /// downloads + OCI image) can be supplied at creation so a product is
     /// usable in one call; artifact_source falls back to the column default
     /// ('release') when not provided.
+    // SPEC-7.3.43
     pub async fn create(pool: &PgPool, data: &CreateApplication) -> Result<Application, AppError> {
         let app = sqlx::query_as::<_, Application>(
             r#"
@@ -343,6 +355,7 @@ impl ApplicationRepository {
     }
 
     /// Delete an application by ID (admin)
+    // SPEC-7.3.44
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
         let result = sqlx::query("DELETE FROM applications WHERE id = $1")
             .bind(id)
@@ -366,6 +379,7 @@ impl ApplicationRepository {
     ///
     /// One statement: `unnest ... WITH ORDINALITY` pairs each id with its
     /// position and the join assigns it, so N rows update in a single round trip.
+    // SPEC-7.3.45
     pub async fn set_order(pool: &PgPool, ordered_ids: &[Uuid]) -> Result<(), AppError> {
         if ordered_ids.is_empty() {
             return Ok(());
@@ -385,6 +399,7 @@ impl ApplicationRepository {
     }
 
     /// List all applications (admin)
+    // SPEC-7.3.36
     pub async fn list_all(pool: &PgPool) -> Result<Vec<Application>, AppError> {
         let apps = sqlx::query_as::<_, Application>(
             r#"
@@ -402,6 +417,7 @@ impl ApplicationRepository {
     /// lose it. `artifact_digest` is the OCI content digest for image versions and NULL
     /// for binary versions. Idempotent on (application_id, version_tag); a later call
     /// fills a previously-NULL digest but never overwrites a recorded one.
+    // SPEC-7.3.46
     pub async fn record_version(
         pool: &PgPool,
         application_id: Uuid,
@@ -429,6 +445,7 @@ impl ApplicationRepository {
     /// BUNYIP-386: true when `version_tag` is a recorded, non-yanked version of the
     /// application. Both proxies (OCI registry and binary download) use this as their
     /// tag allow-list so historical tags stay servable after the pin is bumped.
+    // SPEC-7.3.47
     pub async fn is_pullable_version(
         pool: &PgPool,
         application_id: Uuid,

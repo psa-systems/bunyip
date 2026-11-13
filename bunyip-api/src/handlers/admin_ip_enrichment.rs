@@ -29,6 +29,7 @@ pub struct IpEnrichmentQuery {
     pub ip: String,
 }
 
+// SPEC-10.13.8: payload shape; `advisory` is always true.
 /// The advisory enrichment of one address, as returned to the admin UI.
 ///
 /// `category` and `vpn` are the stable lowercase labels of the classified enums
@@ -69,6 +70,7 @@ impl IpEnrichmentResponse {
     }
 }
 
+// SPEC-10.13.6, SPEC-10.13.7: bad IP is 400; no service or no record is a no-data 200.
 /// GET /v1/admin/ip-enrichment?ip=<addr>
 ///
 /// AdminUser-guarded. Returns the [`IpEnrichmentResponse`] for `ip`, or a

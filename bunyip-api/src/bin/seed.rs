@@ -47,9 +47,11 @@ async fn main() -> anyhow::Result<()> {
     let allow = secret_env("BUNYIP_SEED_ALLOW")
         .map(|v| v.trim() == "true")
         .unwrap_or(false);
+    // SPEC-9.19.6: guard runs before touching the database
     seed::seed_guard(&config.environment, allow).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
     match positional.first().map(String::as_str) {
+        // SPEC-9.19.7
         Some("import") => {
             let path = positional
                 .get(1)
@@ -78,6 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 s.groups, s.applications, s.users, s.entitlements, s.feedback
             );
         }
+        // SPEC-9.19.8
         Some("reset") => {
             // Optional file arg: reset that file's declared `owns` scope. With no
             // file, reset the reserved seed domain (the default scope).
@@ -104,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             println!("reset: removed {} users, {} feedback", s.users, s.feedback);
         }
+        // SPEC-9.19.9
         _ => {
             print_help();
             bail!("unknown or missing command (expected `import <file>` or `reset`)");

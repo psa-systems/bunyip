@@ -30,6 +30,7 @@ use crate::handlers::dashboard_input;
 use crate::views::layout::asset;
 use crate::views::ui::icon;
 
+// SPEC-11.28.1, SPEC-11.28.3: role picks autocomplete and the JS marker
 /// Which password an input holds. Decides the `autocomplete` hint and, for the
 /// new/confirm pair, the marker `assets/js/password-field.js` looks for.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,6 +43,7 @@ pub enum PwRole {
     Confirm,
 }
 
+// SPEC-11.28.2, SPEC-11.28.4: helper never adds required itself
 /// The per-field extras a form may need on top of the role. `Default` is the
 /// chosen-password shape (BUNYIP-575), so the signup, reset and invite cards
 /// pass `PwField::default()`; the identity confirmations added by BUNYIP-597
@@ -68,6 +70,7 @@ pub struct PwField<'a> {
     pub placeholder: Option<&'a str>,
 }
 
+// SPEC-11.28.5: both eye states are pre-rendered; JS only flips ARIA
 /// BUNYIP-554: both eye states, pre-rendered. `input.css` shows exactly one per
 /// the button's `aria-pressed`, so the script never builds markup - SVG
 /// generation stays in Rust and the script only flips the ARIA state.
@@ -78,6 +81,8 @@ fn toggle_glyphs() -> Markup {
     }
 }
 
+// SPEC-11.28.1, SPEC-11.28.2, SPEC-11.28.3, SPEC-11.28.4, SPEC-11.28.5, SPEC-11.28.8:
+// single source of password inputs
 /// A labelled password input with the inline show/hide eye toggle.
 ///
 /// Default state is hidden (`type=password`, eye glyph, `aria-pressed=false`,
@@ -126,6 +131,7 @@ pub fn password_field(id: &str, name: &str, label: &str, role: PwRole, opts: PwF
     }
 }
 
+// SPEC-11.28.6
 /// Where the guard writes the rule the typed password broke. Rendered empty and
 /// hidden; the script fills it, reveals it, and clears it again on the next
 /// keystroke. `role=alert` so the message is announced, not just painted.
@@ -133,6 +139,7 @@ pub fn guard_message() -> Markup {
     html! { p data-pw-guard-msg role="alert" hidden class="text-sm text-destructive-text" {} }
 }
 
+// SPEC-11.28.7
 /// The toggle + guard controller. Separate from `password.js` so a form can
 /// take these two behaviours alone.
 pub fn script() -> Markup {

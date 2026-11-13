@@ -9,6 +9,7 @@ use crate::models::mokosh::MokoshConfigRow;
 pub struct MokoshConfigRepository;
 
 impl MokoshConfigRepository {
+    // SPEC-7.3.141
     pub async fn get(pool: &PgPool) -> Result<MokoshConfigRow, AppError> {
         let row = sqlx::query_as::<_, MokoshConfigRow>("SELECT * FROM mokosh_config WHERE id = 1")
             .fetch_one(pool)
@@ -19,6 +20,7 @@ impl MokoshConfigRepository {
     /// Replace the public half as an operator edit. The ciphertext columns are
     /// left alone: the secret is written through the governed-secret path, so
     /// an admin fixing a mistyped client id does not re-enter the secret.
+    // SPEC-7.3.145
     pub async fn update_client_id(
         pool: &PgPool,
         google_client_id: &str,
@@ -43,6 +45,7 @@ impl MokoshConfigRepository {
 
     /// Write the encrypted client secret (ciphertext + nonce) under
     /// `key_version` as an operator edit.
+    // SPEC-7.3.146
     pub async fn update_client_secret(
         pool: &PgPool,
         google_client_secret: &[u8],
@@ -73,6 +76,7 @@ impl MokoshConfigRepository {
     /// Rewrite the stored secret under a new key version (re-encrypt,
     /// `secrets-migrate` and settings-import passes), touching nothing else and
     /// claiming no operator edit.
+    // SPEC-7.3.146
     pub async fn update_client_secret_encryption(
         pool: &PgPool,
         google_client_secret: &[u8],

@@ -10,6 +10,7 @@ pub struct InviteRepository;
 
 impl InviteRepository {
     /// Create a new admin invite
+    // SPEC-7.3.116
     pub async fn create(pool: &PgPool, data: CreateAdminInvite) -> Result<AdminInvite, AppError> {
         let invite = sqlx::query_as::<_, AdminInvite>(
             r#"
@@ -30,6 +31,7 @@ impl InviteRepository {
     }
 
     /// Find a valid (not revoked, not accepted, not expired) invite by token hash
+    // SPEC-7.3.117
     pub async fn find_valid_by_token_hash(
         pool: &PgPool,
         token_hash: &str,
@@ -51,6 +53,7 @@ impl InviteRepository {
     }
 
     /// Find a pending (not revoked, not accepted, not expired) invite by email
+    // SPEC-7.3.118
     pub async fn find_pending_by_email(
         pool: &PgPool,
         email: &str,
@@ -74,6 +77,7 @@ impl InviteRepository {
     }
 
     /// Mark an invite as accepted
+    // SPEC-7.3.119
     pub async fn mark_accepted(pool: &PgPool, invite_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -88,6 +92,7 @@ impl InviteRepository {
     }
 
     /// Mark an invite as revoked
+    // SPEC-7.3.119
     pub async fn mark_revoked(pool: &PgPool, invite_id: Uuid) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -102,6 +107,7 @@ impl InviteRepository {
     }
 
     /// Revoke all pending invites for an email
+    // SPEC-7.3.120
     pub async fn revoke_pending_by_email(pool: &PgPool, email: &str) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -120,6 +126,7 @@ impl InviteRepository {
     }
 
     /// List all invites with pagination
+    // SPEC-7.3.121
     pub async fn list_all(
         pool: &PgPool,
         page: i32,
@@ -132,6 +139,7 @@ impl InviteRepository {
     /// revoked / expired) and `email` substring. The caller validates
     /// `status` against the closed set and caps `email` at 128 chars
     /// before passing them in.
+    // SPEC-7.3.121, SPEC-7.3.122
     pub async fn list_filtered(
         pool: &sqlx::PgPool,
         page: i32,
@@ -144,6 +152,7 @@ impl InviteRepository {
         // BUNYIP-995: compute the offset in i64 and saturate, mirroring
         // BUNYIP-946 F14, so a page value large enough to overflow an i32
         // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        // SPEC-7.3.3
         let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         // Derived-state SQL mirrors the web renderer's classification:

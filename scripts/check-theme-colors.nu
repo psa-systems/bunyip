@@ -73,6 +73,7 @@ const COLOR_LITERALS = [
 ]
 
 # Stock-palette utilities in one client-side script.
+# SPEC-3.26.1
 def check-js [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -95,6 +96,7 @@ def check-js [path: string]: nothing -> list<string> {
 }
 
 # Raw colour values in the framework shell, above its test module.
+# SPEC-3.26.2
 def check-shell [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -142,6 +144,7 @@ def find-theme-inline-block [rows: list]: nothing -> record<start: int, end: int
 # `bunyip-web/input.css`: no bare colour literal survives inside `@theme
 # inline` (BUNYIP-722), and every HSL token a theme block (`:root`, `.dark`,
 # `.high-contrast`, `.dark.high-contrast`) declares has a live reader.
+# SPEC-3.26.3, SPEC-3.26.4
 def check-input-css [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -180,6 +183,7 @@ def check-input-css [path: string]: nothing -> list<string> {
     $problems
 }
 
+# SPEC-3.26.5
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

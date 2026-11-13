@@ -13,9 +13,11 @@
 //! skew between bunyip-web and bunyip-api then degrades (an unknown value
 //! renders neutrally) instead of breaking the whole decode.
 
+// SPEC-11.18.3: every response field defaults unless listed in ESSENTIAL_FIELDS.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// SPEC-11.18.1: an unrecognised wire value decodes to Unknown instead of failing the response.
 /// BUNYIP-506: declare a wire string enum that tolerates a value this build does
 /// not know. Deserialization goes through `String`, so a variant a newer
 /// bunyip-api added decodes as `Unknown` instead of failing the whole response
@@ -62,6 +64,7 @@ macro_rules! wire_enum {
     };
 }
 
+// SPEC-11.18.1, SPEC-11.18.2: Unknown never equals Admin.
 wire_enum! {
     UserRole {
         Subscriber = "subscriber",
@@ -69,6 +72,7 @@ wire_enum! {
     }
 }
 
+// SPEC-11.18.1
 wire_enum! {
     MembershipStatus {
         None = "none",
@@ -80,6 +84,7 @@ wire_enum! {
     }
 }
 
+// SPEC-11.18.1
 wire_enum! {
     MembershipTier {
         Lifetime = "lifetime",
@@ -134,6 +139,7 @@ pub struct TrustedDeviceInfo {
     pub expires_at: String,
 }
 
+// SPEC-11.18.3, SPEC-11.18.4: only identity and security fields are required.
 /// BUNYIP-506: only identity and security carry the auth flow. Everything a
 /// login or a 2FA verify does not need (billing, presentation, profile) is
 /// `#[serde(default)]` with a least-privileged default, so a membership field
@@ -189,6 +195,7 @@ pub struct User {
     pub is_super_admin: bool,
 }
 
+// SPEC-11.18.5
 impl User {
     /// BUNYIP-408: the name to show in the top-bar profile menu. Prefers the
     /// user's first name; falls back to the email local part (before `@`) when
@@ -235,6 +242,7 @@ pub struct AuthResponse {
     pub user: User,
 }
 
+// SPEC-11.18.6
 /// Feature-flags probe response (`GET /auth/setup/status`): which optional
 /// integrations are wired. BUNYIP-290 removed the `setup_required` flag along
 /// with the first-admin setup wizard.
@@ -302,6 +310,7 @@ pub struct Membership {
     pub grace_period_end: Option<String>,
 }
 
+// SPEC-11.18.7
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PaginatedResponse<T> {
     // `default = "Vec::new"` rather than a bare `default`: the bare form makes
@@ -387,6 +396,7 @@ pub struct StripeInvoice {
 // Feedback
 // ---------------------------------------------------------------------------
 
+// SPEC-11.18.1
 wire_enum! {
     FeedbackStatus {
         New = "new",
@@ -459,6 +469,7 @@ pub struct OciImage {
     pub reference: String,
 }
 
+// SPEC-11.18.8
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppDownloadGroup {
     pub app_slug: String,
@@ -584,6 +595,7 @@ pub struct ApiVersion {
     pub update: Option<serde_json::Value>,
 }
 
+// SPEC-11.18.1
 wire_enum! {
     /// One integration's state on the admin System Status page (BUNYIP-623).
     /// Mirrors `bunyip_domain::services::IntegrationState`.
@@ -625,12 +637,14 @@ pub struct IntegrationStatusResponse {
 // the real DTOs (most recently dropping `deviations` / `configuration_generation`
 // / `enumeration`). Re-exported from the shared crate instead, so a future
 // field addition there is a compile error here rather than a silent skew.
+// SPEC-11.18.13
 pub use bunyip_domain::services::provider_status::{
     AggregatedProviderStatus as ProviderStatusAggregateResponse,
     AppProviderStatus as ProviderAppState, AppStatusRow as ProviderAppStatusRow,
     ProviderDiscrepancy, ProviderKindReport as ProviderKindEntry, ProviderStatusReport,
 };
 
+// SPEC-11.18.4
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminUser {
     pub id: String,
@@ -1022,16 +1036,19 @@ pub struct AdminFeatureToggle {
     pub updated_by_email: Option<String>,
 }
 
+// SPEC-11.18.8
 fn default_true() -> bool {
     true
 }
 
+// SPEC-11.18.4: least-privileged default, never an inferred grant.
 /// BUNYIP-506: least-privileged default for a membership status - "no
 /// membership", never a grant inferred from a field the API did not send.
 fn membership_status_none() -> MembershipStatus {
     MembershipStatus::None
 }
 
+// SPEC-11.18.8
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AdminApplication {
     pub id: String,
@@ -1264,6 +1281,7 @@ pub struct ArchivedFeedback {
     pub created_at: Option<String>,
 }
 
+// SPEC-11.18.8
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StripeConfigResponse {
     #[serde(default)]
@@ -1394,6 +1412,7 @@ pub struct StripePermissionReport {
     pub checks: Vec<StripePermissionCheck>,
 }
 
+// SPEC-11.18.11
 /// BUNYIP-561: the admin-managed product branding, from `GET /v1/branding` (and
 /// from `GET /v1/admin/branding`, which adds attribution fields this form does
 /// not render). Mirrors bunyip-api's `Branding`.
@@ -1438,6 +1457,7 @@ pub struct Branding {
     pub mascot_version: String,
 }
 
+// SPEC-11.18.11
 impl Branding {
     /// BUNYIP-560: the same-origin URL for a brand asset, or `None` when the
     /// slot is unset. `version` is the record's marker for that slot, so a
@@ -1473,6 +1493,7 @@ impl Branding {
     }
 }
 
+// SPEC-11.18.8
 /// BUNYIP-351: email / SMTP configuration surfaced to the admin settings form.
 /// Mirrors `bunyip-api`'s `EmailConfigResponse`; the SMTP password is never
 /// returned in plaintext (only a masked hint + `has_smtp_password`).
@@ -1534,6 +1555,7 @@ pub struct EmailConfigResponse {
     pub updated_by: Option<String>,
 }
 
+// SPEC-11.18.8
 /// BUNYIP-997: the Mirzam integration settings. The API token is write-only:
 /// `has_api_token` is the only fact about it the page receives, and it renders
 /// a fixed-length mask from that.
@@ -1566,6 +1588,7 @@ pub struct MirzamConfigResponse {
     pub last_error_at: Option<String>,
 }
 
+// SPEC-11.18.8
 /// BUNYIP-983: the Mokosh host settings (the Google OAuth client the
 /// host-secrets route serves).
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -1603,6 +1626,7 @@ pub struct MirzamListCheck {
     pub message: String,
 }
 
+// SPEC-11.18.10
 /// BUNYIP-997: the Mirzam connection check. Both fields default, so a body
 /// that decodes without them reads as a failed check, never a silent pass.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -1652,6 +1676,7 @@ pub struct SettingProvenance {
     pub providers: Vec<String>,
 }
 
+// SPEC-11.18.10
 /// BUNYIP-433: result of the SMTP "Test connection" probe. `ok` is the headline
 /// pass/fail; on failure `stage` is one of `connect` / `tls` / `auth` and
 /// `message` is the admin-facing reason.
@@ -1665,6 +1690,7 @@ pub struct SmtpTestResult {
     pub message: String,
 }
 
+// SPEC-11.18.10
 /// BUNYIP-508: result of the admin "Test email" send. `ok` is the headline
 /// pass/fail; `message` is the admin-facing reason (the relay's own text on a
 /// failure). Both default: a body that decodes without them reads as a failed
@@ -1717,6 +1743,7 @@ pub struct AppRestoreOutcome {
     pub status: AppRestoreStatus,
 }
 
+// SPEC-11.18.12
 /// Restore-time outcome for one app. Mirrors `bunyip-domain`'s
 /// `AppRestoreStatus` (internally tagged on `state`).
 #[derive(Debug, Clone, Deserialize)]
@@ -1726,6 +1753,7 @@ pub enum AppRestoreStatus {
     Skipped { reason: String },
 }
 
+// SPEC-11.18.8
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TierConfigResponse {
     #[serde(default)]
@@ -1782,6 +1810,7 @@ pub struct TierConfigResponse {
     pub updated_by: Option<String>,
 }
 
+// SPEC-11.18.9
 /// BUNYIP-487: the public `/v1/pricing` payload. The admin Pricing tiers page
 /// is the only source: `enabled` is its switch and each tier's amount comes
 /// from the Stripe price that tier maps to, so the advertised price cannot
@@ -1798,6 +1827,7 @@ pub struct PricingResponse {
     pub tiers: Vec<PricingTier>,
 }
 
+// SPEC-11.18.8, SPEC-11.18.9
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PricingTier {
     /// Display name comes from `handlers::dashboard::tier_name`, not the wire,
@@ -1824,6 +1854,7 @@ pub struct PricingTier {
     pub slots_remaining: Option<i64>,
 }
 
+// SPEC-11.18.9
 impl PricingResponse {
     /// Whether `/pricing` has anything honest to show. `false` means the route
     /// 404s and every link to it stays hidden.

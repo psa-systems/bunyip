@@ -13,6 +13,7 @@ use crate::api::Api;
 use crate::config::Config;
 use crate::ttl_cache::TtlCache;
 
+// SPEC-11.2.3: shared empty default for a cold applications fetch.
 /// The shared empty application list every reader falls back to on a cold
 /// cache failure, so that path allocates nothing new per render (matching
 /// `branding::unbranded()`).
@@ -21,6 +22,7 @@ fn empty_applications() -> Arc<Vec<Application>> {
     Arc::clone(EMPTY.get_or_init(|| Arc::new(Vec::new())))
 }
 
+// SPEC-11.2.2: shared unpublished default for a cold pricing fetch.
 /// The shared unpublished pricing default every reader falls back to on a cold
 /// cache failure.
 fn unpublished_pricing() -> Arc<PricingResponse> {
@@ -28,6 +30,7 @@ fn unpublished_pricing() -> Arc<PricingResponse> {
     Arc::clone(EMPTY.get_or_init(|| Arc::new(PricingResponse::default())))
 }
 
+// SPEC-11.2.1
 #[derive(Clone)]
 pub struct AppState {
     pub api: Api,
@@ -49,6 +52,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    // SPEC-11.2.2
     /// The public pricing payload for the chrome, coalesced per TTL. A cold
     /// failure falls back to the unpublished default, which hides the `/pricing`
     /// links rather than offering a dead one (BUNYIP-487/518).
@@ -59,6 +63,7 @@ impl AppState {
             .unwrap_or_else(|_| unpublished_pricing())
     }
 
+    // SPEC-11.2.3: cookie-less fetch, so one shared slot is safe.
     /// The application list an ANONYMOUS visitor sees: the footer's Product
     /// column, and (BUNYIP-638) the landing page's cards for a cookie-less
     /// caller. Coalesced per TTL.
@@ -80,6 +85,7 @@ impl AppState {
             .unwrap_or_else(|_| empty_applications())
     }
 
+    // SPEC-11.2.4: a cold failure stays an Err, never an empty menu.
     /// The applications with published documentation, coalesced per TTL
     /// (BUNYIP-635). `Err` only when the cache has never read the list, which
     /// the `/docs` hub renders as "could not load" (with the underlying
@@ -91,6 +97,7 @@ impl AppState {
             .await
     }
 
+    // SPEC-11.2.5
     /// The setup-status flags, coalesced per TTL. `None` only when the cache has
     /// never read them, so each caller applies its own documented fallback.
     ///
@@ -105,6 +112,7 @@ impl AppState {
             .map(|s| (*s).clone())
     }
 
+    // SPEC-11.2.6: unreadable status assumes payment is configured, with a warn log.
     /// Whether the subscribe CTA is live. BUNYIP-515: an unreadable setup status
     /// defaults to "payment configured", so a working Stripe account is never
     /// hidden behind a disabled button, but it says so first.
@@ -122,6 +130,7 @@ impl AppState {
     }
 }
 
+// SPEC-11.2.9, SPEC-11.2.10, SPEC-2.3.3: relays each Set-Cookie to the browser as its own header.
 fn attach_cookies(resp: &mut Response, cookies: &[String]) {
     for c in cookies {
         if let Ok(v) = HeaderValue::from_str(c) {
@@ -130,11 +139,13 @@ fn attach_cookies(resp: &mut Response, cookies: &[String]) {
     }
 }
 
+// SPEC-11.2.9
 /// 200 HTML response.
 pub fn html(markup: Markup) -> Response {
     Html(markup.into_string()).into_response()
 }
 
+// SPEC-11.2.9
 /// HTML response with an explicit status (e.g. 404 for the not-found fallback,
 /// BUNYIP-186 - the fallback page must carry a real 404, not a soft-404 200).
 pub fn html_status(markup: Markup, status: StatusCode) -> Response {
@@ -143,6 +154,7 @@ pub fn html_status(markup: Markup, status: StatusCode) -> Response {
     resp
 }
 
+// SPEC-11.2.9, SPEC-2.3.3
 /// 200 HTML response that also relays refreshed cookies.
 pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
     let mut resp = Html(markup.into_string()).into_response();
@@ -150,6 +162,7 @@ pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
     resp
 }
 
+// SPEC-11.2.9, SPEC-2.3.3
 /// A bare status response that relays refreshed cookies (BUNYIP-473). For
 /// fetch-driven endpoints that must not redirect (a redirect would reload and
 /// scroll the page), the client only reads `response.ok`.
@@ -159,6 +172,7 @@ pub fn status_cookies(status: StatusCode, cookies: &[String]) -> Response {
     resp
 }
 
+// SPEC-11.2.10, SPEC-11.2.11
 /// 303 redirect (so a POST -> GET after form submit).
 pub fn redirect(path: &str) -> Response {
     let mut resp = StatusCode::SEE_OTHER.into_response();
@@ -169,6 +183,7 @@ pub fn redirect(path: &str) -> Response {
     resp
 }
 
+// SPEC-11.2.10, SPEC-2.3.3
 /// 303 redirect that relays cookies (login/logout).
 pub fn redirect_cookies(path: &str, cookies: &[String]) -> Response {
     let mut resp = redirect(path);
@@ -207,6 +222,7 @@ mod chrome_fetch_guards {
             .collect()
     }
 
+    // SPEC-11.2.7
     /// BUNYIP-555: every read of the three near-static payloads goes through
     /// `AppState`'s TTL caches. A direct per-render fetch is what made normal
     /// browsing exhaust the rate-limit floor, and each one that came back had
@@ -241,6 +257,7 @@ mod chrome_fetch_guards {
         }
     }
 
+    // SPEC-11.2.8
     /// BUNYIP-555: the handlers that issue several independent upstream calls
     /// issue them concurrently. Serial awaits made a page cost the SUM of its
     /// fetch latencies; `join!` (never `try_join!`, which would collapse the

@@ -11,13 +11,16 @@
 //! `git_revision()` (the build SHA) - and re-exports the checker so every
 //! `crate::version::{UpdateChecker, UpdateStatus}` path is unchanged.
 
+// SPEC-9.22.4: checker is shared; this endpoint only reports
 pub use dunite_update_check::{UpdateChecker, UpdateStatus};
 
+// SPEC-9.22.2: compile-time package version
 /// The version compiled into this binary (workspace `Cargo.toml`).
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+// SPEC-9.22.2, SPEC-9.22.3: compile-time GIT_COMMIT, same as /v1/version
 /// Git revision baked in at image build time via the `GIT_COMMIT` compile-time
 /// env (the same `option_env!` the `/v1/version` status endpoint reads).
 /// `"unknown"` for local `cargo run` builds, which set no `GIT_COMMIT`.

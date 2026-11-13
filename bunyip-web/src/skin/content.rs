@@ -18,6 +18,7 @@ use crate::views::ui::{
 };
 use crate::web::AppState;
 
+// SPEC-11.32.7
 /// Displayed at the top of /terms and /privacy. Bump this string the SAME
 /// COMMIT you review the policy body for accuracy - do not bump it reflexively
 /// to make the page look fresh. The bump is a signal to anyone reading the
@@ -26,6 +27,7 @@ const POLICY_LAST_UPDATED: &str = "August 2026";
 
 // --- pricing ----------------------------------------------------------------
 
+// SPEC-11.31.4
 // BUNYIP-487: "Up to 5 members per org" is gone. There is no orgs table and no
 // membership cap in the product, so the bullet advertised something that does
 // not exist.
@@ -37,6 +39,7 @@ const PERSONAL: [&str; 5] = [
     "Cancel anytime",
 ];
 
+// SPEC-11.31.10
 /// Trial length sentence fragment, from `tier_config.standard_trial_days`.
 /// BUNYIP-487: the page used to say "14 days" while the configured default was
 /// 30, so the marketing copy advertised a trial the application did not honour.
@@ -50,6 +53,7 @@ pub(super) fn trial_phrase(days: i64) -> String {
     }
 }
 
+// SPEC-11.31.5
 /// BUNYIP-526: the per-card value line under the price. Each tier states its own
 /// trial length; Lifetime is a price-locked membership, not a trial, so its line
 /// never says "trial". A paid tier with no trial falls back to the price-lock
@@ -62,6 +66,7 @@ pub(super) fn card_value_line(is_lifetime: bool, trial_days: i64) -> String {
     }
 }
 
+// SPEC-11.31.6
 /// BUNYIP-526: an honest scarcity line for a limited tier that still has slots.
 /// An unlimited tier (`None`) or a sold-out one returns `""` (the sold-out CTA
 /// already carries that state), so nothing is invented.
@@ -73,6 +78,7 @@ pub(super) fn scarcity_line(slots_remaining: Option<i64>, available: bool) -> St
     }
 }
 
+// SPEC-11.31.4, SPEC-11.31.7, SPEC-11.31.8
 #[allow(clippy::too_many_arguments)]
 fn pricing_card(
     title: &str,
@@ -137,6 +143,7 @@ fn pricing_card(
     }
 }
 
+// SPEC-11.31.3, SPEC-11.31.4, SPEC-11.31.9: every figure comes from the API payload
 /// The pricing page body. Split out from the handler so the rendering is unit
 /// testable against a `PricingResponse` without an API round trip.
 pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in: bool) -> Markup {
@@ -193,6 +200,7 @@ pub(super) fn pricing_content(pricing: &PricingResponse, stripe: bool, signed_in
     }
 }
 
+// SPEC-11.31.1, SPEC-11.31.2: link visibility follows the same published() condition
 /// BUNYIP-487: 404 unless an admin published pricing AND a tier resolves to a
 /// usable Stripe price. A pricing page with no pricing has nothing to say, and
 /// the nav / footer / hero links are hidden on exactly the same condition.
@@ -231,6 +239,7 @@ pub async fn pricing(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 // --- our story --------------------------------------------------------------
 
+// SPEC-11.32.2
 /// BUNYIP-561: the "Why X?" heading, from the admin-managed brand. Unbranded,
 /// the question stands on its own rather than naming a compiled-in product.
 fn why_heading(brand_name: &str) -> String {
@@ -241,6 +250,7 @@ fn why_heading(brand_name: &str) -> String {
     }
 }
 
+// SPEC-11.34.4
 /// BUNYIP-561: the `/docs` index lead line.
 fn docs_index_note(brand_name: &str) -> String {
     let subject = if brand_name.is_empty() {
@@ -251,6 +261,7 @@ fn docs_index_note(brand_name: &str) -> String {
     format!("Guides and runbooks for {subject}. Temporary home while the dedicated docs app is built out.")
 }
 
+// SPEC-11.34.12
 /// BUNYIP-561: the "this page is personalized" note above a doc.
 fn personalized_note(brand_name: &str) -> String {
     if brand_name.is_empty() {
@@ -260,6 +271,7 @@ fn personalized_note(brand_name: &str) -> String {
     }
 }
 
+// SPEC-11.32.1, SPEC-11.32.2
 pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     // BUNYIP-561: the product name comes from the admin-managed record.
@@ -304,6 +316,7 @@ pub async fn our_story(State(st): State<AppState>, headers: HeaderMap) -> Respon
 
 // --- roadmap ----------------------------------------------------------------
 
+// SPEC-11.32.3
 // Seed roadmap items, grouped by status bucket. Each entry is a (title,
 // one-line description) pair. Editing the page is a one-line change here,
 // the same shape as PERSONAL above. Placeholder content until a
@@ -362,6 +375,7 @@ fn roadmap_section(title: &str, blurb: &str, items: &[(&str, &str)]) -> Markup {
     }
 }
 
+// SPEC-11.32.3
 pub async fn roadmap(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let content = html! {
@@ -402,6 +416,7 @@ fn legal_ul(title: &str, items: &[&str]) -> Markup {
     }
 }
 
+// SPEC-11.32.4, SPEC-11.32.6
 pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
@@ -443,6 +458,7 @@ pub async fn terms(State(st): State<AppState>, headers: HeaderMap) -> Response {
     )
 }
 
+// SPEC-11.32.5, SPEC-11.32.6
 pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (c, pricing, app_links_allowed) = public_ctx(&st, &headers).await;
     let d = st.cfg.domain_or_localhost();
@@ -489,10 +505,12 @@ pub async fn privacy(State(st): State<AppState>, headers: HeaderMap) -> Response
 
 // --- feedback ---------------------------------------------------------------
 
+// SPEC-11.33.4
 const FEEDBACK_TAGS: [&str; 4] = ["Bug", "Feature", "Flow", "Idea"];
 
 const FEEDBACK_DEFAULT_PATH: &str = "/feedback";
 
+// SPEC-11.33.8: limits mirror the API so the user sees an inline error
 /// Mirrors bunyip-api's per-form limits (`bunyip-api/src/handlers/feedback.rs:29-35`
 /// and lines 151, 161). Enforced upstream of the multipart -> reqwest
 /// hop so the user sees an inline error banner rather than the API's
@@ -506,12 +524,14 @@ const FEEDBACK_ALLOWED_MIMES: [&str; 5] = [
     "image/gif",
     "text/plain",
 ];
+// SPEC-11.33.6
 /// Per-route axum body limit on `/feedback`. The default is 2 MB and
 /// would reject any reasonable file. Cap at 3 files × 5 MB + ~1 MB of
 /// form overhead, rounded up. Applied only to this route in
 /// `main.rs`; the rest of the app stays on the default.
 pub const FEEDBACK_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
+// SPEC-11.33.1: cheap guard for the hidden field
 /// Validate a candidate `page_path` value (from a `?from=` query or from a
 /// previously-rendered hidden form field) before round-tripping it back into
 /// the markup. Trims, then requires it to start with `/` and stay under the
@@ -550,6 +570,7 @@ struct FeedbackDraft {
 }
 
 impl FeedbackDraft {
+    // SPEC-11.33.3
     /// Pre-fill Name / Email from the signed-in user so they do not retype
     /// (BUNYIP-540). Name is "first last" with either half optional; the fields
     /// stay editable. Anonymous visitors get an empty draft.
@@ -571,6 +592,7 @@ impl FeedbackDraft {
         }
     }
 
+    // SPEC-11.33.12
     /// Carry a failed submission's fields back into the error redraw.
     fn from_input(input: &FeedbackInput) -> Self {
         Self {
@@ -602,6 +624,7 @@ fn feedback_hero() -> Markup {
     }
 }
 
+// SPEC-11.33.14
 /// The thank-you state shown after a successful submit (BUNYIP-540). Replaces
 /// the form outright rather than re-rendering an empty form under a banner, so
 /// there is no doubt the feedback went through, and offers a way to send more.
@@ -640,6 +663,7 @@ fn feedback_field_class(extra: &str) -> String {
     field_invalid_class(dashboard_input(), extra)
 }
 
+// SPEC-11.33.4, SPEC-11.33.5, SPEC-11.27.6: inline errors keyed by input id
 /// BUNYIP-541: validation errors render inline under the field they belong to
 /// (`views::form_errors::field_error_slot`, keyed by input id, extracted as a
 /// named helper by BUNYIP-813), not as a top-of-form banner. `form_error`
@@ -772,6 +796,7 @@ fn feedback_form(
     }
 }
 
+// SPEC-11.33.2, SPEC-11.33.3
 pub async fn feedback_get(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -792,6 +817,7 @@ pub async fn feedback_get(
     )
 }
 
+// SPEC-11.33.7, SPEC-11.33.8, SPEC-11.33.9, SPEC-11.33.10: check order: size, count, type
 /// Consume the multipart body into a [`FeedbackInput`].
 ///
 /// On a per-form ceiling violation (too many files, oversize file,
@@ -822,6 +848,7 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
         let field = match multipart.next_field().await {
             Ok(Some(f)) => f,
             Ok(None) => break,
+            // SPEC-11.33.10
             Err(e) => return Err(format!("Could not read form: {e}")),
         };
         let field_name = field.name().map(str::to_string).unwrap_or_default();
@@ -829,6 +856,7 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
         let content_type = field.content_type().map(str::to_string);
         let bytes = match field.bytes().await {
             Ok(b) => b,
+            // SPEC-11.33.10
             Err(e) => return Err(format!("Could not read field: {e}")),
         };
         if let Some(filename) = file_name {
@@ -853,6 +881,7 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
             if !FEEDBACK_ALLOWED_MIMES.contains(&mime.as_str()) {
                 return Err("Only PNG, JPEG, WebP, GIF, and plain text files are allowed.".into());
             }
+            // SPEC-11.33.9
             // Strip path separators - safe filename only. Matches the
             // API's sanitization at `bunyip-api/src/handlers/feedback.rs:177-181`.
             let safe = std::path::Path::new(&filename)
@@ -891,6 +920,7 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
     Ok(input)
 }
 
+// SPEC-11.33.11, SPEC-11.33.12, SPEC-11.33.13, SPEC-11.33.14, SPEC-11.33.15
 pub async fn feedback_post(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -904,6 +934,7 @@ pub async fn feedback_post(
     // not wipe the message; a success renders the dedicated thank-you state
     // instead of an empty form under a banner.
     let content = match parsed {
+        // SPEC-11.33.13
         // A multipart read / attachment-ceiling failure belongs to no single
         // field, so it stays a top-of-form banner (BUNYIP-541).
         Err(msg) => feedback_form(None, Some(&msg), None, &FeedbackDraft::default()),
@@ -924,6 +955,7 @@ pub async fn feedback_post(
             // email round-tripped without complaint.
             use crate::handlers::validate;
             const MESSAGE_MAX: usize = 16_000;
+            // SPEC-11.33.11, SPEC-11.33.12: first failing field only
             // BUNYIP-541: the backstop error is bound to the field id it belongs
             // to (matching the client keys), so the redraw shows it inline under
             // that field, not as a top banner. This is the authoritative check;
@@ -999,6 +1031,7 @@ pub async fn feedback_post(
 // dedicated docs app matures (then repoint /docs there, or 301); this whole
 // module retires with that cutover.
 
+// SPEC-11.34.1: user-facing guides only
 /// (slug, title, markdown) for each doc surfaced under /docs.
 const DOCS: &[(&str, &str, &str)] = &[
     (
@@ -1018,6 +1051,7 @@ const DOCS: &[(&str, &str, &str)] = &[
     ),
 ];
 
+// SPEC-11.34.10
 /// Minimal styling for the rendered markdown (bunyip-web has no Tailwind
 /// typography plugin), scoped to `.docs-article`.
 const DOCS_CSS: &str = "\
@@ -1036,6 +1070,7 @@ const DOCS_CSS: &str = "\
 .docs-article blockquote{border-left:3px solid hsl(var(--border));padding-left:1em;color:hsl(var(--muted-foreground));margin:1em 0;}\
 ";
 
+// SPEC-11.34.2: raw HTML events dropped; output is spliced unescaped
 fn render_markdown(md: &str) -> String {
     use pulldown_cmark::{html, Event, Options, Parser};
     let mut opts = Options::empty();
@@ -1056,6 +1091,7 @@ fn render_markdown(md: &str) -> String {
     out
 }
 
+// SPEC-11.34.11
 /// Toggle for the personalized docs view. `?raw=1` forces the generic
 /// (placeholder) rendering even when signed in.
 #[derive(Debug, Default, Deserialize)]
@@ -1064,10 +1100,12 @@ pub struct DocQuery {
     raw: bool,
 }
 
+// SPEC-11.34.11
 /// The escaped placeholder token, as it appears in `render_markdown` output
 /// once pulldown-cmark has HTML-escaped the fenced `<username>` literal.
 const USERNAME_TOKEN: &str = "&lt;username&gt;";
 
+// SPEC-11.34.11: username is escaped through maud before substitution
 /// Replace the escaped `<username>` placeholder in already-rendered docs HTML
 /// with the signed-in reader's own username (their account email, which is the
 /// `docker login --username` value), highlighted. The email is HTML-escaped via
@@ -1086,6 +1124,7 @@ fn personalize_docs(html: &str, username: &str) -> String {
 // deliberately absent rather than shipped as dead entries. Writing them (or
 // deciding against them) is BUNYIP-639.
 
+// SPEC-11.34.8
 /// One entry of the section menu: link target, label, and whether it is the
 /// page being read.
 fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
@@ -1097,6 +1136,7 @@ fn docs_menu_link(href: &str, label: &str, active: &str) -> Markup {
     html! { a class=(classes) href=(href) aria-current=[(href == active).then_some("page")] { (label) } }
 }
 
+// SPEC-11.34.7, SPEC-11.34.8: unreadable list is a named failure, not an empty menu
 /// The left-hand section menu shared by every `/docs` surface.
 ///
 /// Rendered above the article below `md` and beside it from `md` up, so it is
@@ -1130,6 +1170,7 @@ fn docs_menu(documented: Option<&[DocumentedApp]>, active: &str) -> Markup {
     }
 }
 
+// SPEC-11.34.5
 /// An application's menu label: its display name, falling back to the slug when
 /// the API answered without one (`display_name` defaults per BUNYIP-506).
 fn app_docs_label(app: &DocumentedApp) -> String {
@@ -1140,6 +1181,7 @@ fn app_docs_label(app: &DocumentedApp) -> String {
     }
 }
 
+// SPEC-11.35.1
 /// The name to show for an application's docs pages. The documented-app list is
 /// consulted FIRST: the public catalog (`apps`) only carries hosted
 /// applications, so an app whose docs are published but which is not hosted has
@@ -1162,6 +1204,7 @@ fn app_display_name(
         .unwrap_or_else(|| slug.to_string())
 }
 
+// SPEC-11.34.6
 /// Wrap a docs page body in the shared two-column shell.
 fn docs_layout(documented: Option<&[DocumentedApp]>, active: &str, body: Markup) -> Markup {
     html! {
@@ -1174,6 +1217,7 @@ fn docs_layout(documented: Option<&[DocumentedApp]>, active: &str, body: Markup)
     }
 }
 
+// SPEC-11.34.5: unreadable, empty and populated are three distinct states
 /// The `/docs` hub body: the embedded pages, then the applications that publish
 /// their own documentation (BUNYIP-635).
 ///
@@ -1216,6 +1260,7 @@ fn docs_index_body(documented: Result<&[DocumentedApp], &ApiError>) -> Markup {
     }
 }
 
+// SPEC-11.34.4
 /// `GET /docs` - index of the embedded docs. Public (BUNYIP-385), extended with
 /// the application documentation section in BUNYIP-635.
 pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Response {
@@ -1228,6 +1273,7 @@ pub async fn docs_index(State(st): State<AppState>, headers: HeaderMap) -> Respo
     public_response(&st, &c, &pricing, app_links_allowed, "Docs", true, content)
 }
 
+// SPEC-11.34.9, SPEC-11.34.10, SPEC-11.34.11, SPEC-11.34.12
 /// `GET /docs/{slug}` - render one embedded doc. Public (BUNYIP-385).
 pub async fn docs_page(
     State(st): State<AppState>,
@@ -1292,6 +1338,7 @@ pub async fn docs_page(
     )
 }
 
+// SPEC-11.35.2, SPEC-11.35.3, SPEC-11.35.4
 /// `GET /apps/{slug}/docs` - an application's public documentation index
 /// (BUNYIP-388). Pages come from the API; an app with none shows an empty state.
 pub async fn app_docs_index(
@@ -1313,6 +1360,7 @@ pub async fn app_docs_index(
     );
     let documented = documented.ok();
     let app_name = app_display_name(&slug, &apps, documented.as_deref().map(|v| &**v));
+    // SPEC-11.35.4
     // BUNYIP-515 logged the failure because the reader could not see it.
     // BUNYIP-546: the reader now sees it too, so an unreadable docs list no
     // longer reads as an app that has published nothing. Still not a 500: the
@@ -1361,6 +1409,7 @@ pub async fn app_docs_index(
     )
 }
 
+// SPEC-11.35.2, SPEC-11.35.5, SPEC-11.35.6
 /// `GET /apps/{slug}/docs/{doc_slug}` - render one app doc page. Public (BUNYIP-388).
 pub async fn app_docs_page(
     State(st): State<AppState>,
@@ -1380,6 +1429,7 @@ pub async fn app_docs_page(
     let doc = match calls::app_doc(&st.api, &slug, &doc_slug).await {
         Ok(d) => d,
         Err(e) => {
+            // SPEC-11.35.6
             // BUNYIP-515: a missing page and an unreachable API both render the
             // same 404 to the reader, so the cause is named in the log.
             tracing::warn!(

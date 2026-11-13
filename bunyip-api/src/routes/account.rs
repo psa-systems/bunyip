@@ -9,6 +9,7 @@ use crate::handlers;
 /// matches the feedback attachment ceiling.
 const RESTORE_BODY_LIMIT: usize = 8 * 1024 * 1024;
 
+// SPEC-9.23.9: 8 MiB JSON limit applies to this scope only
 /// Configure account routes.
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(

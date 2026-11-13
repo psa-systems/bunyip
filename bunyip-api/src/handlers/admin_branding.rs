@@ -22,6 +22,7 @@ use crate::models::{
 use crate::repositories::{AuditLogRepository, BrandingRepository};
 use crate::responses::{get_request_id, success};
 
+// SPEC-10.15.1: admin read of the resolved branding.
 /// `GET /v1/admin/branding`
 pub async fn get_branding(
     req: HttpRequest,
@@ -41,6 +42,7 @@ pub async fn get_branding(
     ))
 }
 
+// SPEC-10.15.2, SPEC-10.15.3, SPEC-10.15.4: validate whole, write, hot-reload cache, audit.
 /// `PUT /v1/admin/branding`
 ///
 /// Validation failures are `AppError::validation`, i.e. a 400 carrying the
@@ -112,6 +114,7 @@ pub async fn update_branding(
     ))
 }
 
+// SPEC-10.15.5: slot parsed to a fixed enum before storage is touched.
 /// BUNYIP-560: the slot named in the path, or a 400 that names the legal set.
 /// Parsed before anything is read, so an unknown slot never reaches storage.
 fn parse_slot(raw: &str) -> Result<BrandingAssetSlot, AppError> {
@@ -123,6 +126,7 @@ fn parse_slot(raw: &str) -> Result<BrandingAssetSlot, AppError> {
     })
 }
 
+// SPEC-10.15.7: validation rejections are logged and returned as 400 on `asset`.
 /// Convert a shared-crate validation failure into bunyip's error type, keeping
 /// the crate's wording (it describes the rule, never the bytes) and scoping it
 /// to the `asset` field so the admin form attaches it to the right input.
@@ -131,6 +135,7 @@ fn asset_err(e: ImageValidationError) -> AppError {
     AppError::validation("asset", e.to_string())
 }
 
+// SPEC-10.15.6: stream the first file part under the byte cap.
 /// Read the single uploaded file part, enforcing the byte cap while streaming.
 async fn read_upload(payload: &mut Multipart, policy: &ImagePolicy) -> Result<Vec<u8>, AppError> {
     while let Some(mut field) = payload
@@ -171,6 +176,7 @@ async fn read_upload(payload: &mut Multipart, policy: &ImagePolicy) -> Result<Ve
     Err(asset_err(ImageValidationError::Empty))
 }
 
+// SPEC-10.15.6, SPEC-10.15.7, SPEC-10.15.8, SPEC-10.15.9: validate, derive off-thread, replace slot, audit.
 /// `POST /v1/admin/branding/assets/{slot}` (multipart, one file part).
 ///
 /// Nothing is written until the bytes validate AND the slot's derived set
@@ -246,6 +252,7 @@ pub async fn upload_branding_asset(
     ))
 }
 
+// SPEC-10.15.5, SPEC-10.15.10: idempotent slot clear, audited.
 /// `DELETE /v1/admin/branding/assets/{slot}`. Idempotent: clearing a slot that
 /// is already empty is a success, because the state the admin asked for is the
 /// state they get.

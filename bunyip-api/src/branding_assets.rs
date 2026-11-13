@@ -25,6 +25,7 @@ use image::{ExtendedColorType, ImageEncoder};
 /// One row to store: the key, its MIME type, and the bytes.
 pub type DerivedAsset = (&'static str, String, Vec<u8>);
 
+// SPEC-9.18.12
 /// Encode an RGBA buffer as PNG, at the strongest compression the encoder
 /// offers: derived images are produced once at upload time and read many
 /// times, so the extra encode cost is worth it for the smaller file every
@@ -61,6 +62,7 @@ fn encode_ico(rgba: &image::RgbaImage) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+// SPEC-9.18.11, SPEC-9.18.12, SPEC-9.18.13
 /// Derive the whole favicon set from `source`, plus the source itself.
 ///
 /// Returns the complete new content of the favicon slot, so the caller writes it
@@ -97,6 +99,7 @@ pub fn derive_favicons(source: Vec<u8>) -> Result<Vec<DerivedAsset>, String> {
     Ok(assets)
 }
 
+// SPEC-9.18.12, SPEC-9.18.14
 /// BUNYIP-744: derive the one nav-mark variant `views::layout::brand_mark`
 /// renders (28 CSS pixels, 2x headroom) from the uploaded source, keeping the
 /// source row exactly as the favicon slot does.
@@ -122,6 +125,7 @@ pub fn derive_mark(source: Vec<u8>) -> Result<Vec<DerivedAsset>, String> {
     ])
 }
 
+// SPEC-9.18.12, SPEC-9.18.14
 /// BUNYIP-744: derive the two sizes the landing page hero's `srcset` uses
 /// (448 and 896 on the long edge) from the uploaded source, keeping the source
 /// row exactly as the favicon slot does.

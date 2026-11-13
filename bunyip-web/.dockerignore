@@ -1,3 +1,4 @@
+# SPEC-14.38.5: only used when the build context is this directory
 target
 dist
 node_modules

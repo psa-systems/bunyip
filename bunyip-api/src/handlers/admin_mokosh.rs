@@ -30,6 +30,7 @@ use crate::repositories::{AuditLogRepository, MokoshConfigRepository};
 use crate::responses::{get_request_id, success};
 use crate::services::EncryptionKeySet;
 
+// SPEC-10.18.12: exact warning text returned in the 409.
 /// What an admin is warned about before a changed client id is accepted. The
 /// text is the consequence, not the mechanism: the reader decides whether to
 /// break every tenant's sync right now or at a quieter hour.
@@ -38,6 +39,7 @@ pub const CLIENT_ID_CHANGE_WARNING: &str =
      reconnects their Google account: their existing permission was granted to the old client. \
      Send the same change again with confirm_client_id_change to go ahead.";
 
+// SPEC-10.18.10: a blank stored secret reads as absent.
 /// The secret as the declared provider holds it, blank read as absent.
 async fn stored_secret(
     pool: &PgPool,
@@ -54,6 +56,7 @@ async fn stored_secret(
     .filter(|s| !s.trim().is_empty()))
 }
 
+// SPEC-10.18.15: the audit row carries a hash, never the secret.
 /// The SHA-256 of a secret, hex. What the audit row carries so two saves can be
 /// told apart and a re-save of the same value is visible as one, without the
 /// value itself reaching the trail.
@@ -63,6 +66,7 @@ fn content_hash(value: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+// SPEC-10.18.10: the secret itself is never returned.
 /// `GET /v1/admin/mokosh`
 pub async fn get_mokosh_config(
     req: HttpRequest,
@@ -80,6 +84,7 @@ pub async fn get_mokosh_config(
     ))
 }
 
+// SPEC-10.18.11, SPEC-10.18.12, SPEC-10.18.13, SPEC-10.18.14, SPEC-10.18.15: validate, confirm id change, audit.
 /// `PUT /v1/admin/mokosh`
 ///
 /// The client id is replaced whole; `google_client_secret` empty or absent

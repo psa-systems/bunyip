@@ -27,6 +27,7 @@ use tower_http::compression::{CompressionLayer, Predicate};
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 
+// SPEC-11.1.13: immutable year-long cache for /assets; every reference carries a build-derived ?v=.
 /// BUNYIP-554 F9: `/assets/*` is immutable for a year. Every reference in the
 /// markup carries a build-derived `?v=` (`views::layout::asset`), so a deploy
 /// gets fresh URLs and a repeat navigation issues zero asset requests. Without
@@ -36,6 +37,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// revalidated on the next navigation.
 const ASSET_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 
+// SPEC-11.1.18: skip gzip for already-compressed payloads so Content-Length survives downloads.
 /// BUNYIP-554 F4: `DefaultPredicate` compresses everything except gRPC,
 /// `image/*`, `text/event-stream` and bodies under 32 bytes, so the BFF ran
 /// gzip over every byte of an already-compressed multi-megabyte installer
@@ -56,6 +58,7 @@ fn compression_predicate() -> impl Predicate {
         .and(NotForContentType::const_new("font/"))
 }
 
+// SPEC-11.1.1, SPEC-11.1.2: startup order; the listener binds only after both startup fetches return.
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -82,6 +85,7 @@ async fn main() {
     // `BUNYIP_API_PUBLIC_ORIGIN` in production.
     // BUNYIP-589: web-kit's asset() helper reads the consumer's build version
     // through an installed cell (web-kit has no build script of its own).
+    // SPEC-11.1.3: SSE origin is the browser-facing api_public_origin, never the internal api_url.
     views::layout::install_asset_version(env!("ASSET_VERSION"));
     views::layout::install_sse_api_origin(cfg.api_public_origin.clone());
     // BUNYIP-329: gate the Community nav entry on whether a Let's Chat instance
@@ -116,6 +120,7 @@ async fn main() {
     // `Api::send`. Uses the internal `api_url` (the BFF's server-to-server
     // origin), not the public SSE origin.
     server_status::spawn_recovery_poll(cfg.api_url.clone());
+    // SPEC-11.1.4, SPEC-11.2.1: one TTL cache per near-static chrome payload.
     let state = web::AppState {
         api,
         cfg: Arc::clone(&cfg),
@@ -156,6 +161,7 @@ async fn main() {
     let app = Router::new()
         // Liveness for the e2e reachability gate + monitoring (BUNYIP-149).
         // Unauthenticated, no DB.
+        // SPEC-11.1.5: public marketing, docs and liveness routes.
         .route("/healthz", get(health::healthz))
         // Public / marketing
         .route("/", get(public::landing))
@@ -171,6 +177,7 @@ async fn main() {
         // BUNYIP-388: public per-application documentation.
         .route("/apps/:slug/docs", get(content::app_docs_index))
         .route("/apps/:slug/docs/:doc_slug", get(content::app_docs_page))
+        // SPEC-11.1.6: only this route raises the default body limit, to fit attachments.
         .route(
             "/feedback",
             get(content::feedback_get)
@@ -184,6 +191,7 @@ async fn main() {
                 ),
         )
         // Auth
+        // SPEC-11.1.7: authentication routes; logout is POST only.
         .route("/login", get(ap::login_get).post(ap::login_post))
         .route(
             "/login/2fa",
@@ -219,6 +227,7 @@ async fn main() {
             get(onboarding::onboarding_get).post(onboarding::onboarding_post),
         )
         // Dashboard
+        // SPEC-11.1.8: signed-in application, billing and membership routes.
         .route("/dashboard", get(dash::dashboard))
         .route("/applications", get(dash::applications))
         .route("/downloads", get(dash::downloads))
@@ -231,6 +240,7 @@ async fn main() {
         // BUNYIP-493: registered unconditionally and gated inside the handler,
         // so flipping the switch needs no router rebuild. While the flag is off
         // it answers the branded 404, the same page an unrouted path gets.
+        // SPEC-11.1.11: registered unconditionally; the feature flag is checked in the handler.
         .route(
             "/organizations",
             get(handlers::organizations::organizations),
@@ -255,6 +265,7 @@ async fn main() {
             "/membership/billing-portal",
             axum::routing::post(dash::membership_billing_portal),
         )
+        // SPEC-11.1.9: account settings routes.
         .route("/settings", get(dash::settings))
         // BUNYIP-139
         .route(
@@ -262,6 +273,7 @@ async fn main() {
             axum::routing::post(dash::settings_profile),
         )
         // BUNYIP-408: avatar upload / remove + same-origin avatar proxy.
+        // SPEC-11.1.10: avatar upload needs a 3 MiB body limit; /brand, /favicon.ico and consent also live here.
         .route(
             "/settings/avatar",
             axum::routing::post(dash::settings_avatar).layer(
@@ -342,8 +354,10 @@ async fn main() {
             axum::routing::post(dash::twofa_rekey_confirm_post),
         )
         // Admin (DEV-517: the table lives in `routes::admin`).
+        // SPEC-11.1.12: admin table lives in routes::admin.
         .merge(routes::admin::routes())
         // Static + fallback
+        // SPEC-11.1.13: static assets from ./assets with an immutable Cache-Control default.
         .nest_service(
             "/assets",
             ServiceBuilder::new()
@@ -359,10 +373,11 @@ async fn main() {
         // a8n.systems logs a 404 on every page load. BUNYIP-560: it follows the
         // branding record, falling back to the committed file.
         .route("/favicon.ico", get(branding::favicon_ico))
-        // SPEC-2.3.4: an unmatched route falls through to the branded 404.
+        // SPEC-2.3.4, SPEC-11.1.14: an unmatched route falls through to the branded 404.
         .fallback(public::not_found)
         // BUNYIP-686: hosts the edge proxy's catch-all forwards get the
         // unknown-host 404, not the site. Inside the CSRF and CSP layers.
+        // SPEC-11.1.15: innermost layer; layers added later wrap earlier ones.
         .layer(axum::middleware::from_fn_with_state(
             cfg.clone(),
             public::unknown_host_gate,
@@ -374,6 +389,7 @@ async fn main() {
         // the caller only via the session cookie), so it wires an empty
         // exemption list. The full synchronizer-token middleware on top
         // of this is a follow-up.
+        // SPEC-11.1.16: empty exemption list, so no path skips the Origin check.
         .layer(axum::middleware::from_fn_with_state(
             &[] as &'static [&'static str],
             csrf::enforce_origin_with,
@@ -383,6 +399,7 @@ async fn main() {
         // every outbound /v1 call forwards it to bunyip-api as X-Forwarded-For.
         // Needs the socket peer, so `serve` below uses
         // `into_make_service_with_connect_info` to surface `ConnectInfo`.
+        // SPEC-11.1.17, SPEC-2.3.3: needs ConnectInfo from the serve call below.
         .layer(axum::middleware::from_fn_with_state(
             // BUNYIP-589: the moved middleware takes just the trusted-proxy CIDRs.
             Arc::new(cfg.trusted_proxies.clone()),
@@ -390,11 +407,14 @@ async fn main() {
         ))
         // BUNYIP-232: stamp a Content-Security-Policy onto every response (the
         // remaining security header the edge proxy does not set for bunyip-web).
+        // SPEC-11.1.15: CSP sits just inside compression.
         .layer(security::csp_layer(&cfg))
+        // SPEC-11.1.15: outermost layer.
         .layer(CompressionLayer::new().compress_when(compression_predicate()))
         .with_state(state);
 
-    // SPEC-2.3.2: bunyip-web runs exactly one listener, bound here.
+    // SPEC-2.3.2, SPEC-11.1.19: bunyip-web runs exactly one listener, bound here.
+    // SPEC-2.4.2: web listener bind
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .expect("bind");
@@ -403,6 +423,7 @@ async fn main() {
     // BUNYIP-561: the brand line comes from the record fetched above, and is
     // dropped when there is nothing to say. The binary name is an identifier,
     // not copy, so it stays.
+    // SPEC-11.1.20: banner brand suffix comes only from the fetched record.
     let brand = branding::current();
     let brand_line = match (brand.brand_name.as_str(), brand.tagline.as_str()) {
         ("", "") => String::new(),
@@ -447,6 +468,7 @@ mod compression_tests {
         compression_predicate().should_compress(&response)
     }
 
+    // SPEC-11.1.18
     /// BUNYIP-554 F4: gzip over an already-compressed release asset buys a
     /// ratio near 1.0 and costs the forwarded `Content-Length` (and with it the
     /// browser's download progress bar), so every binary content type the

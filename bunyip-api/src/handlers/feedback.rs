@@ -36,6 +36,7 @@ use crate::services::EmailService;
 /// `.systems`, `.com`, `.io`, `.app`, `.co`, `.net`, `.org`, `.dev` and
 /// `.run`, all single-segment TLDs for which this heuristic matches an
 /// eTLD+1 extraction exactly.
+// SPEC-10.33.13: single-segment TLD heuristic
 pub(super) fn deployment_registrable_word(base_url: &str) -> Option<String> {
     let host = deployment_host(base_url)?;
     let parts: Vec<&str> = host.split('.').collect();
@@ -50,6 +51,7 @@ pub(super) fn deployment_registrable_word(base_url: &str) -> Option<String> {
 /// mimicry signal to distinguish a legitimate subdomain of the recipient
 /// from a mimicking sender. For a single-segment host (localhost, raw
 /// IP) returns `None`.
+// SPEC-10.33.13: apex used by the mimicry signal
 pub(super) fn deployment_apex_host(base_url: &str) -> Option<String> {
     let host = deployment_host(base_url)?;
     let parts: Vec<&str> = host.split('.').collect();
@@ -170,6 +172,7 @@ const MAX_IMAGE_DIMENSION: usize = 10000;
 /// NULL bytes and other control characters can break logging, CSV
 /// export, and downstream callers' shell-command boundaries; we reject
 /// at the front door instead of patching every consumer.
+// SPEC-10.33.5: control characters break logs and CSV
 fn validate_filename(fname: &str) -> Result<String, AppError> {
     let safe = std::path::Path::new(fname)
         .file_name()
@@ -202,6 +205,7 @@ fn validate_filename(fname: &str) -> Result<String, AppError> {
 /// blob declared as text/plain by the browser; everything else is
 /// rejected so an attacker cannot smuggle a binary in by claiming
 /// text/plain.
+// SPEC-10.33.6, SPEC-10.33.7: sniffed type is authoritative
 fn derive_canonical_mime(bytes: &[u8], declared_mime: &str) -> Result<String, AppError> {
     if let Some(kind) = infer::get(bytes) {
         let sniffed = kind.mime_type();
@@ -244,6 +248,7 @@ fn derive_canonical_mime(bytes: &[u8], declared_mime: &str) -> Result<String, Ap
 /// (BUNYIP-90). `imagesize::blob_size` parses dimensions without
 /// decoding any pixels, so a billion-pixel "PNG" fails here before any
 /// rendering ever happens. No-op for non-image MIMEs.
+// SPEC-10.33.8: header-only parse blocks decompression bombs
 fn enforce_image_dimensions(mime: &str, bytes: &[u8]) -> Result<(), AppError> {
     if !mime.starts_with("image/") {
         return Ok(());
@@ -288,6 +293,7 @@ fn validate_length(field: &str, value: &str, max: usize) -> Result<(), AppError>
     Ok(())
 }
 
+// SPEC-10.33.9: closed tag vocabulary
 fn normalize_tags(tags: &[String]) -> Result<Vec<String>, AppError> {
     let mut normalized = Vec::new();
     let mut seen = HashSet::new();
@@ -324,6 +330,7 @@ fn normalize_tags(tags: &[String]) -> Result<Vec<String>, AppError> {
 /// running length; `request_bytes_so_far` is the cumulative length of every
 /// PRIOR field in this request. Kept pure so the two caps (per-field,
 /// whole-request) are unit-testable without a real multipart stream.
+// SPEC-10.33.2: per-field and whole-request caps
 fn check_multipart_size(
     field_label: &str,
     field_bytes_so_far: usize,
@@ -346,6 +353,7 @@ fn check_multipart_size(
 
 /// BUNYIP-699: rejects a `tags[]`/`tags` field once the request has already
 /// carried `MAX_TAG_FIELDS` occurrences, before the new one is read at all.
+// SPEC-10.33.3: bounds the tag list before dedup
 fn check_tag_field_cap(tags_seen_so_far: usize) -> Result<(), AppError> {
     if tags_seen_so_far >= MAX_TAG_FIELDS {
         return Err(AppError::validation(
@@ -368,6 +376,7 @@ async fn check_feedback_rate_limit(pool: &PgPool, key: &str) -> Result<(), AppEr
 /// keeps the "admin was pinged" set aligned with the "row is in Active" set
 /// and is factored out so the invariant is unit-testable without a database
 /// or email service.
+// SPEC-10.33.17: notify only for rows visible in Active
 fn should_notify_admins_of_feedback(is_spam: bool) -> bool {
     !is_spam
 }
@@ -377,6 +386,7 @@ fn should_notify_admins_of_feedback(is_spam: bool) -> bool {
 /// burst of junk from one address cannot exhaust the ceiling and lock a
 /// genuine reporter out of the same window. Factored out so the invariant
 /// is unit-testable without the rate-limit table.
+// SPEC-10.33.14: spam must not lock out real reporters
 fn should_charge_rate_limit_for_feedback(is_spam: bool) -> bool {
     !is_spam
 }
@@ -385,6 +395,7 @@ fn should_charge_rate_limit_for_feedback(is_spam: bool) -> bool {
 /// audited. The BFF already caps the header at 512 chars; we store at most 256
 /// (matching the session-row UA cap) and treat blank / whitespace as absent, so
 /// a missing header does not persist an empty string.
+// SPEC-10.33.15: 256-char cap, blank is absent
 fn bounded_user_agent(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|s| !s.is_empty())
@@ -395,6 +406,7 @@ fn bounded_user_agent(raw: Option<&str>) -> Option<String> {
 /// as a pure builder so the recorded shape (crucially, that it carries the
 /// source IP and User-Agent) is unit-testable without a database or the HTTP
 /// layer. Mirrors the request metadata also persisted on the feedback row.
+// SPEC-10.33.16: audit shape carries IP and user agent
 fn feedback_audit_metadata(
     status: &str,
     has_email: bool,
@@ -411,6 +423,8 @@ fn feedback_audit_metadata(
     })
 }
 
+// SPEC-10.33.1, SPEC-10.33.4, SPEC-10.33.10, SPEC-10.33.11, SPEC-10.33.12, SPEC-10.33.14, SPEC-10.33.15,
+// SPEC-10.33.16, SPEC-10.33.17, SPEC-10.33.18:
 pub async fn submit_feedback(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -738,6 +752,7 @@ pub struct ListFeedbackQuery {
     pub q: Option<String>,
 }
 
+// SPEC-10.34.1, SPEC-10.34.2: unknown filter values are refused, not dropped
 pub async fn list_feedback(
     req: HttpRequest,
     _admin: AdminUser,
@@ -817,6 +832,7 @@ pub async fn list_feedback(
 /// read one number. `AdminUser` like the sibling feedback routes; a database
 /// error propagates as a non-2xx through `?`, so the web tier can render the
 /// explicit "unavailable" marker rather than a silent zero.
+// SPEC-10.34.3: failure must not read as zero
 pub async fn feedback_new_count(
     req: HttpRequest,
     _admin: AdminUser,
@@ -827,6 +843,7 @@ pub async fn feedback_new_count(
     Ok(success(serde_json::json!({ "count": count }), request_id))
 }
 
+// SPEC-10.34.4: shows why a row was flagged
 pub async fn get_feedback(
     req: HttpRequest,
     _admin: AdminUser,
@@ -860,6 +877,7 @@ pub async fn get_feedback(
     Ok(success(payload, request_id))
 }
 
+// SPEC-10.34.5, SPEC-10.34.6: send awaited so errors share the request id
 pub async fn respond_to_feedback(
     req: HttpRequest,
     admin: VerifiedAdminUser,
@@ -940,6 +958,7 @@ pub async fn respond_to_feedback(
     Ok(success(updated.to_admin_detail(attachments), request_id))
 }
 
+// SPEC-10.34.7: status change
 pub async fn update_feedback_status(
     req: HttpRequest,
     admin: AdminUser,
@@ -975,6 +994,7 @@ pub async fn update_feedback_status(
     Ok(success(updated.to_admin_detail(attachments), request_id))
 }
 
+// SPEC-10.34.8: not-found raised here
 pub async fn delete_feedback(
     req: HttpRequest,
     admin: AdminUser,
@@ -1008,6 +1028,7 @@ pub async fn delete_feedback(
 /// reversible via `unmark_feedback_spam`. The auto-spam path on intake
 /// (the honeypot field on submission) is independent of this manual
 /// flag and uses the same column.
+// SPEC-10.34.9: reversible manual flag
 pub async fn mark_feedback_spam(
     req: HttpRequest,
     admin: AdminUser,
@@ -1038,6 +1059,7 @@ pub async fn mark_feedback_spam(
 /// 90-day `archive_and_purge_closed` job produces, but on demand.
 /// Restore happens through the existing
 /// `POST /admin/feedback/archive/{archive_id}/restore` route.
+// SPEC-10.34.10: on-demand archive
 pub async fn archive_feedback(
     req: HttpRequest,
     admin: AdminUser,
@@ -1067,6 +1089,7 @@ pub async fn archive_feedback(
 ///
 /// Reverse `mark_feedback_spam`. False-positive recovery for the case
 /// where the admin flagged a real row by mistake.
+// SPEC-10.34.9: false-positive recovery
 pub async fn unmark_feedback_spam(
     req: HttpRequest,
     admin: AdminUser,
@@ -1090,6 +1113,7 @@ pub async fn unmark_feedback_spam(
     Ok(success(updated.to_admin_detail(attachments), request_id))
 }
 
+// SPEC-10.34.13: RFC 4180 quoting
 fn csv_field(value: &str) -> String {
     if value.contains(',') || value.contains('"') || value.contains('\n') {
         format!("\"{}\"", value.replace('"', "\"\""))
@@ -1102,6 +1126,7 @@ fn csv_opt(value: &Option<String>) -> String {
     value.as_deref().map(csv_field).unwrap_or_default()
 }
 
+// SPEC-10.34.12, SPEC-10.34.13: CSV export
 pub async fn export_feedback(
     req: HttpRequest,
     _admin: AdminUser,
@@ -1151,6 +1176,7 @@ pub struct ListArchiveQuery {
     pub per_page: Option<i32>,
 }
 
+// SPEC-10.34.11: archive listing
 pub async fn list_feedback_archive(
     req: HttpRequest,
     _admin: AdminUser,
@@ -1166,6 +1192,7 @@ pub async fn list_feedback_archive(
     Ok(paginated(items, total, page, per_page, request_id))
 }
 
+// SPEC-10.34.11: restore from archive
 pub async fn restore_feedback(
     req: HttpRequest,
     admin: AdminUser,
@@ -1189,6 +1216,7 @@ pub async fn restore_feedback(
     Ok(success(feedback.to_admin_detail(attachments), request_id))
 }
 
+// SPEC-10.33.19, SPEC-10.33.20: attachment must belong to the named feedback row
 pub async fn get_attachment(
     _admin: AdminUser,
     pool: web::Data<PgPool>,

@@ -35,6 +35,7 @@ use crate::repositories::{
 };
 use crate::services::StripeService;
 
+// SPEC-9.18.8
 /// A price paired with whether anything references it. The reconciler decides
 /// purely on this flag, never on the amount.
 pub(crate) struct PriceRef<'a> {
@@ -57,6 +58,7 @@ pub(crate) enum GroupOutcome<'a> {
     SkipAllReferenced(Vec<&'a StripePriceResponse>),
 }
 
+// SPEC-9.18.8: no referenced keeper means a human decides
 /// Decide one group of active prices that share a key. Returns `None` when the
 /// group is not a duplicate (fewer than two active prices).
 pub(crate) fn plan_group<'a>(members: &[&PriceRef<'a>]) -> Option<GroupOutcome<'a>> {
@@ -80,6 +82,7 @@ pub(crate) fn plan_group<'a>(members: &[&PriceRef<'a>]) -> Option<GroupOutcome<'
     })
 }
 
+// SPEC-9.18.8
 /// Group the active prices by [`ActivePriceKey`] and decide each duplicate
 /// group. Only groups of two or more active prices appear in the result, sorted
 /// by product id then currency then interval for deterministic output.
@@ -108,6 +111,7 @@ pub(crate) fn plan_reconcile<'a>(
     out
 }
 
+// SPEC-9.18.7
 /// Whether anything references this price: a `tier_config` price column, a
 /// `stripe_price_entitlements` row, or a member (on its tier or locked to it).
 async fn is_referenced(
@@ -135,6 +139,7 @@ fn describe(price: &StripePriceResponse) -> String {
     )
 }
 
+// SPEC-9.18.6, SPEC-9.18.9, SPEC-9.18.10
 /// Run the reconcile. Read-only unless `apply` is set. Returns the report to
 /// print. Never returns an error for an unconfigured Stripe account: it reports
 /// there is nothing to do and exits cleanly.

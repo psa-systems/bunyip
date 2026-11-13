@@ -28,6 +28,7 @@ use bunyip_oidc::services::oidc_provider::generate_opaque_token;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+// SPEC-9.12.1
 /// Printed with every parse failure, so a wrong verb or a missing flag names the
 /// whole family rather than just the rule it broke.
 pub const USAGE: &str = "\
@@ -40,6 +41,7 @@ usage: bunyip-api machine-client <verb>
   list                                         list every registration holding a machine credential
 ";
 
+// SPEC-9.12.2
 /// A parsed `machine-client` invocation.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
@@ -63,6 +65,7 @@ pub enum Command {
     List,
 }
 
+// SPEC-9.12.6, SPEC-9.12.9: Debug must redact
 /// A generated client secret.
 ///
 /// The `Debug` impl redacts, so the value cannot reach a diagnostic through the
@@ -111,6 +114,7 @@ pub struct Registration {
     pub audience: String,
 }
 
+// SPEC-9.12.4, SPEC-9.12.5
 impl Registration {
     pub fn new(
         name: &str,
@@ -152,6 +156,7 @@ fn deduplicate(keys: &[String]) -> Vec<String> {
     out
 }
 
+// SPEC-9.12.3
 /// Refuse a `--secret-key` this build cannot serve.
 ///
 /// The allow-list is default-deny and the route answers 404 for a key it does
@@ -162,6 +167,7 @@ fn validate_secret_keys(keys: &[String]) -> anyhow::Result<()> {
     validate_keys(keys, crate::host_secrets::HOST_SECRET_KEYS, "host secret")
 }
 
+// SPEC-9.12.3
 /// The same check for the configuration list (BUNYIP-1011). Separate call,
 /// separate servable set: a secret's key named with `--config-key` is a usage
 /// error here, which is the earliest place the two registries can be told
@@ -187,12 +193,14 @@ fn validate_keys(keys: &[String], servable: &[&str], what: &str) -> anyhow::Resu
     Ok(())
 }
 
+// SPEC-9.12.4
 /// The audience an access token for this deployment would carry, derived from
 /// `APP_URL` the same way the migration-registered clients spell it.
 fn audience_for(base_url: &str) -> String {
     format!("{}/v1", base_url.trim_end_matches('/'))
 }
 
+// SPEC-9.12.2
 /// Value of `--flag`, or `None` when the flag is absent or its value is missing.
 ///
 /// A following token that itself starts with `--` counts as missing, so
@@ -218,6 +226,7 @@ fn flag_values<'a>(args: &'a [String], name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+// SPEC-9.12.8
 fn client_id_flag(args: &[String], verb: &str) -> anyhow::Result<Uuid> {
     let Some(raw) = flag_value(args, "--client-id") else {
         bail!("machine-client {verb} needs --client-id <uuid>\n\n{USAGE}");
@@ -228,6 +237,7 @@ fn client_id_flag(args: &[String], verb: &str) -> anyhow::Result<Uuid> {
     }
 }
 
+// SPEC-9.12.1
 /// Parse the arguments after `machine-client`.
 ///
 /// Every failure is an error carrying [`USAGE`]; no input is a no-op.
@@ -286,6 +296,7 @@ pub async fn run(pool: &PgPool, base_url: &str, args: &[String]) -> anyhow::Resu
     }
 }
 
+// SPEC-9.12.9
 /// The one place the plaintext is rendered, and it is rendered into the report
 /// the caller prints once. Nothing writes it anywhere else.
 fn credential_report(action: &str, name: &str, client_id: Uuid, secret: &Secret) -> String {
@@ -296,6 +307,7 @@ fn credential_report(action: &str, name: &str, client_id: Uuid, secret: &Secret)
     )
 }
 
+// SPEC-9.12.4, SPEC-9.12.5, SPEC-9.12.6: only the hash is stored
 async fn register(
     pool: &PgPool,
     name: &str,
@@ -368,6 +380,7 @@ async fn load(pool: &PgPool, client_id: Uuid) -> anyhow::Result<(String, String,
     ))
 }
 
+// SPEC-9.12.7
 async fn rotate(pool: &PgPool, client_id: Uuid) -> anyhow::Result<String> {
     let (name, auth_method, disabled) = load(pool, client_id).await?;
     if auth_method != "client_secret_basic" {
@@ -397,6 +410,7 @@ async fn rotate(pool: &PgPool, client_id: Uuid) -> anyhow::Result<String> {
     Ok(credential_report("rotated", &name, client_id, &secret))
 }
 
+// SPEC-9.12.8
 async fn disable(pool: &PgPool, client_id: Uuid) -> anyhow::Result<String> {
     let (name, _, disabled) = load(pool, client_id).await?;
     if disabled {
@@ -413,6 +427,7 @@ async fn disable(pool: &PgPool, client_id: Uuid) -> anyhow::Result<String> {
     ))
 }
 
+// SPEC-9.12.10
 async fn list(pool: &PgPool) -> anyhow::Result<String> {
     let rows = sqlx::query(
         r#"

@@ -21,8 +21,10 @@ use uuid::Uuid;
 /// The single default app tenant every account JIT-lands in today (matches
 /// mokosh-server's `OIDC_DEFAULT_TENANT_ID`). Kept explicit so a per-app
 /// adapter can scope its call once multi-tenant ships.
+// SPEC-10.1.1, SPEC-10.1.5: single default app tenant passed to every backup and restore.
 const DEFAULT_TENANT_ID: Uuid = Uuid::from_u128(1);
 
+// SPEC-10.1.1, SPEC-10.1.2, SPEC-10.1.3, SPEC-10.1.4: download handler, admin-only, audited after build.
 /// `GET /v1/account/backup` - build and download the account bundle.
 pub async fn download_backup(
     req: HttpRequest,
@@ -62,6 +64,7 @@ pub async fn download_backup(
         .body(body))
 }
 
+// SPEC-10.1.5, SPEC-10.1.6, SPEC-10.1.7: restore handler, scoped to the acting admin's own account.
 /// `POST /v1/account/restore` - re-apply an uploaded account bundle to the
 /// acting admin's own account.
 pub async fn restore_backup(

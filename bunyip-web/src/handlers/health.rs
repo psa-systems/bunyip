@@ -9,6 +9,7 @@
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 
+// SPEC-12.44.1: liveness only, touches no upstream
 /// GET /healthz -> 200 `{"status":"ok"}`. No auth, no database dependency.
 pub async fn healthz() -> impl IntoResponse {
     (

@@ -7,6 +7,7 @@
 // The toggle buttons are wired with one delegated click listener on
 // [data-theme-toggle] / [data-contrast-toggle], replacing the old onclick=.
 (function () {
+  // SPEC-11.38.1
   var KEY = 'theme-storage';
 
   // BUNYIP-613: a suppressed failure still has to be visible somewhere. Guarded
@@ -15,6 +16,7 @@
     if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
   }
 
+  // SPEC-11.38.2
   function read() {
     try {
       var raw = localStorage.getItem(KEY);
@@ -26,6 +28,7 @@
     return {};
   }
 
+  // SPEC-11.38.4
   function save(theme, highContrast) {
     try {
       localStorage.setItem(
@@ -46,11 +49,13 @@
     root.classList.add(theme === 'system' ? (dark ? 'dark' : 'light') : theme);
     if (stored.highContrast) root.classList.add('high-contrast');
   } catch (e) {
+    // SPEC-11.38.2
     // This runs before first paint, so throwing would leave the document
     // unstyled. Carry on in the default theme and say what was lost.
     report('error', 'theme could not be applied; the page renders in the default theme', e);
   }
 
+  // SPEC-11.38.3
   function toggleTheme() {
     var root = document.documentElement;
     var next = root.classList.contains('dark') ? 'light' : 'dark';

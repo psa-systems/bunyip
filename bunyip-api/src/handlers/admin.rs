@@ -38,6 +38,7 @@ use bunyip_domain::services::mirzam_sync::{AccountChange, MirzamSync};
 use bunyip_domain::services::{BunyipEvent, EventBus};
 use bunyip_oci::services::ManifestCache;
 
+// SPEC-10.12.1: a refused startup-only value is a 400 naming the variable, never a silent fallback.
 /// BUNYIP-643: the declared provider stack for one admin-managed section, plus
 /// the one-word source label the page shows.
 ///
@@ -65,6 +66,7 @@ pub(crate) fn section_stack(
     Ok((stack, source))
 }
 
+// SPEC-10.2.15: publish only after the revoke and the audit write.
 /// BUNYIP-145: publish a `claims_changed` event for the given user. Fire-and-
 /// forget: the event bus drops the event silently when no tabs are subscribed.
 /// Mutation handlers call this AFTER the revoke + audit write so a busy SPA
@@ -73,6 +75,7 @@ fn announce_claims_changed(bus: &EventBus, user_id: uuid::Uuid) {
     bus.publish(BunyipEvent::ClaimsChanged { user_id });
 }
 
+// SPEC-10.2.15: next refresh fails so a new sign-in carries the changed claims.
 /// BUNYIP-144: revoke every refresh-token family belonging to `user_id` so the
 /// next request from any of their tabs 401s on `/auth/refresh`, bounces to
 /// `/login`, and the fresh sign-in mints tokens carrying the just-mutated
@@ -119,6 +122,7 @@ pub struct ListUsersQuery {
     pub dir: Option<String>,
 }
 
+// SPEC-10.2.1: filtered, sorted, paginated user list.
 /// GET /v1/admin/users
 /// List all users with pagination
 pub async fn list_users(
@@ -166,6 +170,7 @@ pub async fn list_users(
     Ok(paginated(user_responses, total, page, per_page, request_id))
 }
 
+// SPEC-10.2.2: single user or 404.
 /// GET /v1/admin/users/{user_id}
 /// Get a specific user
 pub async fn get_user(
@@ -190,6 +195,7 @@ pub struct UpdateUserStatusRequest {
     pub active: bool,
 }
 
+// SPEC-10.2.3, SPEC-10.2.4, SPEC-10.2.14: verified-admin activate or deactivate, sessions revoked.
 /// PUT /v1/admin/users/{user_id}/status
 /// Activate or deactivate a user
 pub async fn update_user_status(
@@ -288,6 +294,7 @@ pub async fn update_user_status(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.2.5, SPEC-10.2.14: soft delete with self and admin guards.
 /// DELETE /v1/admin/users/{user_id}
 /// Delete a user (soft delete)
 pub async fn delete_user(
@@ -360,6 +367,7 @@ pub struct UpdateUserRoleRequest {
     pub role: String,
 }
 
+// SPEC-10.2.6, SPEC-10.2.7, SPEC-10.2.14: role change revokes sessions when it changes.
 /// PUT /v1/admin/users/{user_id}/role
 /// Change a user's role
 pub async fn update_user_role(
@@ -447,6 +455,7 @@ pub struct UpdateUserEmailRequest {
     pub verified: bool,
 }
 
+// SPEC-10.2.8, SPEC-10.2.9, SPEC-10.2.14: soft-deleted addresses stay reserved.
 /// PUT /v1/admin/users/{user_id}/email
 /// Correct a user's email address (BUNYIP-119). Admin-only override of the
 /// normal user-initiated, email-confirmed change flow: the new address is
@@ -519,6 +528,7 @@ pub async fn update_user_email(
     Ok(success(UserResponse::from(updated_user), request_id))
 }
 
+// SPEC-10.2.10, SPEC-10.2.14: force-verify, audited even when already verified.
 /// POST /v1/admin/users/{user_id}/email/verify
 /// Force-verify a user's email address without the user completing the
 /// email-verification flow (BUNYIP-119).
@@ -558,6 +568,7 @@ pub async fn verify_user_email(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.2.11, SPEC-10.2.14: secret deleted before the flag is cleared.
 /// POST /v1/admin/users/{user_id}/two-factor/reset
 /// Clear a user's two-factor authentication (BUNYIP-119): delete their TOTP
 /// secret + recovery codes and flip `two_factor_enabled` off so a locked-out
@@ -610,6 +621,7 @@ pub struct GrantMembershipRequest {
     pub locked_price_amount: Option<i32>,
 }
 
+// SPEC-10.3.1, SPEC-10.3.2, SPEC-10.3.3, SPEC-10.3.4: free grant with optional price lock.
 /// POST /v1/admin/memberships/grant
 /// Grant a free membership to a user (permanent access, no payment required).
 /// Creates a $0 Stripe subscription so the user receives invoices.
@@ -684,6 +696,7 @@ pub async fn grant_membership(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.3.5: 404 before any change; sessions revoked.
 /// POST /v1/admin/memberships/revoke
 /// Revoke a membership from a user
 pub async fn revoke_membership(
@@ -748,6 +761,7 @@ pub struct ListMembershipsQuery {
     pub tier: Option<String>,
 }
 
+// SPEC-10.3.6: tier view lists oldest first so early-adopter slots read in claim order.
 /// SQL backing the BUNYIP-291 members-by-tier filter. Ordered by `created_at`
 /// ASC so early-adopter slot holders list in the deterministic order they
 /// claimed their slots (earliest first = slot 1..N), making occupancy
@@ -765,6 +779,7 @@ const MEMBERS_BY_TIER_SQL: &str = r#"
             LIMIT $1 OFFSET $2
             "#;
 
+// SPEC-10.3.6: tier takes precedence over status; saturating offset.
 /// GET /v1/admin/memberships
 /// List all memberships with pagination (sourced from users table)
 pub async fn list_memberships(
@@ -863,6 +878,7 @@ pub async fn list_memberships(
 // Application Management
 // =============================================================================
 
+// SPEC-10.5.1: includes inactive applications.
 /// GET /v1/admin/applications
 /// List all applications (including inactive)
 pub async fn list_all_applications(
@@ -880,6 +896,7 @@ pub async fn list_all_applications(
     ))
 }
 
+// SPEC-10.5.2: sort order is the index in the list.
 /// PUT /v1/admin/applications/reorder
 /// Set the display order of all applications from an explicit id list
 /// (BUNYIP-473). Replaces the pairwise swap: each id's `sort_order` becomes its
@@ -902,6 +919,7 @@ pub async fn reorder_applications(
     ))
 }
 
+// SPEC-10.5.3, SPEC-10.5.4, SPEC-10.5.5, SPEC-10.5.6, SPEC-10.5.7: merged validation, caches, webhooks, audit.
 /// PUT /v1/admin/applications/{app_id}
 /// Update an application
 pub async fn update_application(
@@ -1031,6 +1049,7 @@ pub struct ReplayAccountDeleteRequest {
     pub app_slug: String,
 }
 
+// SPEC-10.5.8, SPEC-10.5.9: a failed replay is an error, with the failure row recorded.
 /// POST /v1/admin/account-deletes/{user_id}/replay
 /// BUNYIP-211: re-fire the `account_deleted` webhook to a single app for a user
 /// whose original delete dispatch failed (its row sits in
@@ -1084,6 +1103,7 @@ pub async fn replay_account_delete(
     }
 }
 
+// SPEC-10.5.10, SPEC-10.5.11: validation order is part of the contract.
 /// POST /v1/admin/applications
 /// Create a new application
 pub async fn create_application(
@@ -1153,6 +1173,7 @@ pub async fn create_application(
     Ok(created(app, request_id))
 }
 
+// SPEC-10.5.12, SPEC-10.5.13: password then TOTP before any lookup or delete.
 /// DELETE /v1/admin/applications/{app_id}
 /// Delete an application (requires password + 2FA)
 pub async fn delete_application(
@@ -1215,6 +1236,7 @@ pub async fn delete_application(
 // Application Groups (BUNYIP-100)
 // =============================================================================
 
+// SPEC-10.5.14: group list.
 /// GET /v1/admin/application-groups
 /// List all application groups.
 pub async fn list_all_application_groups(
@@ -1227,6 +1249,7 @@ pub async fn list_all_application_groups(
     Ok(success(serde_json::json!({ "groups": groups }), request_id))
 }
 
+// SPEC-10.5.15: group create.
 /// POST /v1/admin/application-groups
 /// Create an application group.
 pub async fn create_application_group(
@@ -1265,6 +1288,7 @@ pub async fn create_application_group(
     Ok(created(group, request_id))
 }
 
+// SPEC-10.5.16: group update; own slug is not a collision.
 /// PUT /v1/admin/application-groups/{group_id}
 /// Update an application group.
 pub async fn update_application_group(
@@ -1302,6 +1326,7 @@ pub async fn update_application_group(
     Ok(success(group, request_id))
 }
 
+// SPEC-10.5.17: members are ungrouped by the foreign key.
 /// DELETE /v1/admin/application-groups/{group_id}
 /// Delete an application group. Members are ungrouped (FK ON DELETE SET NULL).
 pub async fn delete_application_group(
@@ -1321,6 +1346,7 @@ pub async fn delete_application_group(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.5.18: assign or clear an application's group.
 /// PUT /v1/admin/applications/{app_id}/group
 /// Assign an application to a group, or clear it (`group_id = null`).
 pub async fn set_application_group(
@@ -1372,6 +1398,7 @@ pub struct ListAuditLogsQuery {
     pub q: Option<String>,
 }
 
+// SPEC-10.7.3: RFC 3339 or a short relative window, else a 400 on `since`.
 /// Resolve the `since` query parameter into a UTC lower bound.
 /// Accepts an ISO 8601 timestamp OR one of the short forms (`1h`, `24h`,
 /// `7d`, `30d`). Anything else is a 400.
@@ -1393,6 +1420,7 @@ fn resolve_since(raw: &str) -> Result<chrono::DateTime<chrono::Utc>, AppError> {
     }
 }
 
+// SPEC-10.7.1, SPEC-10.7.2, SPEC-10.7.3, SPEC-10.7.4: filters are validated before the query.
 /// GET /v1/admin/audit-logs
 /// List audit logs with pagination
 pub async fn list_audit_logs(
@@ -1480,6 +1508,7 @@ pub struct ErrorLogsResponse {
     pub capacity: usize,
 }
 
+// SPEC-10.7.5: in-memory ERROR ring buffer view.
 /// GET /v1/admin/logs
 /// Return the newest-first ERROR-level events from the in-memory ring buffer,
 /// optionally filtered by category (BUNYIP-327). Admin-only via [`AdminUser`].
@@ -1512,6 +1541,7 @@ pub async fn get_error_logs(
 // Seed data import / export (PSA-52)
 // =============================================================================
 
+// SPEC-10.8.1: downloadable seed export.
 /// GET /v1/admin/seed/export
 /// Serialize the current seed-owned data to the canonical seed format and
 /// return it as a downloadable JSON file. Read-only; admin-gated.
@@ -1551,6 +1581,7 @@ pub struct SeedTemplateInfo {
     pub feedback: usize,
 }
 
+// SPEC-10.8.2: template picker data.
 /// GET /v1/admin/seed/templates
 /// List the embedded seed templates (name, description, section counts) for the
 /// first-run setup picker (PSA-57). Admin-gated.
@@ -1576,6 +1607,7 @@ pub async fn list_seed_templates(
     Ok(success(templates, get_request_id(&req)))
 }
 
+// SPEC-10.8.3, SPEC-10.8.4: refused in production before any data is read.
 /// POST /v1/admin/seed/import
 /// Load a canonical seed file through the shared loader. The data comes from a
 /// named embedded template (`?template=<name>`, PSA-57) when given, otherwise
@@ -1631,6 +1663,7 @@ pub struct DashboardStats {
     pub active_applications: i64,
 }
 
+// SPEC-10.7.6: shared with the health report so the two cannot drift; errors propagate.
 /// GET /v1/admin/stats
 /// Get dashboard statistics
 /// Collect the dashboard user/application counts. Shared by `get_dashboard_stats`
@@ -1679,6 +1712,7 @@ async fn collect_dashboard_stats(pool: &PgPool) -> Result<DashboardStats, AppErr
     })
 }
 
+// SPEC-10.7.6: dashboard counts handler.
 pub async fn get_dashboard_stats(
     req: HttpRequest,
     _admin: AdminUser,
@@ -1695,6 +1729,7 @@ pub async fn get_dashboard_stats(
 // User Actions (Reset Password, Impersonate)
 // =============================================================================
 
+// SPEC-10.2.12, SPEC-10.2.14: admin-triggered reset email with a one-hour token.
 /// POST /v1/admin/users/{user_id}/reset-password
 /// Trigger a password reset email for a user
 pub async fn admin_reset_password(
@@ -1754,6 +1789,7 @@ pub async fn admin_reset_password(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.2.13: plain admin, never self; audited.
 /// POST /v1/admin/users/{user_id}/impersonate
 /// Generate tokens to impersonate a user
 pub async fn impersonate_user(
@@ -1837,6 +1873,7 @@ pub struct ListNotificationsQuery {
     pub unread: Option<bool>,
 }
 
+// SPEC-10.7.7: unread branch pages in memory with a saturating offset.
 /// GET /v1/admin/notifications
 /// List admin notifications
 pub async fn list_notifications(
@@ -1879,6 +1916,7 @@ pub async fn list_notifications(
     Ok(paginated(notifications, total, page, per_page, request_id))
 }
 
+// SPEC-10.7.8: mark one read for the acting admin.
 /// POST /v1/admin/notifications/{notification_id}/read
 /// Mark a notification as read
 pub async fn mark_notification_read(
@@ -1895,6 +1933,7 @@ pub async fn mark_notification_read(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.7.8: mark all read for the acting admin.
 /// POST /v1/admin/notifications/read-all
 /// Mark all notifications as read
 pub async fn mark_all_notifications_read(
@@ -1967,6 +2006,7 @@ pub struct DatasetHealth {
     pub stale: bool,
 }
 
+// SPEC-10.9.6: stale threshold.
 /// IP2Location / IP2Proxy LITE datasets refresh about monthly, so flag one stale
 /// once it is older than this. Gives a missed monthly refresh a week of grace
 /// before it lights up (BUNYIP-474).
@@ -1976,6 +2016,7 @@ fn dataset_is_stale(age_days: Option<i64>) -> bool {
     matches!(age_days, Some(d) if d > DATASET_STALE_AFTER_DAYS)
 }
 
+// SPEC-10.9.6: unset, unreadable or future mtime reads as no age.
 /// Whole days since the mtime of the file at `path`, or `None` if it cannot be
 /// read (unset path, missing file, or a future mtime from clock skew).
 fn dataset_age_days(path: &str) -> Option<i64> {
@@ -1984,6 +2025,7 @@ fn dataset_age_days(path: &str) -> Option<i64> {
     Some((age.as_secs() / 86_400) as i64)
 }
 
+// SPEC-10.9.6: configured, present, age and stale of one dataset.
 /// Build a [`DatasetHealth`] from a configured `.BIN` path (or `None`).
 fn dataset_health(name: &str, env_var: &str, path: Option<&str>) -> DatasetHealth {
     let path = path.map(str::trim).filter(|p| !p.is_empty());
@@ -2023,6 +2065,7 @@ pub struct ListAdminInvitesQuery {
     pub email: Option<String>,
 }
 
+// SPEC-10.8.5: invite email is sent in the background and its failure is logged.
 /// POST /v1/admin/invites
 /// Create an admin invite and send email
 pub async fn create_admin_invite(
@@ -2063,6 +2106,7 @@ pub async fn create_admin_invite(
     ))
 }
 
+// SPEC-10.8.6: closed status set and bounded email filter.
 /// GET /v1/admin/invites
 /// List admin invites with pagination
 pub async fn list_admin_invites(
@@ -2115,6 +2159,7 @@ pub async fn list_admin_invites(
     Ok(paginated(invites, total, page, per_page, request_id))
 }
 
+// SPEC-10.8.7: verified-admin revoke.
 /// DELETE /v1/admin/invites/{invite_id}
 /// Revoke a pending admin invite
 pub async fn revoke_admin_invite(
@@ -2133,6 +2178,7 @@ pub async fn revoke_admin_invite(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.9.4, SPEC-10.9.5, SPEC-10.9.6: database probe, build info, dataset age.
 /// GET /v1/admin/health
 /// Get system health status
 pub async fn get_system_health(
@@ -2216,6 +2262,7 @@ pub async fn get_system_health(
     Ok(success(response, request_id))
 }
 
+// SPEC-10.9.7: classified integration state from runtime signals.
 /// GET /v1/admin/integrations
 ///
 /// BUNYIP-623: each integration's Configured / Unconfigured / Failing state for
@@ -2323,6 +2370,7 @@ pub struct UpdateStripeConfigRequest {
     pub trial_period_days: Option<i32>,
 }
 
+// SPEC-10.10.1: masked config, secrets read from the declared provider.
 /// GET /v1/admin/stripe
 /// Returns the current Stripe config with secrets masked. BUNYIP-542: the
 /// non-secret columns come from the DB row; the two secrets come from the
@@ -2366,6 +2414,7 @@ pub async fn get_stripe_config(
     ))
 }
 
+// SPEC-10.10.2, SPEC-10.10.3, SPEC-10.10.4, SPEC-10.10.5, SPEC-10.10.6, SPEC-10.10.7: provider-aware save.
 /// PUT /v1/admin/stripe
 /// Updates Stripe config. Only fields with a non-empty value are written; omitted or
 /// empty-string fields leave the existing DB value unchanged.
@@ -2579,6 +2628,7 @@ pub async fn update_stripe_config(
 // Subscription Management
 // =============================================================================
 
+// SPEC-10.3.7: 2FA gate body for lifetime grant and revoke.
 /// BUNYIP-943: the acting admin's current 2FA code, required on both lifetime
 /// grant and revoke since they have the exact billing-consequential effect
 /// `set_user_tier` requires it for (BUNYIP-431).
@@ -2587,6 +2637,7 @@ pub struct LifetimeMembershipRequest {
     pub totp_code: String,
 }
 
+// SPEC-10.3.7, SPEC-10.3.8, SPEC-10.3.2, SPEC-10.2.14: 2FA before any mutation.
 /// POST /v1/admin/users/{user_id}/lifetime
 /// Grant lifetime membership to a user.
 /// Creates a $0 Stripe subscription so the user receives invoices.
@@ -2667,6 +2718,7 @@ pub async fn grant_lifetime_membership(
     Ok(success(UserResponse::from(user), request_id))
 }
 
+// SPEC-10.3.7, SPEC-10.3.9, SPEC-10.2.14: 2FA before any mutation.
 /// POST /v1/admin/users/{user_id}/lifetime/revoke
 pub async fn revoke_lifetime_membership(
     req: HttpRequest,
@@ -2729,6 +2781,7 @@ pub struct SetUserTierRequest {
     pub totp_code: String,
 }
 
+// SPEC-10.3.10: an unknown tier is a 400, never a silent downgrade.
 /// Strictly parse a destination tier. Unlike `MembershipTier::from(&str)`
 /// (which defaults anything unknown to `Standard`), an unrecognised value is a
 /// client error here so a typo can never silently downgrade a member.
@@ -2742,6 +2795,7 @@ fn parse_admin_tier(raw: &str) -> Result<MembershipTier, AppError> {
     }
 }
 
+// SPEC-10.3.11: invoice only when newly lifetime; sessions revoked only on a real change.
 /// The side effects a tier move entails, decided purely from the 2FA result and
 /// the before/after tiers so upgrade / downgrade / cancelled-2FA are unit-testable
 /// without a database or Stripe. `Err` means the 2FA code failed and the caller
@@ -2770,6 +2824,7 @@ fn plan_admin_tier_move(
     })
 }
 
+// SPEC-10.3.7, SPEC-10.3.10, SPEC-10.3.11, SPEC-10.3.12, SPEC-10.2.14: gated tier move.
 /// POST /v1/admin/users/{user_id}/tier (BUNYIP-431)
 /// Move any member to any configured tier, gated on the acting admin's 2FA code.
 /// Slot usage is a live COUNT over `membership_tier`, so the single UPDATE in
@@ -2905,6 +2960,7 @@ fn smtp_tls_str(tls: &crate::config::SmtpTls) -> String {
     }
 }
 
+// SPEC-10.11.1: the SMTP password never leaves the server, only a boolean.
 /// Build the API response from a resolved [`EmailConfig`]. BUNYIP-432: the SMTP
 /// password is write-only, so the response carries only the boolean
 /// `has_smtp_password`; the plaintext (and any masked/last-4 form of it) never
@@ -2942,6 +2998,7 @@ fn email_config_response(
     }
 }
 
+// SPEC-10.11.1: resolved email config, secrets from the declared provider.
 /// GET /v1/admin/email
 pub async fn get_email_config(
     req: HttpRequest,
@@ -2994,6 +3051,7 @@ pub async fn get_email_config(
     ))
 }
 
+// SPEC-10.11.2, SPEC-10.11.3, SPEC-10.11.4, SPEC-10.11.5, SPEC-10.11.7: plain admin so mail can be repaired.
 /// PUT /v1/admin/email
 pub async fn update_email_config(
     req: HttpRequest,
@@ -3214,6 +3272,7 @@ pub async fn update_email_config(
     ))
 }
 
+// SPEC-10.11.8, SPEC-10.11.9: per-admin rate limit; a failing SMTP target is a 200 with ok false.
 /// POST /v1/admin/email/test
 ///
 /// BUNYIP-433: verify the *currently saved* SMTP settings by opening a real
@@ -3292,6 +3351,7 @@ pub async fn test_email_config(
     ))
 }
 
+// SPEC-10.11.11: failure text reaches the admin as a 200, not a 5xx.
 /// BUNYIP-508: shape a test-send outcome into the `{ ok, message }` body. The
 /// generic `Internal error: ` wrapper is stripped so the banner leads with the
 /// relay's own reason. Pure, so the failure path (200 carrying the relay text,
@@ -3314,6 +3374,7 @@ fn test_send_outcome(outcome: &Result<(), AppError>) -> (bool, String) {
     }
 }
 
+// SPEC-10.11.10, SPEC-10.11.11, SPEC-10.11.12: sends only to the caller's own address.
 /// POST /v1/admin/email/test-send
 ///
 /// BUNYIP-508: send a real test message through the *saved* SMTP settings so an
@@ -3423,6 +3484,7 @@ pub struct UpdateTierConfigRequest {
     pub orgs_enabled: Option<bool>,
 }
 
+// SPEC-10.12.6: the stored product is derived from the price so the two cannot disagree.
 /// BUNYIP-517: resolve a mapped price id to the Stripe product bunyip stores for
 /// webhook tier classification (`resolve_tier_for_product`). `prices` is the
 /// app-tagged price list. A price that is not in the list (unknown id, or a
@@ -3453,6 +3515,7 @@ fn derive_product_for_price(
     }
 }
 
+// SPEC-10.11.6: shared with the settings archive import.
 /// BUNYIP-204/351: refuse to disable email in production, even via the database.
 ///
 /// A production deployment with email off cannot send a password reset, a
@@ -3473,6 +3536,7 @@ pub(crate) fn refuse_disabled_email_in_production(
     Ok(())
 }
 
+// SPEC-10.12.5: every offending tier is named in one message.
 /// BUNYIP-609: "Show this tier on the pricing page" only means something for a
 /// tier that has a price mapped. `pricing::resolve` builds the public payload
 /// from the three price ids and drops any tier whose id is empty, so a visible
@@ -3502,6 +3566,7 @@ pub(crate) fn visible_without_price_error(tiers: &[(&str, bool, bool)]) -> Optio
     ))
 }
 
+// SPEC-10.12.2: resolved tier config with slot usage.
 /// GET /v1/admin/tier-config
 pub async fn get_tier_config(
     req: HttpRequest,
@@ -3553,6 +3618,7 @@ pub async fn get_tier_config(
     ))
 }
 
+// SPEC-10.12.3, SPEC-10.12.4, SPEC-10.12.5, SPEC-10.12.6, SPEC-10.12.7: three-state prices, derived products.
 /// PUT /v1/admin/tier-config
 pub async fn update_tier_config(
     req: HttpRequest,
@@ -3824,6 +3890,7 @@ pub struct UpdateTierSettingsRequest {
     pub trial_period_days: i32,
 }
 
+// SPEC-10.12.8, SPEC-10.12.9, SPEC-10.12.10: slots, trials and checkout trial in one transaction.
 /// PUT /v1/admin/tier-settings
 ///
 /// The two writes the admin's "Tiers & Slots" form used to make in
@@ -3994,6 +4061,7 @@ pub struct UpdateAutoBanConfigRequest {
     pub ban_duration_secs: Option<i64>,
 }
 
+// SPEC-10.13.9: resolved auto-ban config.
 /// GET /v1/admin/auto-ban-config
 pub async fn get_auto_ban_config(
     req: HttpRequest,
@@ -4027,6 +4095,7 @@ pub async fn get_auto_ban_config(
     ))
 }
 
+// SPEC-10.13.10: values of at least 1, hot-reloaded into the running service.
 /// PUT /v1/admin/auto-ban-config
 pub async fn update_auto_ban_config(
     req: HttpRequest,
@@ -4124,6 +4193,7 @@ pub struct KeyHealthCheck {
     pub message: Option<String>,
 }
 
+// SPEC-10.14.1: healthy means some key in the set reads the value.
 /// Evaluate decryptability of an optional (ciphertext, nonce) pair.
 ///
 /// BUNYIP-483: "healthy" means SOME key in the application set reads the value;
@@ -4167,6 +4237,7 @@ fn evaluate_key_health(
     }
 }
 
+// SPEC-10.14.2: roll-up rules for a multi-value store.
 /// Combine several per-column [`KeyHealthCheck`]s into one, the way a
 /// singleton config row or a `user_totp` table full of rows reports as a
 /// single key-health result (BUNYIP-689).
@@ -4359,6 +4430,7 @@ async fn check_mokosh_key(
     )]))
 }
 
+// SPEC-10.14.3: unknown id is a 404.
 /// Dispatch a key health check by key_id. Every id now checks the SAME
 /// application key (BUNYIP-483); they differ in which stored secret they read.
 async fn run_key_check(
@@ -4376,9 +4448,11 @@ async fn run_key_check(
     }
 }
 
+// SPEC-10.14.3: registry of encrypted-at-rest stores.
 /// All registered key IDs. Update this when a new store is encrypted at rest.
 const KEY_IDS: &[&str] = &["stripe", "totp", "email", "mirzam", "mokosh"];
 
+// SPEC-10.14.4: aggregate health, degraded if any store is unhealthy.
 /// GET /v1/admin/key-health
 /// Aggregated health check for all encryption keys.
 pub async fn get_key_health(
@@ -4421,6 +4495,7 @@ pub async fn get_key_health(
     ))
 }
 
+// SPEC-10.14.5: single store health.
 /// GET /v1/admin/key-health/{key_id}
 pub async fn get_key_health_by_id(
     req: HttpRequest,
@@ -4439,6 +4514,7 @@ pub async fn get_key_health_by_id(
 // Key Rotation
 // =============================================================================
 
+// SPEC-10.14.6: counts of values on the current key version.
 /// GET /v1/admin/key-rotation/{key_id}/status
 /// Returns the rotation status for a specific key: how many records are on the
 /// current version vs old versions.
@@ -4564,6 +4640,7 @@ pub async fn key_rotation_status(
     }
 }
 
+// SPEC-10.14.6: zero or one encrypted value.
 /// Rotation status for a singleton config row (`stripe_config`, `email_config`):
 /// zero or one encrypted record.
 fn singleton_rotation_status(
@@ -4582,6 +4659,7 @@ fn singleton_rotation_status(
     })
 }
 
+// SPEC-10.14.7: idempotent re-encrypt; undecryptable values are reported, never cleared.
 /// POST /v1/admin/key-rotation/{key_id}/reencrypt
 /// Re-encrypts every record that is not already on the current key (BUNYIP-483:
 /// one application key, so "not current" covers both an older key version and a
@@ -4636,6 +4714,7 @@ pub async fn reencrypt_key(
 
 // ── Lifecycle event dispatch ──────────────────────────────────────────────────
 
+// SPEC-10.2.16: per-target failures are logged and do not stop the remaining targets.
 /// Fire-and-forget helper: POST a lifecycle-event token to every registered
 /// `lifecycle_event_uri` for the given `user_id`.  Called via `tokio::spawn`.
 pub(crate) async fn dispatch_lifecycle_event(

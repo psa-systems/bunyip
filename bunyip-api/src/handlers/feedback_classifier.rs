@@ -39,6 +39,7 @@ use crate::handlers::mx_check::MxLookupOutcome;
 /// list; a `const` array scanned linearly costs nothing per call, unlike a
 /// `HashSet` rebuilt on every submission, which pays for hashing and
 /// inserts that a substring-containment check cannot use anyway.
+// SPEC-10.35.5: substring list for the hosting-range signal
 const HOSTING_ASN_PATTERNS: &[&str] = &[
     "interserver",
     "ovh",
@@ -90,6 +91,7 @@ pub struct SpamClassifierInput<'a> {
 /// Classifier output. `None` for a clean submission; `Some(reason)` for a
 /// flagged one. Caller writes `spam_reason` iff `Some`, and sets
 /// `is_spam = true`.
+// SPEC-10.35.1: first firing signal wins
 pub fn classify_feedback_spam(input: &SpamClassifierInput<'_>) -> Option<String> {
     if let Some(reason) = check_sender_mimicry(input) {
         return Some(reason);
@@ -114,6 +116,7 @@ pub fn classify_feedback_spam(input: &SpamClassifierInput<'_>) -> Option<String>
 /// `Unknown` (resolver error or timeout) returns `None` by design: a transient
 /// DNS outage must not cause legitimate feedback to be dropped. `HasMx`
 /// returns `None` too. Only `NoMx` flags.
+// SPEC-10.35.3: only NoMx flags; Unknown fails open
 fn check_sender_domain_has_no_mx(input: &SpamClassifierInput<'_>) -> Option<String> {
     let sender = input.sender_email?;
     let (_, domain) = sender.rsplit_once('@')?;
@@ -135,6 +138,7 @@ fn check_sender_domain_has_no_mx(input: &SpamClassifierInput<'_>) -> Option<Stri
 /// without a public-suffix list by comparing the registrable word, with
 /// the apex domain carried alongside so a legitimate subdomain of the
 /// recipient stays clean.
+// SPEC-10.35.2: the recipient's own subdomains stay clean
 fn check_sender_mimicry(input: &SpamClassifierInput<'_>) -> Option<String> {
     let sender = input.sender_email?;
     let recipient_word = input.recipient_domain_registrable_word?.trim();
@@ -165,6 +169,7 @@ fn check_sender_mimicry(input: &SpamClassifierInput<'_>) -> Option<String> {
 /// Signal 2: message contains at least one URL AND submitter set three or
 /// more tags. Simple URL regex: `https?://` plus one non-whitespace char.
 /// Does not need to be fancy; the signal is "any URL at all".
+// SPEC-10.35.4: a URL alone never flags
 fn check_urls_plus_tags(input: &SpamClassifierInput<'_>) -> Option<String> {
     let tag_count = input.tags.len();
     if tag_count < 3 {
@@ -182,6 +187,7 @@ fn check_urls_plus_tags(input: &SpamClassifierInput<'_>) -> Option<String> {
 /// one non-whitespace character. Keeps the check cheap and dependency
 /// free; a false positive on `https://` typed by a legitimate reporter
 /// cannot flag alone (the >=3 tag requirement must also hold).
+// SPEC-10.35.4: every scheme marker is scanned
 fn message_has_url(message: &str) -> bool {
     message_has_url_inner(message).unwrap_or(false)
 }
@@ -209,6 +215,7 @@ fn message_has_url_inner(message: &str) -> Option<bool> {
 /// serves residential users, the hit rate is low enough to be a useful
 /// weak signal. The list intentionally covers the major hosting
 /// providers only; a VPN or CGNAT is a different signal class.
+// SPEC-10.35.5: weak signal, needs an ASN name
 fn check_hosting_asn(input: &SpamClassifierInput<'_>) -> Option<String> {
     let asn = input.ip_asn_name?.trim();
     if asn.is_empty() {

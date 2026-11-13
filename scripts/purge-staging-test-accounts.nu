@@ -58,6 +58,7 @@ def main [
         $env.DATABASE_URL? | default ""
     })
 
+    # SPEC-3.34.1
     if ($target | is-empty) {
         print --stderr "error: set DATABASE_URL or pass --database-url"
         exit 2
@@ -73,6 +74,7 @@ def main [
     print $"email LIKE pattern    : ($pattern)"
     print ""
 
+    # SPEC-3.34.3
     # Strip the password out of the DSN so it never appears as a psql argv
     # element (readable via /proc/<pid>/cmdline by any co-resident process,
     # and would otherwise land in shell history and `ps aux`). It is instead
@@ -104,11 +106,13 @@ WHERE email LIKE :'pattern'
     print $"matched rows: ($matched)"
     print ""
 
+    # SPEC-3.34.2
     if not $commit {
         print "DRY RUN: no rows deleted. Re-run with --i-know-this-is-not-prod --commit to hard-delete the rows above."
         exit 0
     }
 
+    # SPEC-3.34.4
     if not $i_know_this_is_not_prod {
         print --stderr "refusing to --commit without --i-know-this-is-not-prod (this is a hard delete)."
         exit 3
@@ -119,6 +123,7 @@ WHERE email LIKE :'pattern'
         exit 0
     }
 
+    # SPEC-3.34.5
     # `input` reads the terminal, so a piped phrase cannot stand in for a human
     # typing it. That is the point of the confirmation, but it fails as an I/O
     # error rather than a refusal, so say what is wrong.
@@ -133,6 +138,7 @@ WHERE email LIKE :'pattern'
         exit 3
     }
 
+    # SPEC-3.34.6
     # Hard delete in a single transaction. The id set is resolved once into a
     # temp table so the DELETEs below all see the same rows, mirroring the Rust
     # path's "resolve ids once, then clear deps, then delete users" ordering.

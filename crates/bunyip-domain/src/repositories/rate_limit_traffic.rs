@@ -37,6 +37,7 @@ pub struct ActionTrafficPoint {
 /// Width of a traffic bucket. 15 minutes keeps 1 day of history at 96 rows
 /// per `(action, key_hash)`, which stays well inside the ticket's "no
 /// monitoring stack" budget while still showing spikes.
+// SPEC-7.3.169, SPEC-7.3.171
 pub const BUCKET_WIDTH_SECS: i64 = 900;
 
 /// Default retention in seconds. The admin page's maximum window is 1 day,
@@ -53,6 +54,7 @@ impl RateLimitTrafficRepository {
     /// Called from `check_and_increment` on every call (over-cap or not),
     /// so the write is best-effort and the caller swallows the error so
     /// enforcement is not blocked.
+    // SPEC-7.3.169
     pub async fn record(
         pool: &PgPool,
         action: &str,
@@ -79,6 +81,7 @@ impl RateLimitTrafficRepository {
 
     /// Read the per-bucket totals for an action in `[since, now]`, newest
     /// bucket first. The admin page's sparkline consumes this directly.
+    // SPEC-7.3.170
     pub async fn read(
         pool: &PgPool,
         action: &str,
@@ -106,6 +109,7 @@ impl RateLimitTrafficRepository {
     /// action here; the caller partitions them (e.g. `HashMap<&str,
     /// Vec<TrafficPoint>>`) since the admin overview needs one
     /// [`TrafficPoint`] vec per action.
+    // SPEC-7.3.170
     pub async fn read_batch(
         pool: &PgPool,
         actions: &[&str],
@@ -131,6 +135,7 @@ impl RateLimitTrafficRepository {
     }
 
     /// Delete rows older than `retention_seconds`.
+    // SPEC-7.3.171
     pub async fn sweep(pool: &PgPool, retention_seconds: i64) -> Result<u64, AppError> {
         let horizon = Utc::now() - Duration::seconds(retention_seconds);
         let result = sqlx::query("DELETE FROM rate_limit_traffic WHERE bucket_start < $1")

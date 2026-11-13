@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.36: full page row.
 /// A single documentation page belonging to an application.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ApplicationDoc {
@@ -18,6 +19,7 @@ pub struct ApplicationDoc {
     pub updated_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.36: index shape, no body.
 /// Lightweight page metadata for a docs index (omits the markdown body).
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ApplicationDocSummary {
@@ -26,6 +28,7 @@ pub struct ApplicationDocSummary {
     pub sort_order: i32,
 }
 
+// SPEC-7.2.37: sourced from the docs side, not the catalog.
 /// An ACTIVE application that has at least one documentation page, for the
 /// public `/docs` hub (BUNYIP-635). Sourced from the docs side rather than the
 /// application catalog: `/v1/applications` filters `is_hosted = TRUE` and would
@@ -36,6 +39,7 @@ pub struct DocumentedApplication {
     pub display_name: String,
 }
 
+// SPEC-7.2.38: sort_order defaults to 0.
 /// Admin input for creating a documentation page.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateApplicationDoc {
@@ -46,6 +50,7 @@ pub struct CreateApplicationDoc {
     pub sort_order: i32,
 }
 
+// SPEC-7.2.39: every field optional.
 /// Admin input for updating a documentation page. Every field is optional so a
 /// caller can patch just a title, body, or sort order.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -13,6 +13,7 @@ use crate::models::application_doc::{
 /// as a constant so the unit test below can assert the active filter is still
 /// in it: a deactivated application must drop out of the `/docs` hub, and the
 /// only thing that makes it drop out is this predicate.
+// SPEC-7.3.58
 const DOCUMENTED_APPS_SQL: &str = r#"
     SELECT DISTINCT a.slug, a.display_name
     FROM applications a
@@ -28,6 +29,7 @@ impl ApplicationDocRepository {
     /// display. Bodies are omitted; use [`get_by_app_and_slug`] for a page.
     /// Filters `is_active = TRUE` (BUNYIP-765) so a deactivated application's
     /// pages drop out here too, matching [`list_documented_apps`].
+    // SPEC-7.3.51
     pub async fn list_by_app_slug(
         pool: &PgPool,
         app_slug: &str,
@@ -50,6 +52,7 @@ impl ApplicationDocRepository {
     /// Public: one doc page by app slug + doc slug. Filters `is_active = TRUE`
     /// (BUNYIP-765) so a deactivated application's page 404s here too, matching
     /// [`list_documented_apps`].
+    // SPEC-7.3.52
     pub async fn get_by_app_and_slug(
         pool: &PgPool,
         app_slug: &str,
@@ -71,6 +74,7 @@ impl ApplicationDocRepository {
     }
 
     /// Admin: all doc pages for an app by id (full rows, ordered).
+    // SPEC-7.3.53
     pub async fn list_by_app_id(
         pool: &PgPool,
         application_id: Uuid,
@@ -89,6 +93,7 @@ impl ApplicationDocRepository {
     }
 
     /// Admin: one doc page by id.
+    // SPEC-7.3.53
     pub async fn get(pool: &PgPool, id: Uuid) -> Result<Option<ApplicationDoc>, AppError> {
         let row =
             sqlx::query_as::<_, ApplicationDoc>("SELECT * FROM application_docs WHERE id = $1")
@@ -99,6 +104,7 @@ impl ApplicationDocRepository {
     }
 
     /// Admin: create a doc page for an app.
+    // SPEC-7.3.54
     pub async fn create(
         pool: &PgPool,
         application_id: Uuid,
@@ -122,6 +128,7 @@ impl ApplicationDocRepository {
     }
 
     /// Admin: patch a doc page (COALESCE per field), bumping `updated_at`.
+    // SPEC-7.3.55
     pub async fn update(
         pool: &PgPool,
         id: Uuid,
@@ -150,6 +157,7 @@ impl ApplicationDocRepository {
     }
 
     /// Admin: delete a doc page. Returns true when a row was removed.
+    // SPEC-7.3.56
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<bool, AppError> {
         let res = sqlx::query("DELETE FROM application_docs WHERE id = $1")
             .bind(id)
@@ -161,6 +169,7 @@ impl ApplicationDocRepository {
     /// The set of application ids that have at least one documentation page.
     /// One query for the whole catalog, so the downloads endpoint can flag
     /// `has_docs` per app without an EXISTS round-trip each.
+    // SPEC-7.3.57
     pub async fn app_ids_with_docs(
         pool: &PgPool,
     ) -> Result<std::collections::HashSet<Uuid>, AppError> {
@@ -175,6 +184,7 @@ impl ApplicationDocRepository {
     /// page, for the `/docs` hub (BUNYIP-635). The join is what makes the list
     /// real data: an app with no pages never appears, and deactivating one
     /// removes it on the next read.
+    // SPEC-7.3.58
     pub async fn list_documented_apps(
         pool: &PgPool,
     ) -> Result<Vec<DocumentedApplication>, AppError> {

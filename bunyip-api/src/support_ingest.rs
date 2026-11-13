@@ -17,6 +17,7 @@ use futures_util::StreamExt;
 use mail_parser::{HeaderValue, MessageParser};
 use sqlx::PgPool;
 
+// SPEC-9.33.9: ids compare bracket-free
 /// Strip the angle brackets from a Message-ID so an inbound id, its
 /// `In-Reply-To` / `References`, and our own sent ids all compare in one form.
 fn strip_brackets(id: &str) -> String {
@@ -35,6 +36,7 @@ fn header_ids(value: &HeaderValue) -> Vec<String> {
     }
 }
 
+// SPEC-9.33.9: None only when unparseable
 /// Parse a raw RFC 822 message into the fields the support queue threads on.
 /// Returns `None` only when the bytes do not parse as a message at all.
 pub fn parse_inbound(raw: &[u8]) -> Option<NewInboundMessage> {
@@ -77,6 +79,7 @@ pub fn parse_inbound(raw: &[u8]) -> Option<NewInboundMessage> {
     })
 }
 
+// SPEC-9.33.2, SPEC-9.33.3, SPEC-9.33.4, SPEC-9.33.6, SPEC-9.33.7: per-message failure isolation
 /// One poll: connect, ingest every unseen message, and mark each ingested one
 /// `\Seen`. Returns the count ingested; a disabled or unconfigured mailbox is a
 /// no-op returning 0.
@@ -98,6 +101,7 @@ pub async fn poll_once(
     if !cfg.imap_enabled || cfg.imap_host.is_empty() || cfg.imap_username.is_empty() {
         return Ok(0);
     }
+    // SPEC-9.33.3: no password means no-op, not an error
     let Some(password) =
         crate::secrets::read_secret(pool, config, key_set, GovernedSecret::SupportImapPassword)
             .await?
@@ -105,6 +109,7 @@ pub async fn poll_once(
         return Ok(0);
     };
 
+    // SPEC-9.33.4: connect, TLS, login, select, search; errors propagate
     let tcp = tokio::net::TcpStream::connect((cfg.imap_host.as_str(), cfg.imap_port)).await?;
     let tls_stream = async_native_tls::TlsConnector::new()
         .connect(cfg.imap_host.as_str(), tcp)
@@ -131,6 +136,7 @@ pub async fn poll_once(
         .join(",");
     let mut bodies: Vec<(u32, Vec<u8>)> = Vec::new();
     {
+        // SPEC-9.33.5: PEEK so fetching never sets Seen
         let mut stream = session.fetch(&seq_set, "BODY.PEEK[]").await?;
         while let Some(item) = stream.next().await {
             let fetch = item?;
@@ -144,6 +150,7 @@ pub async fn poll_once(
     for (seq, raw) in bodies {
         match parse_inbound(&raw) {
             Some(parsed) => {
+                // SPEC-9.33.6: unseen on failure so the next poll retries
                 if let Err(e) = SupportRepository::ingest_inbound(pool, &parsed).await {
                     tracing::warn!(error = %e, seq, "support ingest failed; leaving unseen for retry");
                     continue;
@@ -151,6 +158,7 @@ pub async fn poll_once(
                 mark_seen(&mut session, seq).await;
                 ingested += 1;
             }
+            // SPEC-9.33.7: unparseable message is marked seen and skipped
             None => {
                 tracing::warn!(
                     seq,
@@ -165,6 +173,7 @@ pub async fn poll_once(
     Ok(ingested)
 }
 
+// SPEC-9.33.8: best effort; re-ingest is deduplicated
 /// Set `\Seen` on one message, draining the store response stream. Best-effort:
 /// a store failure only means the message is re-fetched next poll, and the
 /// Message-ID unique index makes a re-ingest a no-op.
@@ -178,6 +187,7 @@ where
     }
 }
 
+// SPEC-9.33.1: interval floor of 10 s; first tick skipped
 /// Spawn the support-mailbox poller. Always spawned; each tick re-reads the
 /// config so enabling IMAP from the admin page takes effect without a restart.
 pub fn spawn(pool: PgPool, config: Config, key_set: EncryptionKeySet) {

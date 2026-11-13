@@ -10,6 +10,7 @@ pub struct ApplicationGroupRepository;
 
 impl ApplicationGroupRepository {
     /// List all groups, ordered for display.
+    // SPEC-7.3.31
     pub async fn list(pool: &PgPool) -> Result<Vec<ApplicationGroup>, AppError> {
         let groups = sqlx::query_as::<_, ApplicationGroup>(
             r#"
@@ -22,6 +23,7 @@ impl ApplicationGroupRepository {
         Ok(groups)
     }
 
+    // SPEC-7.3.32
     pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<ApplicationGroup>, AppError> {
         let group = sqlx::query_as::<_, ApplicationGroup>(
             r#"SELECT * FROM application_groups WHERE id = $1"#,
@@ -32,6 +34,7 @@ impl ApplicationGroupRepository {
         Ok(group)
     }
 
+    // SPEC-7.3.32
     pub async fn find_by_slug(
         pool: &PgPool,
         slug: &str,
@@ -45,6 +48,7 @@ impl ApplicationGroupRepository {
         Ok(group)
     }
 
+    // SPEC-7.3.33
     pub async fn create(
         pool: &PgPool,
         body: &CreateApplicationGroup,
@@ -67,6 +71,7 @@ impl ApplicationGroupRepository {
         Ok(group)
     }
 
+    // SPEC-7.3.34
     pub async fn update(
         pool: &PgPool,
         id: Uuid,
@@ -98,6 +103,7 @@ impl ApplicationGroupRepository {
         Ok(group)
     }
 
+    // SPEC-7.3.35
     pub async fn delete(pool: &PgPool, id: Uuid) -> Result<(), AppError> {
         // Members keep their rows; `applications.group_id` is ON DELETE SET NULL,
         // so removing a group simply ungroups its applications.

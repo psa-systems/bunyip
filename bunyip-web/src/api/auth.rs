@@ -10,6 +10,7 @@ use super::types::{
 };
 use super::{decode_error, ok_data, parse, Api, ApiError};
 
+// SPEC-11.15.1
 /// A page of the signed-in user's trusted devices (BUNYIP-138 / BUNYIP-177).
 /// The API returns a `PaginatedResponse<TrustedDeviceInfo>` inside the envelope.
 pub async fn list_trusted_devices(
@@ -27,6 +28,7 @@ pub async fn list_trusted_devices(
     )
 }
 
+// SPEC-11.15.1
 /// Revoke a single trusted device by id.
 pub async fn revoke_trusted_device(
     api: &Api,
@@ -45,6 +47,7 @@ pub async fn revoke_trusted_device(
 // between the two variants over clippy's default threshold. The enum is
 // constructed once per login attempt - boxing would change every call site
 // for a non-issue. Allow the lint locally.
+// SPEC-11.15.2
 #[allow(clippy::large_enum_variant)]
 pub enum LoginOutcome {
     SignedIn(User),
@@ -57,6 +60,7 @@ pub enum LoginOutcome {
     ApprovalRequired { challenge_token: String },
 }
 
+// SPEC-11.15.2
 fn parse_login(path: &str, value: Value) -> Result<LoginOutcome, ApiError> {
     if value
         .get("requires_2fa")
@@ -89,14 +93,17 @@ fn parse_login(path: &str, value: Value) -> Result<LoginOutcome, ApiError> {
 
 // --- session / boot ---------------------------------------------------------
 
+// SPEC-11.15.3
 pub async fn setup_status(api: &Api) -> Result<SetupStatus, ApiError> {
     parse(api.get("/auth/setup/status", None).await?)
 }
 
+// SPEC-11.15.3
 pub async fn me(api: &Api, cookie: Option<&str>) -> Result<User, ApiError> {
     parse(api.get("/users/me", cookie).await?)
 }
 
+// SPEC-11.15.4
 /// Returns the rotated `Set-Cookie`s on success.
 pub async fn refresh(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     let r = api.post("/auth/refresh", cookie, None).await?;
@@ -107,6 +114,7 @@ pub async fn refresh(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, Api
     }
 }
 
+// SPEC-11.15.5
 pub async fn logout(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     let r = api.post("/auth/logout", cookie, None).await?;
     Ok(r.set_cookies)
@@ -114,6 +122,7 @@ pub async fn logout(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiE
 
 // --- login / passwordless ---------------------------------------------------
 
+// SPEC-11.15.6
 pub async fn login(
     api: &Api,
     cookie: Option<&str>,
@@ -133,6 +142,7 @@ pub async fn login(
     Ok((parse_login("/auth/login", data)?, cookies))
 }
 
+// SPEC-11.15.7
 pub async fn verify_2fa(
     api: &Api,
     cookie: Option<&str>,
@@ -156,6 +166,7 @@ pub async fn verify_2fa(
     Ok((auth.user, cookies))
 }
 
+// SPEC-11.15.7
 /// BUNYIP-944: complete a login withheld by the suspicious-login approval gate
 /// (BUNYIP-373) by posting the emailed code to `/auth/login-approval/verify`.
 pub async fn verify_login_approval(
@@ -181,6 +192,7 @@ pub async fn verify_login_approval(
     Ok((auth.user, cookies))
 }
 
+// SPEC-11.15.8
 pub async fn request_magic_link(api: &Api, email: &str) -> Result<(), ApiError> {
     let r = api
         .post("/auth/magic-link", None, Some(json!({ "email": email })))
@@ -188,6 +200,7 @@ pub async fn request_magic_link(api: &Api, email: &str) -> Result<(), ApiError> 
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.6
 pub async fn verify_magic_link(
     api: &Api,
     token: &str,
@@ -204,6 +217,7 @@ pub async fn verify_magic_link(
     Ok((parse_login("/auth/magic-link/verify", data)?, cookies))
 }
 
+// SPEC-11.15.8
 pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiError> {
     let r = api
         .post(
@@ -215,6 +229,7 @@ pub async fn request_password_reset(api: &Api, email: &str) -> Result<(), ApiErr
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.8
 pub async fn confirm_password_reset(
     api: &Api,
     token: &str,
@@ -232,6 +247,7 @@ pub async fn confirm_password_reset(
 
 // --- registration / setup / invite -----------------------------------------
 
+// SPEC-11.15.9
 pub async fn register(
     api: &Api,
     email: &str,
@@ -258,6 +274,7 @@ pub async fn register(
     Ok((auth.user, cookies))
 }
 
+// SPEC-11.15.10
 /// BUNYIP-377: fetch a signup timing-challenge token to embed in the register
 /// form. Best-effort - on any failure returns `None` and the form embeds an
 /// empty token (harmless while the bot guard is off; when on, the user just
@@ -271,6 +288,7 @@ pub async fn register_challenge(api: &Api) -> Option<String> {
         .map(str::to_string)
 }
 
+// SPEC-11.15.11
 /// Returns `(maybe needs-password email, user, cookies)`. `Ok((Some(email), None, _))`
 /// means the invite needs a password; `Ok((None, Some(user), cookies))` is a full sign-in.
 pub async fn accept_invite(
@@ -304,6 +322,7 @@ pub async fn accept_invite(
 
 // --- account / email / password --------------------------------------------
 
+// SPEC-11.15.12
 /// BUNYIP-139: persist optional first_name / last_name / phone via
 /// `PUT /v1/users/me/profile`. Each arg follows the API contract:
 /// - `Some("trimmed value")` -> write the value
@@ -336,6 +355,7 @@ pub async fn update_profile(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.13
 /// BUNYIP-408: upload (or replace) the signed-in user's avatar. Relays the raw
 /// bytes as a multipart file part to `POST /users/me/avatar`; the API sniffs the
 /// real MIME from content, so the declared `mime` here is advisory. The API
@@ -356,12 +376,14 @@ pub async fn upload_avatar(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.13
 /// BUNYIP-408: remove the signed-in user's avatar (`DELETE /users/me/avatar`).
 pub async fn remove_avatar(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
     let r = api.delete("/users/me/avatar", cookie, None).await?;
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.13
 /// BUNYIP-408: stream the signed-in user's avatar bytes for the `/me/avatar` BFF
 /// proxy. Returns the raw `reqwest::Response` (status/headers/body relayed by the
 /// handler) so a same-origin `<img>` can load it with the session cookie.
@@ -369,6 +391,7 @@ pub async fn fetch_avatar(api: &Api, cookie: Option<&str>) -> Result<reqwest::Re
     api.get_stream("/users/me/avatar", cookie).await
 }
 
+// SPEC-11.15.14
 pub async fn change_password(
     api: &Api,
     cookie: Option<&str>,
@@ -384,6 +407,7 @@ pub async fn change_password(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.15
 /// Returns whether the API says re-login is required, plus any cleared cookies.
 pub async fn request_email_change(
     api: &Api,
@@ -409,6 +433,7 @@ pub async fn request_email_change(
     Ok((relogin, cookies))
 }
 
+// SPEC-11.15.15
 pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError> {
     let r = api
         .post(
@@ -420,6 +445,7 @@ pub async fn confirm_email_change(api: &Api, token: &str) -> Result<(), ApiError
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.16
 /// Returns the granted membership tier string.
 pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String, ApiError> {
     let r = api
@@ -437,11 +463,13 @@ pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String
         .to_string())
 }
 
+// SPEC-11.15.16
 pub async fn request_email_verification(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
     let r = api.post("/users/me/email/verify", cookie, None).await?;
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.17
 pub async fn delete_account(
     api: &Api,
     cookie: Option<&str>,
@@ -460,6 +488,7 @@ pub async fn delete_account(
 
 // --- 2FA management ---------------------------------------------------------
 
+// SPEC-11.15.18
 /// BUNYIP-886: start setup behind the current password; the response carries
 /// the one-time `setup_token` that confirm and resume require.
 pub async fn setup_2fa(
@@ -471,6 +500,7 @@ pub async fn setup_2fa(
     parse(api.post("/auth/2fa/setup", cookie, Some(body)).await?)
 }
 
+// SPEC-11.15.18
 /// BUNYIP-886: the same key again for a live setup token, to redraw the QR code
 /// after a wrong code without minting a new secret.
 pub async fn resume_2fa_setup(
@@ -485,6 +515,7 @@ pub async fn resume_2fa_setup(
     )
 }
 
+// SPEC-11.15.18
 pub async fn confirm_2fa(
     api: &Api,
     cookie: Option<&str>,
@@ -495,6 +526,7 @@ pub async fn confirm_2fa(
     parse(api.post("/auth/2fa/confirm", cookie, Some(body)).await?)
 }
 
+// SPEC-11.15.18
 pub async fn status_2fa(
     api: &Api,
     cookie: Option<&str>,
@@ -502,6 +534,7 @@ pub async fn status_2fa(
     parse(api.get("/auth/2fa/status", cookie).await?)
 }
 
+// SPEC-11.15.19
 /// BUNYIP-355: begin an authenticator re-key (step-up: password + a current
 /// code). Stages a new secret and returns its QR/secret; the old authenticator
 /// keeps working until `confirm_rekey`.
@@ -518,6 +551,7 @@ pub async fn begin_rekey(
     parse(api.post("/auth/2fa/rekey", cookie, Some(body)).await?)
 }
 
+// SPEC-11.15.19
 /// BUNYIP-355: confirm the re-key with a code from the new authenticator; swaps
 /// the pending secret in and returns fresh recovery codes.
 pub async fn confirm_rekey(
@@ -535,6 +569,7 @@ pub async fn confirm_rekey(
     )
 }
 
+// SPEC-11.15.19
 pub async fn disable_2fa(
     api: &Api,
     cookie: Option<&str>,
@@ -549,6 +584,7 @@ pub async fn disable_2fa(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.15.19
 pub async fn regenerate_recovery_codes(
     api: &Api,
     cookie: Option<&str>,

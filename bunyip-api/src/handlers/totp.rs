@@ -95,6 +95,7 @@ fn present(value: Option<&str>) -> Option<&str> {
 
 /// POST /v1/auth/2fa/setup
 /// Begin 2FA setup: 409 when enrolled, else password-gated key plus setup token (BUNYIP-886).
+// SPEC-10.23.1, SPEC-10.23.2, SPEC-10.23.3: enrolled check precedes the password check
 pub async fn setup_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -138,6 +139,7 @@ pub async fn setup_2fa(
 
 /// POST /v1/auth/2fa/setup/resume
 /// Re-show an unfinished setup's key for its setup token, with no new secret (BUNYIP-886).
+// SPEC-10.23.4: no new secret on resume
 pub async fn resume_2fa_setup(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -163,6 +165,7 @@ pub async fn resume_2fa_setup(
 
 /// POST /v1/auth/2fa/confirm
 /// Confirm 2FA setup with the setup token and a TOTP code (authenticated)
+// SPEC-10.23.5: enrolment needs the one-time setup token
 pub async fn confirm_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -194,6 +197,8 @@ pub async fn confirm_2fa(
 
 /// POST /v1/auth/2fa/verify
 /// Verify 2FA code to complete login (NO auth required - uses challenge token)
+// SPEC-10.23.6, SPEC-10.23.7, SPEC-10.23.8, SPEC-10.23.9, SPEC-10.23.10, SPEC-10.23.11, SPEC-10.23.12:
+// login second factor
 pub async fn verify_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -387,6 +392,7 @@ pub async fn verify_2fa(
 
 /// DELETE /v1/auth/2fa
 /// Disable 2FA (authenticated, requires password, blocked for admins)
+// SPEC-10.23.13, SPEC-10.23.14, SPEC-10.23.15: password plus live code; admins blocked
 pub async fn disable_2fa(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -455,6 +461,7 @@ pub async fn disable_2fa(
 
 /// POST /v1/auth/2fa/recovery-codes
 /// Regenerate recovery codes (authenticated, requires password)
+// SPEC-10.23.16: password-gated regeneration
 pub async fn regenerate_recovery_codes(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -498,6 +505,7 @@ pub async fn regenerate_recovery_codes(
 /// trusted-device session cannot silently reset the second factor. Stages a new
 /// secret WITHOUT disabling the active one and returns the new otpauth URI +
 /// secret for the QR; the old authenticator keeps working until confirm.
+// SPEC-10.23.17: step-up gated, old secret stays active
 pub async fn begin_rekey(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -564,6 +572,7 @@ pub async fn begin_rekey(
 /// return fresh recovery codes. No step-up here - possession of the new device
 /// (the code) plus the earlier begin gate is the proof. Fails without touching
 /// the active secret if no re-key is in progress or the code is wrong.
+// SPEC-10.23.18: attempts capped per account
 pub async fn confirm_rekey(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -606,6 +615,7 @@ pub async fn confirm_rekey(
 
 /// GET /v1/auth/2fa/status
 /// Get 2FA status (authenticated)
+// SPEC-10.23.19: status read
 pub async fn get_2fa_status(
     req: HttpRequest,
     user: AuthenticatedUser,

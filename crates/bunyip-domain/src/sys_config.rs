@@ -50,6 +50,7 @@ use serde::Deserialize;
 
 use crate::config_providers::{file_layer_dir, ConfigProvider, ConfigStack, EnvironmentProvider};
 
+// SPEC-7.1.112: system-level keys are environment only
 /// BUNYIP-622: which side of the configuration boundary a setting is on.
 ///
 /// The rule is security-led (David, 2026-08-24 standup): a setting is
@@ -72,6 +73,7 @@ pub enum ConfigScope {
     Application,
 }
 
+// SPEC-7.1.112: never writable through the file layer or the admin API
 /// BUNYIP-622: the system-level environment variables. They are read from the
 /// environment only and must never become writable through the file layer or the
 /// admin API. `system_level_keys_never_enter_the_file_layer` asserts none of
@@ -102,19 +104,23 @@ pub const SYSTEM_LEVEL_ENV_KEYS: &[&str] = &[
     "APP_KEY_VERSION",
 ];
 
+// SPEC-7.1.121: legacy YAML file location
 /// The env var naming the LEGACY YAML file (BUNYIP-579/622). It is no longer a
 /// configuration layer: it is read once, migrated into the file layer directory
 /// and renamed aside (BUNYIP-644). [`LEGACY_FILE_NAME`] is where it is looked
 /// for when the variable is unset.
 pub const LEGACY_FILE_ENV: &str = "BUNYIP_CONFIG_FILE";
 
+// SPEC-7.1.121: default legacy file name
 /// The legacy YAML file's name inside the file layer directory.
 pub const LEGACY_FILE_NAME: &str = "config.yaml";
 
+// SPEC-7.1.125: renamed aside, never deleted
 /// The suffix the migrated legacy file is renamed with, so it is never read as
 /// configuration again and is never deleted either.
 pub const LEGACY_MIGRATED_SUFFIX: &str = ".migrated";
 
+// SPEC-7.1.113: no field for a system-level key, by type
 /// The application-level deployment settings, as the admin System settings page
 /// reads and writes them.
 ///
@@ -136,6 +142,7 @@ pub struct SystemSettings {
     pub country_deny: Vec<String>,
 }
 
+// SPEC-7.1.118: serializes admin saves in one process
 /// BUNYIP-831: serializes the read-merge-write span of an admin system-config
 /// save. Each individual file write in [`SystemSettings::save`] is already
 /// atomic, but the four-key set as a whole has no lock across the read
@@ -153,6 +160,7 @@ pub struct SystemSettings {
 pub static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 impl SystemSettings {
+    // SPEC-7.1.114: effective values through the stack
     /// The effective values, resolved through the provider stack: the file
     /// layer, then the environment, then the built-in default. The admin screen
     /// shows what the deployment actually uses, so a save persists what the
@@ -167,11 +175,13 @@ impl SystemSettings {
         }
     }
 
+    // SPEC-7.1.118: read half of the locked read-merge-write span
     /// [`Self::resolve`] over the deployment stack (file layer, environment).
     pub fn current() -> Self {
         Self::resolve(&ConfigStack::deployment())
     }
 
+    // SPEC-7.1.113, SPEC-7.1.115: the whole write surface of the file layer
     /// The declared key each field is carried by, and the text to store for it.
     /// `None` clears the setting, so the built-in default (or a lower provider)
     /// serves it again.
@@ -193,6 +203,7 @@ impl SystemSettings {
         ]
     }
 
+    // SPEC-7.1.116: one file per key; a cleared key removes its file
     /// Write these settings into the file layer, one file per key.
     ///
     /// Each file is written atomically (a sibling temp file renamed over the
@@ -223,6 +234,7 @@ impl SystemSettings {
     }
 }
 
+// SPEC-7.1.119: resolved system config
 /// The resolved, in-memory system config.
 #[derive(Debug, Clone)]
 pub struct SysConfig {
@@ -236,6 +248,7 @@ pub struct SysConfig {
 }
 
 impl SysConfig {
+    // SPEC-7.1.119: origins from the environment only
     /// Resolve the system config: the application-level settings through the
     /// provider stack, the system-level origins from the process environment
     /// only.
@@ -243,6 +256,7 @@ impl SysConfig {
         Self::resolve(stack, &|name| env_layered(name))
     }
 
+    // SPEC-7.1.119: env layer injected for tests
     /// The pure resolution, with the env layer injected so the system-level half
     /// is unit-tested without touching the process environment. `env` returns
     /// the value of a setting's `{NAME}` (or `{NAME}_FILE`) variable, or `None`.
@@ -265,6 +279,7 @@ impl SysConfig {
     }
 }
 
+// SPEC-7.1.121: override, else config.yaml in the layer directory
 /// The legacy YAML file's path: `BUNYIP_CONFIG_FILE`, else [`LEGACY_FILE_NAME`]
 /// inside the file layer directory (which is where the in-container default
 /// `/app/config/config.yaml` already sat).
@@ -277,6 +292,7 @@ pub fn legacy_file_path(dir: &Path) -> PathBuf {
         .unwrap_or_else(|| dir.join(LEGACY_FILE_NAME))
 }
 
+// SPEC-7.1.122: one-time fold of the legacy YAML into the file layer
 /// BUNYIP-644: fold an existing YAML file into the file layer, once.
 ///
 /// Returns the values that could NOT be written, so the caller can still serve
@@ -310,10 +326,12 @@ pub fn migrate_legacy_file(dir: &Path, legacy: &Path) -> BTreeMap<String, String
     for (key, value) in file.entries() {
         let Some(value) = value else { continue };
         let path = dir.join(key);
+        // SPEC-7.1.123: an existing per-key file wins
         if path.exists() {
             tracing::info!(config_key = key, path = %path.display(), "the file layer already holds {key}, so the legacy YAML value for it is dropped");
             continue;
         }
+        // SPEC-7.1.123: never flip a resolved value
         if environment
             .get(key)
             .is_some_and(|value| !value.trim().is_empty())
@@ -328,6 +346,7 @@ pub fn migrate_legacy_file(dir: &Path, legacy: &Path) -> BTreeMap<String, String
             );
             continue;
         }
+        // SPEC-7.1.124: unwritten values are served from memory and retried
         if let Err(e) = write_key_file(&path, &value) {
             tracing::error!(config_key = key, path = %path.display(), error = %e, "could not migrate {key} from the legacy YAML file into the file layer; it is served from memory for this boot and the migration is retried on the next start");
             unwritten.insert(key.to_string(), value);
@@ -336,6 +355,7 @@ pub fn migrate_legacy_file(dir: &Path, legacy: &Path) -> BTreeMap<String, String
         tracing::info!(config_key = key, path = %path.display(), "migrated {key} from the legacy YAML file into the file layer");
     }
 
+    // SPEC-7.1.125: rename aside only after a complete migration
     if unwritten.is_empty() {
         // The name is always there: this path was just read as a file. Naming
         // it explicitly rather than substituting a default keeps the rename
@@ -357,6 +377,7 @@ pub fn migrate_legacy_file(dir: &Path, legacy: &Path) -> BTreeMap<String, String
     unwritten
 }
 
+// SPEC-7.1.121: migration state, not a typo
 /// Whether `name` is the legacy YAML file or its renamed-aside form, so the
 /// file provider ignores it without the "not a declared key" warning every key
 /// file gets: it is a file this migration itself put there.
@@ -375,6 +396,7 @@ pub fn is_legacy_file_name(name: &str) -> bool {
             })
 }
 
+// SPEC-7.1.125: read-only; nothing may write this format
 /// The legacy on-disk YAML shape, read by [`migrate_legacy_file`] and by
 /// nothing else. It is deliberately read-only: `no_production_code_writes_the_legacy_yaml_format`
 /// fails the build if anything serializes it again, because a written YAML file
@@ -401,6 +423,7 @@ struct LegacyCountryAccess {
 }
 
 impl LegacySysConfigFile {
+    // SPEC-7.1.123: same keys SystemSettings::entries writes
     /// The declared key each legacy field maps onto. The same key set
     /// [`SystemSettings::entries`] writes, so a migrated file and an admin save
     /// land on the same files.
@@ -428,6 +451,7 @@ impl LegacySysConfigFile {
     }
 }
 
+// SPEC-7.1.117: temp file then rename
 /// Write one key file atomically: a sibling temp file renamed over the target.
 fn write_key_file(path: &Path, value: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
@@ -435,6 +459,7 @@ fn write_key_file(path: &Path, value: &str) -> std::io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+// SPEC-7.1.114: true or 1 only
 /// A boolean setting: any value but `true` / `1` is false, which is what the
 /// YAML layer's env parser did and what every existing deployment resolves.
 fn flag(stack: &ConfigStack, key: &str) -> bool {
@@ -444,6 +469,7 @@ fn flag(stack: &ConfigStack, key: &str) -> bool {
     })
 }
 
+// SPEC-7.1.114: comma or whitespace separated
 /// A country list setting: comma or whitespace separated ISO alpha-2 codes.
 fn countries(stack: &ConfigStack, key: &str) -> Vec<String> {
     let Some(raw) = stack.get(key) else {
@@ -456,6 +482,7 @@ fn countries(stack: &ConfigStack, key: &str) -> Vec<String> {
     )
 }
 
+// SPEC-7.1.114: trim, upper-case, drop blanks
 /// Normalise country codes to trimmed upper-case ISO alpha-2, dropping blanks.
 fn normalize_countries(codes: &[String]) -> Vec<String> {
     codes
@@ -465,6 +492,7 @@ fn normalize_countries(codes: &[String]) -> Vec<String> {
         .collect()
 }
 
+// SPEC-7.1.115: empty list is stored as absent
 /// The stored text for a country list; an empty list is stored as ABSENT, so
 /// clearing the setting removes its file rather than writing an empty one.
 fn join_countries(codes: &[String]) -> Option<String> {
@@ -472,6 +500,7 @@ fn join_countries(codes: &[String]) -> Option<String> {
     Some(joined).filter(|joined| !joined.is_empty())
 }
 
+// SPEC-7.1.119: trimmed, empty is unset
 /// A system-level string setting: the env layer only, trimmed, empty as unset.
 fn str_setting(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
     env(name)
@@ -479,6 +508,7 @@ fn str_setting(env: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<Strin
         .filter(|s| !s.is_empty())
 }
 
+// SPEC-7.1.119, SPEC-7.1.120: plain variable, else the _FILE indirection
 /// The env layer for one system-level key: the plain `{NAME}` variable, or its
 /// `{NAME}_FILE` indirection (a mounted file path). The `_FILE` form keeps a
 /// secret-bearing value off the process environment and the Infisical path

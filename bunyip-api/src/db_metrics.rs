@@ -25,6 +25,7 @@ use tracing::field::{Field, Visit};
 use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
+// SPEC-9.16.4
 /// Process-wide count of database acquisitions that timed out waiting for a
 /// free connection.
 static ACQUIRE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
@@ -34,6 +35,7 @@ pub fn acquire_timeouts() -> u64 {
     ACQUIRE_TIMEOUTS.load(Ordering::Relaxed)
 }
 
+// SPEC-9.16.5
 /// sqlx's `Display` for `Error::PoolTimedOut` is
 /// `"pool timed out while waiting for an open connection"`, and
 /// `dunite_core`'s `From<sqlx::Error> for AppError` logs it verbatim as the
@@ -47,6 +49,7 @@ pub fn is_acquire_timeout(rendered: &str) -> bool {
     rendered.contains(ACQUIRE_TIMEOUT_SIGNATURE)
 }
 
+// SPEC-9.16.6
 /// Counts pool acquire timeouts as they cross the error path.
 ///
 /// `sqlx::Error` is converted to `AppError` inside `dunite-core`, which bunyip
@@ -84,6 +87,7 @@ impl Visit for AcquireTimeoutVisitor {
     }
 }
 
+// SPEC-9.16.7
 /// The sampling interval from `DB_POOL_METRICS_INTERVAL_SECS`, or `None` when
 /// the variable is unset, empty, unparseable or `0` (all mean "off").
 ///
@@ -121,6 +125,7 @@ pub fn sampling_interval() -> Option<Duration> {
     }
 }
 
+// SPEC-9.16.8
 /// One sample line per pool, plus the shared acquire-timeout count.
 pub fn log_sample(label: &str, pool: &PgPool) {
     let size = pool.size();
@@ -135,6 +140,7 @@ pub fn log_sample(label: &str, pool: &PgPool) {
     );
 }
 
+// SPEC-9.16.8
 /// Spawn the sampler when `DB_POOL_METRICS_INTERVAL_SECS` asks for it.
 ///
 /// `pools` is `(label, pool)`; the RLS pool falls back to a clone of the

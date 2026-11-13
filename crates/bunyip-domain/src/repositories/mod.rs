@@ -2,6 +2,7 @@
 //!
 //! This module contains all database access logic organized by domain.
 
+// SPEC-7.3.1, SPEC-7.3.2: one module per repository; `?` relies on the shared sqlx error mapping
 pub mod account_delete_dispatch_failure;
 pub mod application;
 pub mod application_doc;

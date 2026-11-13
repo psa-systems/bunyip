@@ -18,17 +18,21 @@ use crate::repositories::TotpRepository;
 use crate::services::auth::generate_secure_token;
 use crate::services::{argon2_offload, EncryptionKeySet};
 
+// SPEC-8.37.1
 /// RFC 6238 time step, in seconds. Also the size of the backward tolerance
 /// `match_step` applies.
 const TOTP_STEP_SECS: u64 = 30;
 
+// SPEC-8.36.2
 /// How long a setup token stays usable (BUNYIP-886).
 const SETUP_TOKEN_TTL_MINUTES: i64 = 15;
 
+// SPEC-8.36.3
 /// Refusal for starting setup on an account that already has two-factor (BUNYIP-886).
 pub const ALREADY_ENROLLED_MESSAGE: &str =
     "Two-factor is already on. Use Reset authenticator app to change it.";
 
+// SPEC-8.36.5
 /// Refusal for a missing, wrong or expired setup token (BUNYIP-886).
 pub const SETUP_EXPIRED_MESSAGE: &str = "This setup expired. Start again.";
 
@@ -79,6 +83,7 @@ impl TotpService {
         *self.branding.write().unwrap_or_else(|e| e.into_inner()) = Some(cache);
     }
 
+    // SPEC-8.36.1
     /// The issuer label stamped into a new enrolment's `otpauth://` URI.
     ///
     /// Existing enrolments keep whatever label they were created with: the
@@ -101,6 +106,7 @@ impl TotpService {
         &self.key_set
     }
 
+    // SPEC-8.36.2, SPEC-8.36.3
     /// Begin 2FA setup: a new secret plus a one-time setup token. The caller
     /// checks the password first; an enrolled account gets 409 (BUNYIP-886).
     pub async fn begin_setup(
@@ -141,6 +147,7 @@ impl TotpService {
         })
     }
 
+    // SPEC-8.36.5
     /// Re-show an unfinished setup's key for its live setup token, without
     /// minting a new secret (BUNYIP-886).
     pub async fn resume_setup(
@@ -173,6 +180,7 @@ impl TotpService {
         })
     }
 
+    // SPEC-8.36.6
     /// Confirm 2FA setup with its setup token and a TOTP code, then generate
     /// recovery codes. A bad token enrolls nothing (BUNYIP-886).
     pub async fn confirm_setup(
@@ -209,6 +217,7 @@ impl TotpService {
             return Err(AppError::validation("code", "Invalid verification code"));
         }
 
+        // SPEC-8.36.7
         // The guarded update burns the token, so a racing confirm cannot enroll twice.
         if !TotpRepository::complete_setup(&self.pool, user_id, &token_hash).await? {
             return Err(setup_token_error());
@@ -218,6 +227,7 @@ impl TotpService {
         Ok(codes)
     }
 
+    // SPEC-8.36.8, SPEC-8.36.9
     /// Enroll a PRESET base32 TOTP secret and mark it verified immediately,
     /// skipping the interactive `begin_setup` -> `confirm_setup` (live-code)
     /// flow. For trusted NON-INTERACTIVE provisioning only (the E2E bootstrap,
@@ -250,6 +260,7 @@ impl TotpService {
         Ok(())
     }
 
+    // SPEC-8.37.3
     /// Verify a TOTP code for login
     pub async fn verify_code(&self, user_id: Uuid, code: &str) -> Result<bool, AppError> {
         let totp_record = TotpRepository::find_by_user_id(&self.pool, user_id)
@@ -268,6 +279,7 @@ impl TotpService {
         self.check_and_claim_code(user_id, &secret, code).await
     }
 
+    // SPEC-8.38.4, SPEC-8.38.6
     /// Verify a recovery code (marks it as used if valid).
     /// Supports both legacy unsalted SHA-256 hashes and new Argon2id hashes.
     pub async fn verify_recovery_code(&self, user_id: Uuid, code: &str) -> Result<bool, AppError> {
@@ -299,6 +311,7 @@ impl TotpService {
         TotpRepository::mark_recovery_code_used(&self.pool, code_id).await
     }
 
+    // SPEC-8.38.3
     /// Regenerate recovery codes (requires 2FA to be enabled)
     pub async fn regenerate_recovery_codes(&self, user_id: Uuid) -> Result<Vec<String>, AppError> {
         let totp_record = TotpRepository::find_by_user_id(&self.pool, user_id)
@@ -312,6 +325,7 @@ impl TotpService {
         self.generate_and_store_recovery_codes(user_id).await
     }
 
+    // SPEC-8.37.4
     /// BUNYIP-355: begin an authenticator re-key. Generates a fresh secret and
     /// stages it in the pending columns WITHOUT disabling the active secret, so
     /// the old authenticator keeps working until `confirm_rekey`. The caller
@@ -342,6 +356,7 @@ impl TotpService {
         })
     }
 
+    // SPEC-8.37.5, SPEC-8.37.6
     /// BUNYIP-355: confirm an authenticator re-key by verifying a code against
     /// the staged pending secret, then promote it to active and regenerate
     /// recovery codes. Fails (leaving the active secret untouched) if no re-key
@@ -388,12 +403,14 @@ impl TotpService {
         Ok(codes)
     }
 
+    // SPEC-8.36.10
     /// Disable 2FA for a user
     pub async fn disable(&self, user_id: Uuid) -> Result<(), AppError> {
         TotpRepository::delete_by_user_id(&self.pool, user_id).await?;
         Ok(())
     }
 
+    // SPEC-8.36.10
     /// Check if 2FA is enabled for a user
     pub async fn is_enabled(&self, user_id: Uuid) -> Result<bool, AppError> {
         match TotpRepository::find_by_user_id(&self.pool, user_id).await? {
@@ -402,6 +419,7 @@ impl TotpService {
         }
     }
 
+    // SPEC-8.36.10
     /// Get the count of remaining unused recovery codes
     pub async fn recovery_codes_remaining(&self, user_id: Uuid) -> Result<i64, AppError> {
         let count = TotpRepository::count_unused_recovery_codes(&self.pool, user_id).await?;
@@ -415,6 +433,7 @@ impl TotpService {
         format!("{:x}", Sha256::digest(token.as_bytes()))
     }
 
+    // SPEC-8.36.4
     /// Whether a stored setup token hash matches `token_hash` and has not
     /// expired at `now`. Constant-time on the hash comparison.
     fn setup_token_live(
@@ -432,6 +451,7 @@ impl TotpService {
         }
     }
 
+    // SPEC-8.36.1
     fn build_totp(&self, secret: &[u8], account_name: &str) -> Result<TOTP, AppError> {
         // skew = 0: totp_rs's skew is SYMMETRIC (each unit adds the step before
         // AND after, so skew=1 accepts 3 codes at once and lets a client with a
@@ -461,6 +481,7 @@ impl TotpService {
         Self::match_step(secret, &self.issuer(), code, now)
     }
 
+    // SPEC-8.37.1
     /// Match `code` at unix time `now` against the current step and the one
     /// before it, backward only, and return the step it belongs to.
     ///
@@ -509,6 +530,7 @@ impl TotpService {
         Ok(None)
     }
 
+    // SPEC-8.37.2
     /// Verify `code` and consume its step in one shot (BUNYIP-428). `false`
     /// means either no step matched or the matched step was already consumed;
     /// the two are deliberately indistinguishable to the caller so a replay
@@ -525,6 +547,7 @@ impl TotpService {
         Ok(TotpRepository::claim_totp_step(&self.pool, user_id, step).await? > 0)
     }
 
+    // SPEC-8.38.2
     async fn generate_and_store_recovery_codes(
         &self,
         user_id: Uuid,
@@ -552,6 +575,7 @@ impl TotpService {
         Ok(codes)
     }
 
+    // SPEC-8.38.1
     /// Generate a single recovery code.
     ///
     /// 10 random bytes (80 bits of entropy) from the CSPRNG, base32-encoded into
@@ -599,11 +623,13 @@ impl TotpService {
         Ok(hash.to_string())
     }
 
+    // SPEC-8.38.4
     /// Detect legacy unsalted SHA-256 hashes (64 hex chars)
     fn is_legacy_hash(hash: &str) -> bool {
         hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit())
     }
 
+    // SPEC-8.38.5
     /// Verify a code against a stored hash, supporting both legacy SHA-256 and Argon2id
     fn verify_code_against_hash(code: &str, stored_hash: &str) -> Result<bool, AppError> {
         if Self::is_legacy_hash(stored_hash) {

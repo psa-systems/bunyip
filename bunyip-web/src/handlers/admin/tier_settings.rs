@@ -23,6 +23,7 @@ use crate::views::layout::admin_block;
 use crate::views::ui::{button_class, error_box, error_box_for, icon, toggle_switch_field};
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.26.1: upper bounds for slot and trial-day fields
 /// Upper bounds for tier-settings fields. Slots and trial days are i64 with no
 /// business meaning beyond these caps; rejecting larger input keeps obvious
 /// typos and overflow probes out of the config.
@@ -69,6 +70,7 @@ impl TierFormValues {
     }
 }
 
+// SPEC-12.26.1: integer in [0, max], error names the field
 /// Parse one tier-settings field: require a base-10 integer in `[0, max]`.
 /// Returns a user-facing message naming the field on failure.
 fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
@@ -85,6 +87,7 @@ fn parse_tier_field(raw: &str, label: &str, max: i64) -> Result<i64, String> {
     Ok(n)
 }
 
+// SPEC-12.25.2, SPEC-12.25.4, SPEC-12.25.6: tier forms or error box
 pub(super) fn tier_settings_content(
     cfg: Result<&TierConfigResponse, &ApiError>,
     prices: Option<&[StripePrice]>,
@@ -155,6 +158,7 @@ pub(super) fn tier_settings_content(
     }
 }
 
+// SPEC-12.25.2: tier config failure is logged and shown
 /// Tier config for the page. `Err` renders "Could not reach the API to load the tier config." with
 /// the failure's message and request id (BUNYIP-844); the log is what names
 /// its cause for the operator.
@@ -171,6 +175,7 @@ async fn tier_config(st: &AppState, cookie: Option<&str>) -> Result<TierConfigRe
         })
 }
 
+// SPEC-12.25.3: price list failure is logged
 /// Stripe prices for the catalog selects. `None` on an unreadable list, which the
 /// catalog section renders as "derived from the price on save" placeholders.
 async fn stripe_prices(st: &AppState, cookie: Option<&str>) -> Option<Vec<StripePrice>> {
@@ -187,6 +192,7 @@ async fn stripe_prices(st: &AppState, cookie: Option<&str>) -> Option<Vec<Stripe
         .ok()
 }
 
+// SPEC-12.25.4: pricing status failure is logged and shown
 /// Live /pricing diagnosis for the publish block. A failed fetch is reported to
 /// the admin (and logged), never rendered as "nothing to report".
 async fn pricing_status(st: &AppState, cookie: Option<&str>) -> Result<PricingStatus, String> {
@@ -203,6 +209,7 @@ async fn pricing_status(st: &AppState, cookie: Option<&str>) -> Result<PricingSt
         })
 }
 
+// SPEC-12.25.5: unreadable checkout trial is blank, not 0
 /// The checkout trial length (`stripe_config.trial_period_days`), as a string for
 /// the form. An unreadable config leaves the field blank rather than inventing 0.
 async fn checkout_trial_days(st: &AppState, cookie: Option<&str>) -> String {
@@ -220,6 +227,7 @@ async fn checkout_trial_days(st: &AppState, cookie: Option<&str>) -> String {
     }
 }
 
+// SPEC-12.25.1: pricing tiers page
 pub async fn tier_settings(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -229,6 +237,7 @@ pub async fn tier_settings(
     // and the form renders from the stored row.
     axum::extract::Query(catalog): axum::extract::Query<super::CatalogFormValues>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -288,11 +297,13 @@ pub(super) fn stripe_step_error_message(e: &ApiError) -> String {
     )
 }
 
+// SPEC-12.26.2, SPEC-12.26.3, SPEC-12.26.4, SPEC-12.20.2: validate, one API call
 pub async fn tier_settings_save(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<TierForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -302,6 +313,7 @@ pub async fn tier_settings_save(
     // Validate everything up front so a bad field names itself and nothing is
     // persisted on a partial failure. The single backend call below is
     // reached only once every field parses.
+    // SPEC-12.26.1: every field is validated before any API call
     let outcome = (|| {
         let lifetime = parse_tier_field(&f.lifetime_slots, "Lifetime slots", MAX_TIER_SLOTS)?;
         let early_adopter = parse_tier_field(
@@ -335,6 +347,7 @@ pub async fn tier_settings_save(
 
     let error = match outcome {
         Ok(body) => {
+            // SPEC-12.26.2: one backend call for all six keys
             // One backend call, one transaction. A rejected save on
             // either column rolls the whole thing back, so the admin
             // never sees a state where the slot count moved and the
@@ -347,6 +360,7 @@ pub async fn tier_settings_save(
         Err(msg) => msg,
     };
 
+    // SPEC-12.26.4: failure re-renders with submitted values
     // Re-render inline with the error and the submitted values.
     let cfg = tier_config(&st, fwd).await;
     let prices = stripe_prices(&st, fwd).await;

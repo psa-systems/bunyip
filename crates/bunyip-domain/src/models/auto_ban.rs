@@ -4,6 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+// SPEC-7.2.50: NULL means the next provider serves the key.
 /// Database row for the `auto_ban_config` singleton table.
 ///
 /// Every tunable column is nullable: a NULL means this row's provider does not
@@ -21,6 +22,7 @@ pub struct AutoBanConfigRow {
     pub updated_by: Option<Uuid>,
 }
 
+// SPEC-7.2.51: resolved values plus source.
 /// API response for auto-ban configuration.
 #[derive(Debug, Serialize)]
 pub struct AutoBanConfigResponse {

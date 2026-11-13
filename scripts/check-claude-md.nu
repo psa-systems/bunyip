@@ -17,6 +17,7 @@
 #   scripts/check-claude-md.nu
 #   scripts/check-claude-md.nu --self-test
 
+# SPEC-3.23.1
 const MAX_BYTES = 20000
 const MAX_LINE_CHARS = 400
 
@@ -48,6 +49,7 @@ def slug [heading: string]: nothing -> string {
 
 # Every heading anchor in a markdown file, with the `-1`, `-2` suffixes a
 # renderer adds to repeated headings.
+# SPEC-3.23.2
 def anchors [path: string]: nothing -> list<string> {
     let text = (open --raw $path | into binary | decode utf-8)
     let slugs = (
@@ -113,6 +115,7 @@ def release-recipe-names [path: string]: nothing -> list<string> {
 # neither CLAUDE.md nor a `docs/` file CLAUDE.md links, as human-readable
 # problem lines. Returns no problems when the common.just path does not exist
 # (an uninitialized submodule), since that is a separate, unrelated failure.
+# SPEC-3.23.3
 def check-release-recipes [root: string]: nothing -> list<string> {
     let just_path = ($root | path join "common/common.just")
     let claude_path = ($root | path join "CLAUDE.md")
@@ -137,6 +140,7 @@ def check-release-recipes [root: string]: nothing -> list<string> {
 }
 
 # Every problem with `<root>/CLAUDE.md`, as human-readable lines.
+# SPEC-3.23.1, SPEC-3.23.2
 def check [root: string]: nothing -> list<string> {
     let path = ($root | path join "CLAUDE.md")
     if not ($path | path exists) {
@@ -205,6 +209,7 @@ def self-test-release-recipes []: nothing -> nothing {
     if not $ok { exit 1 }
 }
 
+# SPEC-3.23.4
 def self-test []: nothing -> nothing {
     let base = (mktemp --directory --tmpdir)
 

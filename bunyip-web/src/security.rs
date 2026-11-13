@@ -68,6 +68,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 
 use crate::config::{Config, CspConfig};
 
+// SPEC-11.9.2, SPEC-11.9.3, SPEC-11.9.4, SPEC-11.9.5, SPEC-11.9.6: script-src stays self-only;
+// skin hosts extend only connect-src and form-action.
 /// Build the Content-Security-Policy header value for the given config.
 ///
 /// `api_public_origin` is the browser-facing bunyip-api origin (the same value
@@ -105,6 +107,7 @@ fn policy(api_public_origin: &str, app_domain: &str, csp: &CspConfig) -> String 
     )
 }
 
+// SPEC-11.9.5
 /// BUNYIP-503: space-prefixed join of a skin's extra CSP hosts, or empty when
 /// there are none, so the default policy stays byte-identical.
 fn appended(hosts: &[String]) -> String {
@@ -115,6 +118,7 @@ fn appended(hosts: &[String]) -> String {
     }
 }
 
+// SPEC-11.9.1, SPEC-11.9.11, SPEC-2.3.4: if_not_present keeps stricter per-route policies.
 /// Tower layer that stamps the Content-Security-Policy onto every bunyip-web
 /// response that does not already carry one.
 ///
@@ -174,6 +178,7 @@ mod tests {
         ));
     }
 
+    // SPEC-11.9.6
     /// BUNYIP-424 guard: `script-src` is exactly `'self'`. Any third-party host
     /// or `'unsafe-inline'` creeping back into the directive is a regression to
     /// the pre-BUNYIP-424 policy, where a compromise at either CDN (or any
@@ -241,6 +246,7 @@ mod tests {
         assert!(p.contains("style-src 'self' 'unsafe-inline';"), "got: {p}");
     }
 
+    // SPEC-11.9.9
     /// BUNYIP-554 guard: the render-blocking Google Fonts stylesheet and the
     /// three Font Awesome stylesheets are out of the shared document head, and
     /// the webfont build is deleted from the tree. A `<link>` to either is the
@@ -285,6 +291,7 @@ mod tests {
 
     // BUNYIP-503: a skin's extra hosts append to connect-src / form-action only,
     // never to the locked-down script-src (BUNYIP-424) or the other directives.
+    // SPEC-11.9.5
     #[test]
     fn policy_appends_skin_hosts_to_connect_and_form_only() {
         let csp = crate::config::CspConfig {
@@ -332,6 +339,7 @@ mod tests {
         ));
     }
 
+    // SPEC-11.9.7
     /// BUNYIP-424 guard: `script-src 'self'` only holds if the SSR pages stop
     /// emitting executable markup. Scan every view/handler source file for the
     /// two shapes the browser would refuse to run under this policy - an inline
@@ -425,6 +433,7 @@ mod tests {
         );
     }
 
+    // SPEC-11.9.8
     /// BUNYIP-615 guard: an empty `catch` body drops the failure with no log,
     /// which the `Error Visibility` rule forbids. BUNYIP-596 removed the shape
     /// from `password.js` and BUNYIP-613 removed the last six from its siblings;
@@ -524,6 +533,7 @@ mod tests {
         }
     }
 
+    // SPEC-11.9.10
     /// BUNYIP-487 guard: the removals in this issue must stay removed. The
     /// hardcoded Business tier and its env flag are gone (tiers are defined on
     /// the admin Pricing tiers page), and so is every string that advertised

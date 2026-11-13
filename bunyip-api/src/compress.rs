@@ -29,6 +29,7 @@
 use actix_web::http::header::{self, HeaderValue};
 use actix_web::HttpResponse;
 
+// SPEC-9.14.9
 /// Mark a response so the `Compress` middleware leaves its body alone.
 ///
 /// Call this on every streamed response and every response with a runtime
@@ -102,6 +103,7 @@ mod tests {
         // that needs no marker, because it is served by the separate `oci`
         // HttpServer in main.rs, which carries no Compress. That only holds
         // while the primary router does not mount the OCI vertical.
+        // SPEC-9.14.10: enforces: the OCI vertical stays off the compressed stack
         let routes = std::fs::read_to_string(src.join("routes/mod.rs")).expect("readable routes");
         assert!(
             !routes.contains("bunyip_oci"),

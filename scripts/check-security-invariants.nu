@@ -45,6 +45,7 @@ def print-hits [hits: table] {
 def main [] {
     mut failed = 0
 
+    # SPEC-3.19.1
     # -- F4: the Secure cookie attribute derives from the transport -----------
     # `Config::is_production()` is not the transport. A TLS deployment whose
     # ENVIRONMENT is not exactly "production" shipped session cookies without
@@ -57,6 +58,7 @@ def main [] {
         $failed = 1
     }
 
+    # SPEC-3.19.2
     # -- F11: bunyip-web's Secure cookie attribute derives from the transport -
     # Same class of defect as F4, in the other binary: `use_secure_cookies`
     # string-parsed `api_public_origin` for `https://`, so a typo'd `http://`
@@ -71,6 +73,7 @@ def main [] {
         $failed = 1
     }
 
+    # SPEC-3.19.3
     # -- F6: the dunite git dependency is pinned by rev ------------------------
     # `branch = "main"` lets `cargo update` roll the security kernel forward with
     # no reviewable diff outside Cargo.lock.
@@ -81,6 +84,7 @@ def main [] {
         $failed = 1
     }
 
+    # SPEC-3.19.4
     # -- F8: POST /v1/billing/setup-intent is not a user-enumeration oracle ----
     # A registered/unregistered response difference on an unauthenticated
     # endpoint is an oracle; /v1/auth/register is the single place that reports
@@ -95,6 +99,7 @@ def main [] {
         $failed = 1
     }
 
+    # SPEC-3.19.5
     # -- F10: every external base image is pinned by digest -------------------
     # `scratch` is a pseudo-image with no manifest, and a bare stage name (e.g.
     # `FROM chef AS builder`) refers to an earlier stage in the same file;
@@ -118,6 +123,7 @@ def main [] {
         }
     }
 
+    # SPEC-3.19.6
     if $failed != 0 {
         print --stderr ""
         print --stderr "One or more BUNYIP-426 security invariants regressed. See the finding notes in"

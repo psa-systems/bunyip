@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.40: one group per application via nullable group_id.
 /// A user-facing grouping of applications (BUNYIP-100). Applications reference a
 /// group through the nullable `applications.group_id` FK; one group per app.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -20,6 +21,7 @@ pub struct ApplicationGroup {
     pub updated_at: DateTime<Utc>,
 }
 
+// SPEC-7.2.41: create payload.
 /// Data for creating an application group (admin only).
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateApplicationGroup {
@@ -31,6 +33,7 @@ pub struct CreateApplicationGroup {
     pub sort_order: Option<i32>,
 }
 
+// SPEC-7.2.41: None leaves the column unchanged.
 /// Data for updating an application group (admin only). Every field is optional;
 /// `None` leaves the existing column unchanged.
 #[derive(Debug, Clone, Deserialize)]
@@ -43,6 +46,7 @@ pub struct UpdateApplicationGroup {
     pub sort_order: Option<i32>,
 }
 
+// SPEC-7.2.42: null or omitted ungroups.
 /// Request body for assigning an application to a group (or clearing it).
 /// `group_id = null` (or omitted) ungroups the application.
 #[derive(Debug, Clone, Deserialize)]

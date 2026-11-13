@@ -54,6 +54,7 @@ fn email(i: usize) -> String {
     )
 }
 
+// SPEC-9.19.10, SPEC-9.19.11
 /// Build the whole template deterministically and pretty-print it (trailing
 /// newline). Fixed input order + serde_json's stable key ordering make the
 /// output byte-stable.
@@ -178,6 +179,7 @@ fn generate() -> String {
     out
 }
 
+// SPEC-9.19.10
 fn main() -> std::io::Result<()> {
     let doc = generate();
     match std::env::args().nth(1) {

@@ -15,6 +15,7 @@ import { routes } from './api';
 // reliably intercept an EventSource, so routing is not enough. Call this on any
 // browser page the suite drives (login flows; the authenticated account-ui specs
 // need it too) BEFORE the first navigation.
+// SPEC-3.38.1
 export async function blockLiveReload(page: Page): Promise<void> {
   await page.addInitScript('try { window.EventSource = undefined; } catch (e) {}');
 }
@@ -33,6 +34,7 @@ export async function blockLiveReload(page: Page): Promise<void> {
 // `E2E_TOTP_SECRET`. The poll uses `/^\/login(\/|$)/` so multi-step flows count
 // as IN /login and the helper only returns once bunyip has actually let us
 // through to a post-login page.
+// SPEC-3.38.2, SPEC-3.38.3
 export async function loginViaHub(page: Page): Promise<void> {
   await blockLiveReload(page); // BUNYIP-168: stop the SSE reload wiping the form
 
@@ -164,6 +166,7 @@ async function submitLoginOnce(page: Page): Promise<'ok' | string | null> {
 // "Too many requests. Please wait N seconds and try again."; parse N and add a
 // 1s cushion for the window boundary, capped at the 60s login window
 // (RateLimitConfig::LOGIN). Defaults to 5s when no count is rendered.
+// SPEC-3.38.2
 function rateLimitBackoffMs(reason: string | null): number | null {
   if (!reason || !/too many|rate.?limit/i.test(reason)) return null;
   const match = reason.match(/(\d+)\s*second/i);
@@ -177,6 +180,7 @@ function rateLimitBackoffMs(reason: string | null): number | null {
 // input/change; bunyip-web submits the native form, which serializes `.value`.
 // Throws loudly if the value cannot be made to stick (so we never submit blank
 // or partial credentials silently).
+// SPEC-3.38.1
 export async function setInputValue(loc: Locator, value: string): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     await loc.evaluate((el, v) => {
@@ -228,6 +232,7 @@ async function readLoginError(page: Page): Promise<string | null> {
 // Compute the current TOTP code from E2E_TOTP_SECRET (RFC 6238, 30s window,
 // 6 digits, SHA-1 - the otplib defaults match bunyip's TOTP module). Fill it
 // into the `/login/2fa` form (field `code`) and submit.
+// SPEC-3.38.4, SPEC-3.38.5
 async function fillTotpStep(page: Page): Promise<void> {
   const form = page.locator('form').first();
   const codeInput = form
@@ -337,6 +342,7 @@ async function fillTotpStep(page: Page): Promise<void> {
 // is looked up inside that menu and by its exact name (BUNYIP-1013): a page-wide
 // substring match also finds the dashboard's "Log out all other devices", which
 // appears once the account holds more than one session.
+// SPEC-3.38.6
 export async function logoutViaHub(page: Page): Promise<void> {
   const menu = page.locator('[data-menu]:not([data-mobile-nav])');
   await menu.locator('summary').click();

@@ -28,6 +28,7 @@ use crate::services::{
 /// A relay request. Every field is required except `html`; a request struct in
 /// bunyip-api keeps its required inputs required so a malformed call still
 /// 400s rather than silently relaying a blank message.
+// SPEC-10.38.1: required inputs stay required
 #[derive(Debug, Deserialize)]
 pub struct RelaySendRequest {
     pub to: String,
@@ -46,6 +47,7 @@ pub struct RelaySendResponse {
 }
 
 impl RelaySendResponse {
+    // SPEC-10.38.4: suppressed is never reported as sent
     fn from_outcome(outcome: RelayOutcome) -> Self {
         match outcome {
             RelayOutcome::Sent { message_id } => Self {
@@ -66,6 +68,7 @@ impl RelaySendResponse {
 /// succeed never spends the failure budget; compare with `>=` for the same
 /// reason the OCI token endpoint does (the increment-oriented `exceeded` would
 /// allow one extra guess).
+// SPEC-10.38.2: read-only, compared with >=
 async fn auth_failures_at_cap(pool: &PgPool, ip_key: &str) -> Result<bool, AppError> {
     let config =
         RateLimitConfigRepository::effective(pool, &RateLimitConfig::MAILER_AUTH_FAILURES).await?;
@@ -77,6 +80,7 @@ async fn auth_failures_at_cap(pool: &PgPool, ip_key: &str) -> Result<bool, AppEr
 ///
 /// A failure to record is logged at `error`, never swallowed: losing the
 /// counter silently removes the only brake in front of the Argon2 verify.
+// SPEC-10.38.2: logged, never swallowed
 async fn record_auth_failure(pool: &PgPool, ip_key: Option<&str>) {
     let Some(ip_key) = ip_key else { return };
     if let Err(e) = RateLimitRepository::check_and_increment(
@@ -94,6 +98,7 @@ async fn record_auth_failure(pool: &PgPool, ip_key: Option<&str>) {
 }
 
 /// POST /v1/mailer/send
+// SPEC-10.38.1, SPEC-10.38.2, SPEC-10.38.3, SPEC-10.38.4: per-app throttle, failure brake before Argon2
 pub async fn relay_send(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -198,6 +203,7 @@ pub async fn relay_send(
 /// `None` when `MAILER_WEBHOOK_SECRET` is unset. `None` makes the endpoint fail
 /// closed, exactly like the Stripe webhook without its signing secret: an
 /// endpoint that cannot verify a signature must never trust a body.
+// SPEC-10.38.5: None fails the webhook closed
 pub struct MailerWebhookSecret(pub Option<String>);
 
 /// What the feedback webhook did with an accepted event.
@@ -218,6 +224,7 @@ pub struct RelayFeedbackResponse {
 /// Internal Server Error, logged at `error`), a missing signature is 401, and a body
 /// that verifies but is malformed is 400. Only a verified, well-formed event
 /// reaches the suppression store.
+// SPEC-10.38.5, SPEC-10.38.6, SPEC-10.38.7: verify before trusting the body
 pub async fn relay_feedback_webhook(
     req: HttpRequest,
     body: web::Bytes,

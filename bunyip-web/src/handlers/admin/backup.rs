@@ -14,11 +14,13 @@ use crate::web::{redirect_cookies, AppState};
 
 use super::with_attachment_hardening;
 
+// SPEC-12.18.5
 /// Upper bound on an uploaded backup file. The bundle embeds each entitled
 /// app's backup, so it can be larger than a form post but is not unbounded.
 /// Matches the API's restore body limit (8 MiB).
 const BACKUP_MAX_UPLOAD_BYTES: usize = 8 * 1024 * 1024;
 
+// SPEC-12.18.1
 /// BUNYIP-561: what the bundle covers, naming the platform from the
 /// admin-managed brand record. Unbranded, it says "the account's own state".
 fn bundle_note(brand_name: &str) -> String {
@@ -30,6 +32,7 @@ fn bundle_note(brand_name: &str) -> String {
     format!("One JSON bundle covering {state} plus each entitled app.")
 }
 
+// SPEC-12.18.1, SPEC-12.18.4
 /// The Integrations "Backup" surface: explains what an account backup contains,
 /// offers a one-click download, and accepts an upload to restore. Reached from
 /// the Backup add-on tile on `/applications`; admin-gated like the other
@@ -91,6 +94,7 @@ fn backup_settings_content(report: Option<&RestoreReport>, error: Option<&str>) 
     }
 }
 
+// SPEC-12.18.6
 /// Render the outcome of a restore.
 fn restore_report_card(r: &RestoreReport) -> Markup {
     html! {
@@ -126,6 +130,7 @@ fn restore_report_card(r: &RestoreReport) -> Markup {
     }
 }
 
+// SPEC-12.18.1
 /// GET /integrations/backup - the Backup add-on settings page.
 pub async fn backup_settings(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -142,6 +147,7 @@ pub async fn backup_settings(State(st): State<AppState>, headers: HeaderMap) -> 
     )
 }
 
+// SPEC-12.18.2, SPEC-12.18.3
 /// GET /integrations/backup/download - stream the account bundle from the API
 /// with its `Content-Disposition` so the browser saves the file. Mirrors
 /// `feedback_export`.
@@ -188,6 +194,7 @@ pub async fn backup_download(State(st): State<AppState>, headers: HeaderMap) -> 
     }
 }
 
+// SPEC-12.18.5
 /// Read the single uploaded `backup` file from a multipart body and parse it as
 /// JSON. Mirrors `read_feedback_multipart`'s field loop.
 async fn read_backup_upload(multipart: &mut Multipart) -> Result<serde_json::Value, String> {
@@ -220,6 +227,7 @@ async fn read_backup_upload(multipart: &mut Multipart) -> Result<serde_json::Val
     }
 }
 
+// SPEC-12.18.5, SPEC-12.18.6
 /// POST /integrations/backup/restore - parse the uploaded bundle and forward it
 /// to the API, then render the resulting report (or an inline error).
 pub async fn backup_restore(

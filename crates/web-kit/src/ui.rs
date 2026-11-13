@@ -4,6 +4,7 @@
 
 use maud::{html, Markup, PreEscaped};
 
+// SPEC-13.13.2: the full icon set; unknown names yield an empty string
 /// Inner SVG markup for a lucide icon name (24x24, stroke=currentColor).
 fn inner(name: &str) -> &'static str {
     match name {
@@ -172,6 +173,7 @@ fn inner(name: &str) -> &'static str {
     }
 }
 
+// SPEC-13.13.3: lets a consumer guard fail on an unknown icon name
 /// Whether `name` resolves to real SVG. `inner()` answers an empty string for
 /// an unknown name, which renders an invisible `<svg>` instead of failing, so
 /// the guards that keep a typo (or a retired Font Awesome name) from shipping
@@ -181,6 +183,7 @@ pub fn icon_is_known(name: &str) -> bool {
     !inner(name).is_empty()
 }
 
+// SPEC-13.13.1, SPEC-13.13.4: unknown name renders an invisible svg; callers must not pass one
 pub fn icon(name: &str, class: &str) -> Markup {
     html! {
         svg class=(class) viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" {
@@ -189,6 +192,7 @@ pub fn icon(name: &str, class: &str) -> Markup {
     }
 }
 
+// SPEC-13.14.2, SPEC-13.14.4: new colour means a new variant, never an extra
 fn variant_classes(variant: &str) -> &'static str {
     match variant {
         "destructive" => "bg-destructive text-destructive-foreground hover:bg-destructive/90",
@@ -216,6 +220,7 @@ fn variant_classes(variant: &str) -> &'static str {
     }
 }
 
+// SPEC-13.14.3: unknown size resolves to the default
 fn size_classes(size: &str) -> &'static str {
     match size {
         // Sits inside a table row, where `sm` is a line taller than the row's
@@ -230,6 +235,7 @@ fn size_classes(size: &str) -> &'static str {
 
 const BTN_BASE: &str = "relative inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50";
 
+// SPEC-13.14.1: base, variant, size, then caller extra
 pub fn button_class(variant: &str, size: &str, extra: &str) -> String {
     format!(
         "{BTN_BASE} {} {} {extra}",
@@ -238,6 +244,7 @@ pub fn button_class(variant: &str, size: &str, extra: &str) -> String {
     )
 }
 
+// SPEC-13.14.5: reason is the visible label because disabled buttons get no tooltip
 /// A disabled/unlaunchable action, its reason stated in the visible label
 /// rather than a `title` attribute or an empty slot (BUNYIP-815). `BTN_BASE`'s
 /// `disabled:pointer-events-none` takes a disabled button out of hit-testing
@@ -250,6 +257,7 @@ pub fn disabled_button(variant: &str, size: &str, extra: &str, reason: &str) -> 
     }
 }
 
+// SPEC-13.15.1: navigation, not an action
 /// The one "return to the parent surface" affordance (BUNYIP-550 F6). Every
 /// surface with a parent renders this, so back navigation is one treatment
 /// instead of the four it had grown (muted text link with a literal arrow,
@@ -266,6 +274,7 @@ pub fn back_link(href: &str, label: &str) -> Markup {
     }
 }
 
+// SPEC-13.15.2, SPEC-13.15.3, SPEC-13.15.4: plain links; param name keeps two pagers independent
 /// Prev/Next pager shared by the admin tables and the two `/settings` lists
 /// (BUNYIP-467 F15). `base` is the path (optionally already carrying query
 /// params) and `param` is the page query key: `page` for the admin tables, and
@@ -285,6 +294,7 @@ pub fn pager(base: &str, param: &str, page: u32, total_pages: i64) -> Markup {
     }
 }
 
+// SPEC-13.15.5: unknown variant resolves to the primary style
 pub fn badge(variant: &str, text: &str) -> Markup {
     let v = match variant {
         "secondary" => "border-transparent bg-secondary text-secondary-foreground",
@@ -299,6 +309,7 @@ pub fn badge(variant: &str, text: &str) -> Markup {
     }
 }
 
+// SPEC-13.16.1: self-submitting switch button
 /// A form-submit toggle switch (BUNYIP-420). The control itself is the submit
 /// button, so a single click posts the flipped value through the enclosing
 /// form. `on` colors the track (primary) and slides the knob right; off is a
@@ -326,6 +337,7 @@ pub fn toggle_switch(on: bool, label: &str) -> Markup {
     }
 }
 
+// SPEC-13.16.2: checkbox-backed; unchecked is absent from the POST
 /// A checkbox-backed toggle switch for a boolean field inside a larger,
 /// explicitly-submitted form (BUNYIP-819 F15). Same visual language and
 /// `role="switch"` / `aria-label` semantics as [`toggle_switch`], but is a
@@ -347,6 +359,7 @@ pub fn toggle_switch_field(id: &str, name: &str, checked: bool, label: &str) -> 
     }
 }
 
+// SPEC-13.17.1, SPEC-13.17.2: bounds a crafted ?error= link; cuts on a char boundary
 /// Cap a banner message before it is rendered. The value is already
 /// Maud-escaped (so this is not an XSS guard); it bounds a hand-crafted
 /// `?ok=` / `?error=` link that stuffs the param with kilobytes of text to blow
@@ -366,6 +379,7 @@ fn clamp_msg(s: &str) -> String {
     s[..end].to_string()
 }
 
+// SPEC-13.17.1, SPEC-13.17.4: destructive banner
 /// Destructive inline error box (replaces the shadcn Alert for error display).
 pub fn error_box(msg: &str) -> Markup {
     html! {
@@ -376,6 +390,7 @@ pub fn error_box(msg: &str) -> Markup {
     }
 }
 
+// SPEC-13.17.3, SPEC-13.17.4: each line is clamped on its own
 /// BUNYIP-516: an [`error_box`] whose parts are rendered as separate lines: a
 /// headline saying what bunyip could not do, an optional cause, and an optional
 /// bunyip-api request id to quote. Each line is clamped on its own, so a
@@ -398,6 +413,7 @@ pub fn error_box_detailed(headline: &str, cause: Option<&str>, reference: Option
     }
 }
 
+// SPEC-13.17.1, SPEC-13.17.4: confirmation banner
 /// Success / confirmation banner, the teal-check counterpart to [`error_box`].
 /// Matches the inline `?ok=` banner the settings page renders, so the
 /// onboarding page can show the same "verification email sent" feedback for a
@@ -411,6 +427,7 @@ pub fn success_box(msg: &str) -> Markup {
     }
 }
 
+// SPEC-13.17.1, SPEC-13.17.4: amber banner for a pending decision
 /// Warning banner: something will happen that the reader may not want, and
 /// they are about to decide. The amber counterpart to [`error_box`], which says
 /// something already went wrong.
@@ -430,6 +447,7 @@ pub fn warning_box(msg: &str) -> Markup {
     }
 }
 
+// SPEC-13.17.5: CTA wrapper only when a CTA is given
 /// BUNYIP-468: the one shared list empty-state - centered column, large muted
 /// icon, muted message, optional CTA below. Every `is_empty()` list branch routes here.
 pub fn empty_state(icon_name: &str, message: &str, cta: Option<Markup>) -> Markup {

@@ -17,12 +17,14 @@ use bunyip_domain::services::provider_status::{
 
 use crate::secrets::{status_report as secrets_status_report, Survey};
 
+// SPEC-9.17.8
 /// The static hosting-profile identifier Bunyip reports. Bunyip has no
 /// `DeploymentMode` equivalent (that concept is Mokosh's); a single stable
 /// string keeps the field uniform across the suite, the same choice
 /// Drillmark made for the same reason.
 pub const HOSTING_PROFILE: &str = "bunyip";
 
+// SPEC-9.17.8
 /// Build Bunyip's own provider-status report from its two existing surveys.
 pub fn own_report(secrets_survey: &Survey, config_stack: &ConfigStack) -> ProviderStatusReport {
     ProviderStatusReport {
@@ -37,6 +39,7 @@ pub fn own_report(secrets_survey: &Survey, config_stack: &ConfigStack) -> Provid
     }
 }
 
+// SPEC-9.17.9
 fn configuration_kind(stack: &ConfigStack) -> ProviderKindReport {
     let report = bunyip_domain::config_providers::status_report(stack);
 
@@ -77,6 +80,7 @@ fn configuration_kind(stack: &ConfigStack) -> ProviderKindReport {
     }
 }
 
+// SPEC-9.17.10
 fn secrets_application_kind(survey: &Survey) -> ProviderKindReport {
     let report = secrets_status_report(survey);
 
@@ -125,6 +129,7 @@ fn secrets_application_kind(survey: &Survey) -> ProviderKindReport {
     }
 }
 
+// SPEC-9.17.11: never omitted
 /// Every remote application in the suite, and the machine credential Bunyip
 /// presents to each. Both Mokosh and Drillmark appear here unconditionally
 /// (BUNYIP-634's "never omitted" rule): an unset URL or credential means a

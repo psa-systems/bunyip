@@ -19,4 +19,5 @@
 //! cascade DEV-515 backed out of. bunyip's only caller logs it via `Display`,
 //! so nothing needed converting.
 
+// SPEC-8.3.1, SPEC-8.3.2, SPEC-8.3.3: behavior lives in dunite-geoip; this is the seam
 pub use dunite_geoip::{GeoIpError, GeoIpService};

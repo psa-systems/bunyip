@@ -31,6 +31,7 @@ use crate::views::layout::{admin_block, admin_block_grid};
 use crate::views::ui::{button_class, error_box, error_box_for, icon};
 use crate::web::{redirect_cookies, AppState};
 
+// SPEC-12.17.6
 /// BUNYIP-560: 2 MiB upload ceiling on the BFF, matching `ImagePolicy::avatar()`
 /// api-side and the `branding_assets` size CHECK. The API re-validates type,
 /// size and dimensions; rejecting an oversized body here avoids relaying it.
@@ -48,6 +49,7 @@ struct AssetSlot {
     empty: &'static str,
 }
 
+// SPEC-12.17.5
 const ASSET_SLOTS: &[AssetSlot] = &[
     AssetSlot {
         slot: "mark",
@@ -72,6 +74,7 @@ const ASSET_SLOTS: &[AssetSlot] = &[
     },
 ];
 
+// SPEC-12.17.4
 /// The upload / clear / preview card for one slot.
 fn asset_card(s: &AssetSlot, b: &Branding) -> Markup {
     let current = (s.preview_src)(b);
@@ -143,6 +146,7 @@ impl BrandingValues {
     }
 }
 
+// SPEC-12.17.1
 pub(super) fn branding_content(
     data: Result<&Branding, &ApiError>,
     values: &BrandingValues,
@@ -249,6 +253,7 @@ pub(super) fn branding_content(
     }
 }
 
+// SPEC-12.17.1
 pub async fn branding(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -285,6 +290,7 @@ pub struct BrandingForm {
     pub theme_color_dark: String,
 }
 
+// SPEC-12.17.2: blank is sent so clearing a field actually clears it
 /// The PUT body. Every field is sent every time, blank included: the record has
 /// no "leave it alone" semantics, because clearing a field is the way to remove
 /// its markup. Pure, so it is unit-testable.
@@ -301,6 +307,7 @@ pub(super) fn branding_update_body(f: &BrandingForm) -> serde_json::Value {
     })
 }
 
+// SPEC-12.17.3
 pub async fn branding_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -334,6 +341,7 @@ pub async fn branding_save(
     admin_response(&c, &user, "/admin/branding", "Branding", content)
 }
 
+// SPEC-12.17.6
 /// BUNYIP-560: read the single uploaded `asset` file (filename, declared
 /// content-type, bytes). Mirrors `dashboard::read_avatar_upload`'s field loop;
 /// the declared MIME is advisory, since bunyip-api sniffs the real type from
@@ -369,6 +377,7 @@ async fn read_asset_upload(multipart: &mut Multipart) -> Result<(String, String,
     }
 }
 
+// SPEC-12.17.7, SPEC-12.17.8
 /// Re-render the Branding page with an inline error, for an asset upload or
 /// clear failure. There is no submitted text to echo here (a file input is
 /// never repopulated by the browser on redisplay), so this reads the
@@ -388,6 +397,7 @@ async fn branding_error_page(
     admin_response(c, user, "/admin/branding", "Branding", content)
 }
 
+// SPEC-12.17.5, SPEC-12.17.6, SPEC-12.17.7
 /// POST /admin/branding/assets/{slot} - upload (or replace) one brand image.
 ///
 /// A failure at either hop (an unreadable body here, a rejected image there)
@@ -431,6 +441,7 @@ pub async fn branding_asset_upload(
     }
 }
 
+// SPEC-12.17.5, SPEC-12.17.8
 /// POST /admin/branding/assets/{slot}/clear - remove one brand image.
 pub async fn branding_asset_clear(
     State(st): State<AppState>,

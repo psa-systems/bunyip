@@ -22,6 +22,7 @@ use dunite_mailer::{normalize_address, SuppressionList, SuppressionReason, MAX_A
 
 use crate::errors::AppError;
 
+// SPEC-8.26.1
 /// Re-export the header name from the shared dunite leaf so this crate and
 /// the handler reading `req.headers().get(...)` reference one source of
 /// truth (DUNITE-22). The value is still `"X-Webhook-Signature"`.
@@ -46,6 +47,7 @@ pub struct FeedbackOutcome {
     pub reason: SuppressionReason,
 }
 
+// SPEC-8.26.2: one uniform refusal, no branch leaked
 /// Verify an `X-Webhook-Signature` HMAC-SHA256 hex digest over the exact body
 /// bytes, in constant time.
 ///
@@ -59,6 +61,7 @@ pub fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> Resul
         .map_err(|_| AppError::Unauthorized)
 }
 
+// SPEC-8.26.3: verify before parse
 /// Verify, parse, and apply one signed feedback event: on success the recipient
 /// is on the shared suppression list and the returned [`FeedbackOutcome`] names
 /// what changed.
@@ -75,9 +78,11 @@ pub async fn ingest_feedback(
 ) -> Result<FeedbackOutcome, AppError> {
     verify_signature(secret, body, signature_hex)?;
 
+    // SPEC-8.26.4
     let event: FeedbackEvent = serde_json::from_slice(body)
         .map_err(|_| AppError::validation("body", "Invalid feedback event JSON"))?;
 
+    // SPEC-8.26.5
     let reason = SuppressionReason::parse(&event.event).ok_or_else(|| {
         AppError::validation(
             "event",
@@ -85,6 +90,7 @@ pub async fn ingest_feedback(
         )
     })?;
 
+    // SPEC-8.26.6
     let address = normalize_address(&event.recipient);
     if address.is_empty() {
         return Err(AppError::validation(
@@ -99,6 +105,7 @@ pub async fn ingest_feedback(
         ));
     }
 
+    // SPEC-8.26.7, SPEC-8.26.8
     store
         .suppress(&address, reason, event.detail.as_deref())
         .await

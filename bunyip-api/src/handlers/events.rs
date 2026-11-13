@@ -23,6 +23,7 @@ use crate::middleware::AuthenticatedUser;
 /// `GET /v1/events` - streams `text/event-stream` (per-user + global events,
 /// merged, with keepalive) for the signed-in user. The body ends when the
 /// client disconnects.
+// SPEC-10.27.1: authenticated SSE, exempt from compression
 pub async fn events_stream(
     _req: HttpRequest,
     user: AuthenticatedUser,

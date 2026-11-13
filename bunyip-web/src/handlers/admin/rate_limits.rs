@@ -30,6 +30,7 @@ pub struct RateLimitsQuery {
     pub window: Option<String>,
 }
 
+// SPEC-12.13.1
 fn normalize_window(raw: Option<&str>) -> &'static str {
     match raw.unwrap_or("1h") {
         "6h" => "6h",
@@ -46,6 +47,7 @@ fn window_label(window: &str) -> &'static str {
     }
 }
 
+// SPEC-12.13.4
 /// Format a `retry_after` second count as a compact "retry in" label
 /// (e.g. `2m 5s`, `45s`). Zero (or a window that has just elapsed) reads as
 /// "any moment", since the throttle clears on the next request.
@@ -64,6 +66,7 @@ pub(super) fn fmt_retry_secs(secs: u64) -> String {
     }
 }
 
+// SPEC-12.13.3
 /// Render one active throttle row: the subject (resolved user email, else the
 /// source IP, else the raw key), the throttled action, the count vs cap, the
 /// window start and the computed retry-in, plus a Reset button that POSTs the
@@ -110,11 +113,13 @@ pub(super) fn rate_limit_row(rl: &AdminRateLimit, return_user: Option<&str>) -> 
     }
 }
 
+// SPEC-12.13.6
 /// Bounds on an admin-set limit, mirroring the API's validation so the input
 /// refuses out-of-range values before the round-trip.
 const MAX_LIMIT_REQUESTS: i32 = 1_000_000;
 const MAX_LIMIT_WINDOW_SECS: i64 = 604_800; // 7 days
 
+// SPEC-12.13.4
 /// Format a window length as a compact label (`60s`, `10m`, `1h`).
 pub(super) fn fmt_window_secs(secs: i64) -> String {
     if secs % 3600 == 0 && secs >= 3600 {
@@ -126,6 +131,7 @@ pub(super) fn fmt_window_secs(secs: i64) -> String {
     }
 }
 
+// SPEC-12.13.6
 /// Render one configurable limit (BUNYIP-413): the action, its effective
 /// cap/window as editable fields, and (when a persisted override is in force)
 /// what the bootstrap default was plus a button to revert to it.
@@ -182,6 +188,7 @@ fn rate_limit_config_row(cfg: &AdminRateLimitConfig, editable: bool) -> Markup {
     }
 }
 
+// SPEC-12.13.6
 /// The "limit configuration" card (BUNYIP-413): every enforced action with its
 /// cap and window, editable by the super admin. `reachable` distinguishes an
 /// API that could not be reached from a genuinely empty list.
@@ -217,6 +224,8 @@ pub(super) fn rate_limit_config_card(
     }
 }
 
+// SPEC-12.13.1, SPEC-12.13.2, SPEC-12.13.3, SPEC-12.13.11:
+// one overview call keeps a render inside the diagnostics budget
 /// Admin rate-limit view (BUNYIP-317): the currently-active throttles surfaced
 /// by the BUNYIP-315 endpoint, each resettable in place via the BUNYIP-316
 /// endpoint, plus the configurable caps and windows themselves (BUNYIP-413).
@@ -368,6 +377,7 @@ fn past_throttle_row(h: &AdminRateLimitHistory) -> Markup {
     }
 }
 
+// SPEC-12.13.11
 /// Past-throttles section: a 24h log of fired-and-expired events, so an
 /// operator looking at the admin page an hour after a 429 can still
 /// investigate what fired. Hidden entirely if the fetch failed with the
@@ -401,6 +411,7 @@ fn past_throttles_card(history: &[AdminRateLimitHistory], error: Option<&ApiErro
     }
 }
 
+// SPEC-12.13.10
 /// Server-rendered SVG sparkline. Draws one bar per bucket (status.claude.com
 /// shape, not a line), colored "normal" by default and switching to the
 /// warning tint when the bar's count crosses `limit`. Uses theme tokens via
@@ -464,6 +475,7 @@ fn all_err(traffic: &[(String, Result<AdminRateLimitTraffic, ApiError>)]) -> Opt
     traffic.first().and_then(|(_, res)| res.as_ref().err())
 }
 
+// SPEC-12.13.2, SPEC-12.13.10
 /// Traffic card: configured limit + sparkline per bucket, with a 1h/6h/1d
 /// time-range toggle at the top. One row per `RateLimitConfig::ALL` action
 /// so the unauthenticated and authenticated API buckets are both visible.
@@ -589,6 +601,7 @@ pub struct RateLimitResetForm {
     pub return_user: Option<String>,
 }
 
+// SPEC-12.13.5: the return target is always a local admin path
 /// Reset one active throttle (BUNYIP-317), then redirect back to the originating
 /// view (the user-detail page when `return_user` is set, else the list) with a
 /// success/error toast. AdminUser-guarded; the reset is audited on the API.
@@ -624,6 +637,7 @@ pub struct RateLimitConfigForm {
     pub window_seconds: String,
 }
 
+// SPEC-12.13.7
 /// Create or update the persisted override for one action (BUNYIP-413), then
 /// redirect back to the list with a toast. Super-admin-only, enforced again by
 /// the API, which validates and audits the change.
@@ -670,6 +684,7 @@ pub struct RateLimitConfigResetForm {
     pub action: String,
 }
 
+// SPEC-12.13.8
 /// Drop the persisted override for one action (BUNYIP-413), reverting it to the
 /// bootstrap default, then redirect back with a toast. Super-admin-only.
 pub async fn rate_limit_config_reset(
@@ -696,6 +711,7 @@ pub async fn rate_limit_config_reset(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.13.2: failed and empty stay distinct
 /// Close to the Limit card: for each action with at least one row near the
 /// cap, show a subheading and up to five "subject - count/cap" rows. An
 /// empty approaching list across every action still renders the card with
@@ -791,6 +807,7 @@ fn whitelist_row(e: &AdminRateLimitWhitelistEntry) -> Markup {
     }
 }
 
+// SPEC-12.13.9, SPEC-12.13.11
 /// The whitelist card. Renders current entries + an Add form; empty state
 /// explains the mechanism rather than showing a bare "no entries".
 fn whitelist_card(entries: &[AdminRateLimitWhitelistEntry], error: Option<&ApiError>) -> Markup {
@@ -846,6 +863,7 @@ pub struct RateLimitWhitelistAddForm {
     pub reason: String,
 }
 
+// SPEC-12.13.9
 /// Add one principal to the whitelist, then redirect back to the rate-limits
 /// page with a toast. AdminUser-guarded; the add is audited on the API.
 pub async fn rate_limit_whitelist_add(
@@ -878,6 +896,7 @@ pub struct RateLimitWhitelistRemoveForm {
     pub id: String,
 }
 
+// SPEC-12.13.9
 /// Remove one whitelist entry by id, then redirect back with a toast.
 /// AdminUser-guarded; the remove is audited on the API.
 pub async fn rate_limit_whitelist_remove(

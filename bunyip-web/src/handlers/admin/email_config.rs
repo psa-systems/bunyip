@@ -79,6 +79,7 @@ impl EmailSettingsValues {
     }
 }
 
+// SPEC-12.14.1: secrets are write-only and never reach the browser
 pub(super) fn email_settings_content(
     cfg: Result<&crate::api::types::EmailConfigResponse, &ApiError>,
     values: &EmailSettingsValues,
@@ -211,6 +212,7 @@ pub(super) fn email_settings_content(
     }
 }
 
+// SPEC-12.14.1
 pub async fn email(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -259,6 +261,7 @@ pub struct EmailSettingsForm {
     pub imap_enabled: String,
 }
 
+// SPEC-12.14.2, SPEC-12.14.3: blank fields are omitted so the stored value is kept
 /// Build the PUT body from the submitted form. `enabled` and `smtp_tls` (both
 /// from `<select>`s) are always sent; the SMTP port is validated when present;
 /// every other field is sent only when non-blank so an untouched field leaves
@@ -324,6 +327,7 @@ pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Val
     Ok(serde_json::Value::Object(body))
 }
 
+// SPEC-12.14.4
 pub async fn email_save(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -352,6 +356,7 @@ pub async fn email_save(
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
+// SPEC-12.14.5
 /// POST /admin/email/test - BUNYIP-433. Run the SMTP "Test connection" probe
 /// against the saved settings and re-render the email page with a banner naming
 /// the outcome (and, on failure, the stage that failed). No mail is sent.
@@ -384,6 +389,7 @@ pub async fn email_test(State(st): State<AppState>, headers: HeaderMap) -> Respo
     admin_response(&c, &user, "/admin/email", "Email", content)
 }
 
+// SPEC-12.14.6
 /// BUNYIP-508: the banner for a "Test email" attempt. Pure so both outcomes
 /// (including a failed send arriving as a 200 with `ok: false`) are testable
 /// without an API. A rate-limit (429) or transport error arrives as `Err` and
@@ -398,6 +404,7 @@ pub(super) fn test_send_banner(
     }
 }
 
+// SPEC-12.14.6
 /// POST /admin/email/test-send - BUNYIP-508. Send a real test message to the
 /// signed-in admin's own address through the saved SMTP settings and re-render
 /// the email page with a banner naming the outcome.

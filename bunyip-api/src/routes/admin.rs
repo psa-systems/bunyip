@@ -8,6 +8,7 @@ use crate::handlers;
 pub fn configure(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/admin")
+            // SPEC-9.28.1: dashboard and status routes
             // Dashboard stats
             .route("/stats", web::get().to(handlers::get_dashboard_stats))
             // System health
@@ -27,6 +28,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/key-health/{key_id}",
                 web::get().to(handlers::get_key_health_by_id),
             )
+            // SPEC-9.28.2: user admin routes
             // User management
             .route("/users", web::get().to(handlers::list_users))
             .route("/users/{user_id}", web::get().to(handlers::get_user))
@@ -72,6 +74,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/users/{user_id}/tier",
                 web::post().to(handlers::set_user_tier),
             )
+            // SPEC-9.28.3: entitlement routes
             // Per-product entitlements (BUNYIP-39)
             .route(
                 "/users/{user_id}/entitlements",
@@ -97,6 +100,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications/{slug}/stripe-prices",
                 web::delete().to(handlers::remove_price_mapping),
             )
+            // SPEC-9.28.3: membership routes
             // Membership management
             .route("/memberships", web::get().to(handlers::list_memberships))
             .route(
@@ -107,6 +111,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/memberships/revoke",
                 web::post().to(handlers::revoke_membership),
             )
+            // SPEC-9.28.4: application routes
             // Application management
             .route(
                 "/applications",
@@ -116,6 +121,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications",
                 web::post().to(handlers::create_application),
             )
+            // SPEC-9.27.1, SPEC-9.28.4: literal path must precede {app_id}
             // BUNYIP-473: batch reorder from an explicit id list. A fixed path,
             // registered BEFORE the `/applications/{app_id}` routes so actix
             // never captures "reorder" as an app_id and fails the UUID parse.
@@ -131,6 +137,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications/{app_id}",
                 web::delete().to(handlers::delete_application),
             )
+            // SPEC-9.28.5: docs and group routes
             // BUNYIP-388: per-application documentation (admin authoring).
             .route(
                 "/applications/{app_id}/docs",
@@ -177,6 +184,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/applications/{slug}/oci/refresh",
                 web::post().to(bunyip_oci::handlers::admin_oci::refresh_oci),
             )
+            // SPEC-9.28.6: abuse-control routes follow
             // Account-delete webhook replay (BUNYIP-211)
             .route(
                 "/account-deletes/{user_id}/replay",
@@ -200,6 +208,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/mailer-suppressions/{address}",
                 web::delete().to(handlers::delete_mailer_suppression),
             )
+            // SPEC-9.28.7: rate-limit routes
             // Active rate limits (BUNYIP-315)
             .route("/rate-limits", web::get().to(handlers::list_rate_limits))
             // Past throttle events for the admin page (BUNYIP-893).
@@ -245,16 +254,19 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/rate-limit-configs/{action}",
                 web::delete().to(handlers::delete_rate_limit_config),
             )
+            // SPEC-9.28.8: log routes
             // Audit logs
             .route("/audit-logs", web::get().to(handlers::list_audit_logs))
             // Error log ring buffer (BUNYIP-327)
             .route("/logs", web::get().to(handlers::get_error_logs))
+            // SPEC-9.28.10: seed routes
             // Seed data import / export (PSA-52) + template library (PSA-57)
             .route(
                 "/seed/templates",
                 web::get().to(handlers::list_seed_templates),
             )
             .route("/seed/export", web::get().to(handlers::export_seed_data))
+            // SPEC-9.27.3: 4 MiB payload cap on import only
             // The import body is a whole seed file. Raise the payload cap well
             // above actix's 256 KiB `String`-extractor default - and above the
             // web BFF's 2 MiB form limit - so a large template is never
@@ -264,8 +276,10 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                     .app_data(web::PayloadConfig::new(4 * 1024 * 1024))
                     .route(web::post().to(handlers::import_seed_data)),
             )
+            // SPEC-9.28.9: feedback and support routes
             // Feedback
             .route("/feedback", web::get().to(handlers::list_feedback))
+            // SPEC-9.27.2: literals precede {feedback_id}
             // BUNYIP-919: literal subpath registered before the `{feedback_id}`
             // dynamic route below so it is never captured as an id.
             .route(
@@ -305,6 +319,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/support/tickets/{id}/reply",
                 web::post().to(handlers::reply_to_support_ticket),
             )
+            // SPEC-9.28.11: system configuration routes
             .route("/system-config", web::get().to(handlers::get_system_config))
             .route(
                 "/system-config",
@@ -330,6 +345,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/feedback/{feedback_id}",
                 web::delete().to(handlers::delete_feedback),
             )
+            // SPEC-9.28.13: tenant assignment routes
             // OIDC per-RP user-tenant assignments (BUNYIP-61).
             .route(
                 "/oauth-clients/{client_id}/user-tenants",
@@ -343,6 +359,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/oauth-clients/{client_id}/user-tenants/{assignment_id}",
                 web::delete().to(handlers::unassign_user_tenant),
             )
+            // SPEC-9.28.13: invite routes
             // Admin Invites
             .route("/invites", web::post().to(handlers::create_admin_invite))
             .route("/invites", web::get().to(handlers::list_admin_invites))
@@ -350,12 +367,14 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/invites/{invite_id}",
                 web::delete().to(handlers::revoke_admin_invite),
             )
+            // SPEC-9.28.1: pricing status route
             // BUNYIP-515: why /pricing publishes what it publishes. Admin-only
             // (it names price ids and configuration state) and cache-bypassing.
             .route(
                 "/pricing/status",
                 web::get().to(handlers::admin_pricing_status),
             )
+            // SPEC-9.28.11: tier and settings routes
             // Tier config
             .route("/tier-config", web::get().to(handlers::get_tier_config))
             .route("/tier-config", web::put().to(handlers::update_tier_config))
@@ -367,6 +386,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/tier-settings",
                 web::put().to(handlers::update_tier_settings),
             )
+            // SPEC-9.28.11: feature toggle routes
             // BUNYIP-840: feature toggles. Listing is open to any admin; a flip is super-admin-only and audited.
             .route(
                 "/feature-toggles",
@@ -376,6 +396,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/feature-toggles/{key}",
                 web::put().to(handlers::update_feature_toggle),
             )
+            // SPEC-9.28.11: branding routes
             // Branding (BUNYIP-561): the product name, tagline, meta
             // description and Open Graph image, admin-managed rather than
             // compiled in. A PUT refreshes the api-side cache in the same
@@ -392,10 +413,12 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/branding/assets/{slot}",
                 web::delete().to(handlers::delete_branding_asset),
             )
+            // SPEC-9.28.11: email routes
             // Email config (BUNYIP-351)
             .route("/email", web::get().to(handlers::get_email_config))
             .route("/email", web::put().to(handlers::update_email_config))
             .route("/email/test", web::post().to(handlers::test_email_config))
+            // SPEC-9.27.4, SPEC-9.28.11: replaces the removed test-email route
             // BUNYIP-508: real send to the signed-in admin's own address.
             .route(
                 "/email/test-send",
@@ -422,9 +445,11 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/auto-ban-config",
                 web::put().to(handlers::update_auto_ban_config),
             )
+            // SPEC-9.28.11: stripe config routes
             // Stripe config
             .route("/stripe", web::get().to(handlers::get_stripe_config))
             .route("/stripe", web::put().to(handlers::update_stripe_config))
+            // SPEC-9.28.12: stripe administration routes
             // BUNYIP-532: proactive key permission self-test (read-only).
             .route(
                 "/stripe/permissions",
@@ -486,6 +511,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/stripe/webhooks/{id}",
                 web::delete().to(handlers::delete_stripe_webhook),
             )
+            // SPEC-9.28.13: notification routes
             // Notifications
             .route(
                 "/notifications",
@@ -499,6 +525,7 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/notifications/read-all",
                 web::post().to(handlers::mark_all_notifications_read),
             )
+            // SPEC-9.28.13: key rotation routes
             // Key rotation
             .route(
                 "/key-rotation/{key_id}/status",

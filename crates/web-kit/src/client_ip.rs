@@ -31,6 +31,7 @@ use axum::extract::{ConnectInfo, Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 
+// SPEC-13.5.2, SPEC-13.5.4: request-scoped IP and UA read at the outbound call choke point
 tokio::task_local! {
     /// The end-user IP resolved for the in-flight request, or `None` when the
     /// inbound peer is not a trusted proxy (so nothing may be forwarded).
@@ -45,6 +46,7 @@ tokio::task_local! {
     static CLIENT_UA: Option<String>;
 }
 
+// SPEC-13.5.3: try_with: None outside a request scope, never a panic
 /// The end-user IP resolved for the current request, if any.
 ///
 /// Returns `None` outside a request scope (e.g. a background poll) via
@@ -53,12 +55,14 @@ pub fn current() -> Option<IpAddr> {
     CLIENT_IP.try_with(|ip| *ip).unwrap_or(None)
 }
 
+// SPEC-13.5.3: None outside a request scope, never a panic
 /// BUNYIP-409: the end-user's browser `User-Agent` for the current request, if
 /// any. `None` outside a request scope (never panics).
 pub fn current_ua() -> Option<String> {
     CLIENT_UA.try_with(|ua| ua.clone()).unwrap_or(None)
 }
 
+// SPEC-13.5.1, SPEC-13.5.2: resolve once per request and scope the rest of the stack
 /// Axum middleware: resolve the end-user IP once per request and run the rest
 /// of the stack inside a task-local scope so [`current`] can see it on every
 /// outbound API call the handler makes. The middleware state is the trusted
@@ -84,6 +88,7 @@ pub async fn forward_client_ip(
     // the backend records the real device on the session row. Bounded to 512
     // bytes (the API truncates to 256 anyway) so a crafted oversized header
     // cannot bloat the forwarded request.
+    // SPEC-13.5.4: UA is forwarded without a trust check and capped at 512 chars
     let ua = req
         .headers()
         .get(axum::http::header::USER_AGENT)
@@ -95,6 +100,8 @@ pub async fn forward_client_ip(
         .await
 }
 
+// SPEC-13.4.1, SPEC-13.4.2, SPEC-13.4.3, SPEC-13.4.4:
+//  forwarded headers count only from a trusted peer; nothing is fabricated
 /// Pure resolution of the end-user IP to forward, factored out for unit tests.
 ///
 /// The forwarded IP is honoured ONLY when `peer_ip` is inside a configured

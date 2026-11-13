@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, RwLock};
 
+// SPEC-7.1.126, SPEC-7.1.132: keys are stable; only these rows can turn a feature on
 /// One admin-managed feature switch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Feature {
@@ -18,9 +19,11 @@ pub enum Feature {
 }
 
 impl Feature {
+    // SPEC-7.1.126: admin-page order
     /// Every registered feature, in admin-page order.
     pub const ALL: &'static [Feature] = &[Feature::Pricing, Feature::TenantHostnames];
 
+    // SPEC-7.1.126: never rename; a rename reads as a new, off feature
     /// The stable key: the `feature_toggles.key` value and the wire name.
     /// Never rename one; a renamed key reads as a new, off feature.
     pub const fn key(self) -> &'static str {
@@ -30,6 +33,7 @@ impl Feature {
         }
     }
 
+    // SPEC-7.1.127: admin row title
     /// The admin page's row title.
     pub const fn label(self) -> &'static str {
         match self {
@@ -38,6 +42,7 @@ impl Feature {
         }
     }
 
+    // SPEC-7.1.127: admin help text
     /// The admin page's help text: what the switch shows or hides.
     pub const fn help(self) -> &'static str {
         match self {
@@ -50,6 +55,7 @@ impl Feature {
         }
     }
 
+    // SPEC-7.1.127: code and logs only
     /// The owning issue, for code and logs only (never user-facing copy).
     pub const fn issue(self) -> &'static str {
         match self {
@@ -58,25 +64,30 @@ impl Feature {
         }
     }
 
+    // SPEC-7.1.128: None for an unknown key
     /// The variant a stored key names, or `None` for a key no variant matches.
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|f| f.key() == key)
     }
 }
 
+// SPEC-7.1.130: warn once per key per process
 /// Unknown keys already warned about, so a stale row warns once per process.
 static WARNED_UNKNOWN_KEYS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
+// SPEC-7.1.131: default is every feature off
 /// The resolved state of every registered feature.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FeatureToggles {
     on: BTreeSet<Feature>,
 }
 
+// SPEC-7.1.131: all off until the first load
 /// The process-wide snapshot bunyip-api reads; all off until the first load.
 pub type FeatureToggleSnapshot = Arc<RwLock<FeatureToggles>>;
 
 impl FeatureToggles {
+    // SPEC-7.1.129, SPEC-7.1.130: no row is off; an unknown key is warned and ignored
     /// Resolve stored `(key, enabled)` rows. No row means off; an unknown key is ignored.
     pub fn from_rows<'a>(rows: impl IntoIterator<Item = (&'a str, bool)>) -> Self {
         let mut on = BTreeSet::new();
@@ -103,10 +114,12 @@ impl FeatureToggles {
         Self { on }
     }
 
+    // SPEC-7.1.129: on only when a row enables it
     pub fn enabled(&self, feature: Feature) -> bool {
         self.on.contains(&feature)
     }
 
+    // SPEC-7.1.131: registered keys only
     /// Every registered key with its state, the shape the public probe publishes.
     pub fn as_map(&self) -> BTreeMap<&'static str, bool> {
         Feature::ALL

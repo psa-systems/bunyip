@@ -36,6 +36,7 @@
 # (BUNYIP-426 F10), so two builds of the same commit cannot pick up different
 # layers and a bump is a deliberate, reviewable edit. Re-resolve a digest with
 # `docker buildx imagetools inspect <ref> --raw | sha256sum` when bumping a tag.
+# SPEC-14.32.1, SPEC-14.32.2, SPEC-14.32.3, SPEC-14.2.2: tag and digest pinned; tag tracks the toolchain pin
 FROM ghcr.io/niceguyit/rust-builder-musl:v1.1.0-rust1.98.1-alpine@sha256:981963a685d7a7e4bde857eb024858cc859b66c6b2d46b71c8424a1c71537e7a AS chef
 WORKDIR /build
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
@@ -48,15 +49,18 @@ ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld" \
 # `.cargo-ok: File exists`. Cargo's own `.package-cache` lock lives outside the
 # mount and cannot serialise them. The api ids differ from bunyip-web's, so the
 # two images still build in parallel.
+# SPEC-14.32.4: per-image id and locked sharing
 RUN --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     cargo install cargo-chef --locked
 
 # ---- Planner: distil the dependency recipe from the manifests ----
+# SPEC-14.32.1: recipe distilled from manifests only
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Builder: cook dependencies, then build the workspace ----
+# SPEC-14.32.1: cook then build
 FROM chef AS builder
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
 ARG CARGO_BUILD_JOBS=default
@@ -71,6 +75,7 @@ ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 # configures an authed mirror when present, in the SAME RUN that touches the
 # network.
 COPY --from=planner /build/recipe.json recipe.json
+# SPEC-14.32.4, SPEC-14.32.5, SPEC-14.32.7: dependency cook, scoped binaries
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
@@ -85,6 +90,7 @@ RUN --mount=type=secret,id=dunite_token \
 # CI passes a fresh BUILD_DATE every build, so an ENV above the cook made that
 # layer uncacheable on all 20 runs measured (BUNYIP-519, governance CI.md
 # "Version stamping"). scripts/check-build-cache-keys.nu gates the ordering.
+# SPEC-14.32.6: must stay below the cook
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown
 ARG BUILD_DATE=unknown
@@ -96,6 +102,7 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 # so this only builds the workspace crates and links the binaries. No stub can
 # leak, so no size guard is needed.
 COPY . .
+# SPEC-14.32.5, SPEC-14.32.7: locked release build
 RUN --mount=type=secret,id=dunite_token \
     --mount=type=cache,id=bunyip-api-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,id=bunyip-api-cargo-git,target=/usr/local/cargo/git,sharing=locked \
@@ -107,12 +114,14 @@ RUN --mount=type=secret,id=dunite_token \
 # ---- Export stage -----------------------------------------------------------
 # `docker buildx build --target export --output type=local,dest=<dir>` extracts
 # just the static binary for release-artifact tarballs.
+# SPEC-14.32.8: binary only
 FROM scratch AS export
 COPY --from=builder /build/target/release/bunyip-api /bunyip-api
 
 # ---- Stage 2: runtime -------------------------------------------------------
 # alpine 3.23 matches the `postgres:18.2-alpine3.23` pin in compose.yml, so the
 # repo validates one Alpine release rather than three (BUNYIP-426 F10).
+# SPEC-14.32.2, SPEC-14.33.1: digest pinned runtime base
 FROM alpine:3.23@sha256:ff7f0c727dd796aa36787bfcd9a64bf35a6ce72a73451b3359fde849b6703d63 AS runtime
 
 ARG GIT_COMMIT=unknown
@@ -123,6 +132,7 @@ WORKDIR /app
 
 # shadow provides usermod/groupmod, which gosu-entrypoint.sh needs for the
 # PUID/PGID remap; gosu is in the alpine 3.23 community repo (BUNYIP-957).
+# SPEC-14.33.1: shadow for usermod, gosu for the drop
 RUN apk add --no-cache ca-certificates tzdata curl gosu shadow
 RUN addgroup -g 1001 appuser && adduser -D -H -u 1001 -G appuser appuser
 
@@ -130,10 +140,12 @@ RUN addgroup -g 1001 appuser && adduser -D -H -u 1001 -G appuser appuser
 # root-phase usermod/groupmod rewrite needs a pristine copy to restore from.
 # Must come after every RUN above that touches /etc (package installs, the
 # appuser group/user creation) and before the ENTRYPOINT runs.
+# SPEC-14.33.2: entrypoint restores /etc from this copy
 RUN cp -a /etc /etc.dist
 
 # Shared, byte-identical entrypoint (BUNYIP-957): never edit it here, edit the
 # copy in the issue/CONTAINER_UID_GID.md and resync both images.
+# SPEC-14.33.3: shared entrypoint, byte-identical across images
 COPY bunyip-api/oci-build/gosu-entrypoint.sh /usr/local/bin/gosu-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/gosu-entrypoint.sh
 
@@ -143,6 +155,7 @@ COPY --from=builder /build/target/release/bunyip-api /app/bunyip-api
 # via `docker compose run --entrypoint /app/bunyip-e2e-bootstrap`. Inert on
 # production: it refuses to run unless BUNYIP_E2E_BOOTSTRAP_ALLOW=true AND
 # ENVIRONMENT is non-production. ENTRYPOINT below is unchanged.
+# SPEC-14.33.3, SPEC-14.33.8: shipped but never the entrypoint
 COPY --from=builder /build/target/release/bunyip-e2e-bootstrap /app/bunyip-e2e-bootstrap
 COPY --from=builder /build/bunyip-api/migrations /app/migrations
 COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
@@ -155,24 +168,29 @@ COPY --from=builder /build/crates/bunyip-domain/templates /app/templates
 # must be appuser-writable (and normally a mounted volume so edits persist
 # across restarts). /app/config is first in DATA_DIRS: it is the volume
 # deployments mount as the primary persistent one (compose.yml config-layer).
+# SPEC-14.33.4: owned so named volumes inherit ownership
 RUN mkdir -p /app/config /var/cache/bunyip-oci /var/cache/bunyip-downloads \
  && chown -R appuser:appuser /app /var/cache/bunyip-oci /var/cache/bunyip-downloads
 
+# SPEC-14.33.7: revision, version and created come from build args
 LABEL org.opencontainers.image.source=https://dev.a8n.run/psa-systems/bunyip \
       org.opencontainers.image.description="Bunyip API (PSA Systems)" \
       org.opencontainers.image.revision=${GIT_COMMIT} \
       org.opencontainers.image.version=${GIT_TAG} \
       org.opencontainers.image.created=${BUILD_DATE}
 
+# SPEC-14.33.5: data dirs list starts with the config dir
 ENV HOST_IP=0.0.0.0 APP_PORT=4401 \
     APP_USER=appuser \
     DATA_DIRS="/app/config /var/cache/bunyip-oci /var/cache/bunyip-downloads"
 EXPOSE 4401
 
+# SPEC-14.33.6: probe the api health route
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl --silent --fail http://localhost:4401/v1/health || exit 1
 
 # Starts as root: gosu-entrypoint.sh remaps appuser to PUID/PGID (or the first
 # data dir's owner), chowns DATA_DIRS and drops to appuser via gosu. A compose
 # `user:` pin skips the remap and chown and runs directly as the pinned uid.
+# SPEC-14.33.5: starts as root, entrypoint drops privileges
 ENTRYPOINT ["/usr/local/bin/gosu-entrypoint.sh", "/app/bunyip-api"]

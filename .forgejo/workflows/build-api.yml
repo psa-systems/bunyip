@@ -8,6 +8,7 @@
 # is the repo root.
 name: Build API image
 
+# SPEC-3.2.1: shared push filter, parity gated by check-publish-triggers
 on:
   workflow_dispatch:
     inputs:
@@ -50,6 +51,7 @@ on:
 # version. The group includes the ref so tag runs are already isolated;
 # gating cancel-in-progress on the ref kind is a second guard against a
 # future group-key change silently taking tags with it.
+# SPEC-3.2.2: never cancel a tag build
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
@@ -59,6 +61,7 @@ jobs:
     name: Build and push API image
     # HEAVY: runs `docker buildx build` of the release image, a full cargo
     # compile inside BuildKit (DEV-769).
+    # SPEC-3.2.3
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
     permissions:
       contents: read
@@ -112,6 +115,7 @@ jobs:
         # act_runner's cache server (needs runner cache.enabled: true).
         uses: https://github.com/crazy-max/ghaction-github-runtime@v3
 
+      # SPEC-3.2.7
       - name: Assert the buildx gha cache backend is usable
         # The one cache condition that IS fatal: without these vars type=gha
         # cannot reach act_runner's cache server at all, and ignore-error=true
@@ -125,6 +129,7 @@ jobs:
           $"REGISTRY_USER=($owner)\n" | save --append $env.GITHUB_ENV
           $"IMAGE_REGISTRY=($env.REGISTRY_PROVIDER)/($owner)\n" | save --append $env.GITHUB_ENV
 
+      # SPEC-3.2.4, SPEC-3.2.5, SPEC-3.2.6: mode comes from the trigger, not git describe
       - name: Resolve publish mode, train and tag
         id: resolve
         run: |
@@ -156,10 +161,12 @@ jobs:
           $"dry_run=($dry_run)\n" | save --append $env.GITHUB_OUTPUT
           print $"mode=($r.mode) train=($r.train) tag=($r.tag) describe=($r.describe) dry_run=($dry_run)"
 
+      # SPEC-3.2.8
       - name: Log in to container registry
         run: |
           ^docker login --username $env.REGISTRY_USER --password $env.REGISTRY_PASSWORD $env.REGISTRY_PROVIDER
 
+      # SPEC-3.2.9, SPEC-3.2.10, SPEC-3.2.11
       - name: Build and push API image
         run: |
           let tag = "${{ steps.resolve.outputs.tag }}"
@@ -199,6 +206,7 @@ jobs:
           # Context is the bunyip repo root (self-contained workspace + dunite git dep).
           ^docker buildx build --progress=plain ...$push_args --cache-from $cache_from ...$build_args ...$tag_args -f bunyip-api/oci-build/Dockerfile . out+err>| tee { save --raw --force buildx-api.log }
 
+      # SPEC-3.2.12: warnings only, never fails the publish
       - name: Report buildkit cache health
         # A cold cache and a healthy one look identical from the exit code, because
         # ignore-error=true swallows the difference. Warn on evicted blobs, a missing
@@ -209,6 +217,7 @@ jobs:
           ./scripts/check-build-cache-health.nu --self-test
           ./scripts/check-build-cache-health.nu --log buildx-api.log
 
+      # SPEC-3.2.13
       - name: Print image URLs
         run: |
           let tag = "${{ steps.resolve.outputs.tag }}"

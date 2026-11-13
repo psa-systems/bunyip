@@ -22,6 +22,7 @@ use crate::web::AppState;
 
 use super::PageQuery;
 
+// SPEC-12.11.5
 /// Render one suppressed-address row: address, reason/detail, when it was
 /// suppressed, and a Remove action.
 fn suppression_row(s: &MailerSuppression) -> Markup {
@@ -49,6 +50,7 @@ fn suppression_row(s: &MailerSuppression) -> Markup {
     }
 }
 
+// SPEC-12.11.5
 /// Mailer suppression list (BUNYIP-834): every address the mailer relay has
 /// stopped sending to, with the reason/detail and a Remove action that lifts
 /// the suppression. AdminUser-guarded like the other admin pages; removal is
@@ -101,6 +103,7 @@ pub async fn mailer_suppressions(
     )
 }
 
+// SPEC-12.11.6
 /// Lift a suppression (BUNYIP-834), then redirect back to the list with a
 /// success/error toast.
 pub async fn mailer_suppression_delete(

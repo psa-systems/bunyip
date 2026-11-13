@@ -91,6 +91,7 @@ impl RateLimitSnapshot {
     }
 
     /// How many actions carry a persisted override.
+    // SPEC-7.3.203
     pub fn overrides(&self) -> usize {
         self.rows.len()
     }
@@ -103,6 +104,7 @@ impl RateLimitSnapshot {
     /// `base` as the declared providers resolve it. An action with no preset
     /// resolves to itself: it has no declared configuration key, so no provider
     /// can hold a value for it and nothing enforces it either.
+    // SPEC-7.3.203
     pub fn effective(&self, base: &RateLimitConfig) -> RateLimitConfig {
         self.resolved.get(base.action).copied().unwrap_or(*base)
     }
@@ -123,6 +125,7 @@ impl RateLimitSnapshot {
 /// `every_generated_rate_limit_key_is_settable` proves), so one is reported at
 /// `error` naming the key: it would mean the family and the registry had
 /// drifted, and the built-in default serves that action until they agree again.
+// SPEC-7.3.205
 pub fn database_provider(rows: &[RateLimitConfigRow]) -> DatabaseProvider {
     let mut provider = DatabaseProvider::new();
     for row in rows {
@@ -158,6 +161,7 @@ pub fn database_provider(rows: &[RateLimitConfigRow]) -> DatabaseProvider {
 /// Freshness window for the override snapshot, matching `PRICING_CACHE_TTL_SECS`.
 /// It bounds only how long a SECOND api process keeps enforcing the previous
 /// cap; the process that took the admin write invalidates its own snapshot.
+// SPEC-7.3.203
 pub const RATE_LIMIT_CONFIG_CACHE_TTL_SECS: u64 = 30;
 
 /// Single-slot TTL cache for the whole `rate_limit_configs` table (BUNYIP-556).
@@ -191,6 +195,7 @@ impl RateLimitConfigCache {
     /// caps the admin actually set), and with no snapshot at all it propagates
     /// the error to the caller, which is the same failure the counter query
     /// beside it would raise anyway.
+    // SPEC-7.3.204
     pub async fn get_or_load<F, Fut>(&self, load: F) -> Result<RateLimitOverrides, AppError>
     where
         F: FnOnce() -> Fut,
@@ -252,6 +257,7 @@ pub struct RateLimitConfigRepository;
 
 impl RateLimitConfigRepository {
     /// Every persisted override, action-ordered.
+    // SPEC-7.3.201
     pub async fn list(pool: &PgPool) -> Result<Vec<RateLimitConfigRow>, AppError> {
         let rows = sqlx::query_as::<_, RateLimitConfigRow>(
             r#"
@@ -266,6 +272,7 @@ impl RateLimitConfigRepository {
     }
 
     /// The persisted override for `action`, if any.
+    // SPEC-7.3.201
     pub async fn get(pool: &PgPool, action: &str) -> Result<Option<RateLimitConfigRow>, AppError> {
         let row = sqlx::query_as::<_, RateLimitConfigRow>(
             r#"
@@ -282,6 +289,7 @@ impl RateLimitConfigRepository {
 
     /// Create or update the override for `action`. `updated_by` is the acting
     /// super admin. Returns the stored row.
+    // SPEC-7.3.202
     pub async fn upsert(
         pool: &PgPool,
         action: &str,
@@ -313,6 +321,7 @@ impl RateLimitConfigRepository {
 
     /// Drop the override for `action`, reverting it to the bootstrap default.
     /// Returns true when a row was actually removed.
+    // SPEC-7.3.202
     pub async fn delete(pool: &PgPool, action: &str) -> Result<bool, AppError> {
         let result = sqlx::query("DELETE FROM rate_limit_configs WHERE action = $1")
             .bind(action)
@@ -335,6 +344,7 @@ impl RateLimitConfigRepository {
     ///
     /// Reads the cached snapshot, never a per-decision `SELECT`: the resolution
     /// itself happened when the snapshot was built, so a decision is a lookup.
+    // SPEC-7.3.203
     pub async fn effective(
         pool: &PgPool,
         base: &RateLimitConfig,

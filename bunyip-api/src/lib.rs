@@ -6,11 +6,13 @@
 //! using `crate::models`, `crate::services`, `crate::errors`, etc. unchanged,
 //! and hosts the main-app `handlers` and `routes` themselves.
 
+// SPEC-9.1.10
 pub use bunyip_domain::{
     config, config_providers, errors, feature_toggles, middleware, models, repositories, responses,
     services, validation,
 };
 
+// SPEC-9.1.11
 pub mod access_log;
 pub mod branding_assets;
 pub mod compress;
@@ -39,10 +41,12 @@ pub mod support_ingest;
 pub mod version;
 
 // Re-export commonly used types
+// SPEC-9.1.10
 pub use config::Config;
 pub use errors::AppError;
 pub use responses::{ApiResponse, ResponseMeta};
 
+// SPEC-9.1.12: single source for the bootstrap bin and the probe
 /// The two seeded E2E account emails (BUNYIP-52 / BUNYIP-163). Single source of
 /// truth shared by the `bunyip-e2e-bootstrap` binary (which seeds exactly these)
 /// and the `GET /e2e-bootstrapped` readiness probe (`routes/health.rs`, which

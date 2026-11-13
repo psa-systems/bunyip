@@ -53,6 +53,7 @@ const FORBIDDEN = [
 const EXEMPTION = 'price-literal-ok:'
 
 # Problems in one Rust source file, as human-readable lines.
+# SPEC-3.28.1, SPEC-3.28.2
 def check-rs [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -76,6 +77,7 @@ def check-rs [path: string]: nothing -> list<string> {
     $problems
 }
 
+# SPEC-3.28.4
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

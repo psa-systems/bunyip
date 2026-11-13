@@ -32,6 +32,7 @@ pub struct PriceMappingRequest {
     pub stripe_price_id: String,
 }
 
+// SPEC-10.4.2, SPEC-10.4.4, SPEC-10.4.8: unknown slug is a 404 before any write.
 /// Resolve a product slug to its id, 404 if unknown.
 async fn resolve_app_id(pool: &PgPool, slug: &str) -> Result<Uuid, AppError> {
     let app = ApplicationRepository::find_by_slug(pool, slug)
@@ -40,6 +41,7 @@ async fn resolve_app_id(pool: &PgPool, slug: &str) -> Result<Uuid, AppError> {
     Ok(app.id)
 }
 
+// SPEC-10.4.1: admin-only read of a user's entitlements.
 /// GET /v1/admin/users/{user_id}/entitlements
 pub async fn list_user_entitlements(
     req: HttpRequest,
@@ -53,6 +55,7 @@ pub async fn list_user_entitlements(
     Ok(success(rows, request_id))
 }
 
+// SPEC-10.4.2, SPEC-10.4.3: verified-admin grant by slug, audited.
 /// POST /v1/admin/users/{user_id}/entitlements
 /// Body: { "slug": "product-slug" }
 pub async fn grant_entitlement(
@@ -84,6 +87,7 @@ pub async fn grant_entitlement(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.4.4: idempotent revoke; audited only when a row was removed.
 /// POST /v1/admin/users/{user_id}/entitlements/revoke
 /// Body: { "slug": "product-slug" }
 pub async fn revoke_entitlement(
@@ -111,6 +115,7 @@ pub async fn revoke_entitlement(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.4.5, SPEC-10.4.6, SPEC-10.4.7: flag flip and member backfill in one transaction.
 /// PUT /v1/admin/applications/{slug}/restricted
 /// Body: { "requires_entitlement": true }
 pub async fn set_application_restricted(
@@ -162,6 +167,7 @@ pub async fn set_application_restricted(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.4.8: add a price mapping.
 /// POST /v1/admin/applications/{slug}/stripe-prices
 /// Body: { "stripe_price_id": "price_..." }
 pub async fn add_price_mapping(
@@ -189,6 +195,7 @@ pub async fn add_price_mapping(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.4.8: remove a price mapping.
 /// DELETE /v1/admin/applications/{slug}/stripe-prices
 /// Body: { "stripe_price_id": "price_..." }
 pub async fn remove_price_mapping(

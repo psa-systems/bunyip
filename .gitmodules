@@ -1,3 +1,4 @@
+# SPEC-14.39.1: shared recipes; justfile fails to parse without it
 [submodule "common"]
 	path = common
 	url = https://dev.a8n.run/psa-systems/common.git

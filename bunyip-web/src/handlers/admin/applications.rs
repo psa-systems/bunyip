@@ -22,6 +22,7 @@ use crate::web::{redirect_cookies, status_cookies, AppState};
 
 use super::application_groups::group_assignment_form;
 
+// SPEC-12.3.1, SPEC-12.3.2, SPEC-12.3.6
 /// One row of the admin Applications list (BUNYIP-473).
 ///
 /// `data-reorder-item` + `data-app-id` mark the row for the reorder script, and
@@ -74,12 +75,14 @@ pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
     }
 }
 
+// SPEC-12.3.6
 /// BUNYIP-742: app-reorder.js's only consumer is this page's
 /// `[data-reorder-list]`, so it ships here instead of the shared head.
 fn reorder_script() -> Markup {
     html! { script src=(crate::views::layout::asset("/assets/js/app-reorder.js")) defer {} }
 }
 
+// SPEC-12.3.8: failures use the server-rendered error channel so they show without JavaScript
 /// Query params on the applications list. `error` is set when a field toggle
 /// (archive/unarchive, maintenance mode) bounces back (BUNYIP-812: matches the
 /// server-rendered `?error=` shape used everywhere else in this file, so a
@@ -89,6 +92,7 @@ pub struct ApplicationsQuery {
     pub error: Option<String>,
 }
 
+// SPEC-12.3.1, SPEC-12.1.8
 pub async fn applications(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -138,6 +142,7 @@ pub struct AppFieldForm {
     pub field: String,
     pub value: String,
 }
+// SPEC-12.3.4
 pub async fn application_field(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -204,6 +209,7 @@ pub(super) struct DetailsView<'a> {
     pub(super) maintenance_message: &'a str,
 }
 
+// SPEC-12.4.9: an unchecked box is absent from the form body
 /// An HTML checkbox submits its value only when checked, so an unchecked box is
 /// absent from the form body (serde default `""`). Treat the standard checked
 /// markers as true.
@@ -247,6 +253,7 @@ fn distribution_fields(v: &DistView) -> Markup {
     }
 }
 
+// SPEC-12.3.3: mirrors the domain predicates so badges match what users see
 /// At-a-glance visibility of an application across the three distribution
 /// surfaces shown in the admin UI. Each field MIRRORS the canonical predicate
 /// in `bunyip-domain` (`crates/bunyip-domain/src/models/application.rs`) so the
@@ -302,6 +309,7 @@ fn surface_badge(on: bool, on_variant: &str, on_label: &str, off_label: &str) ->
     }
 }
 
+// SPEC-12.3.3
 /// The Hub / Binary / OCI surface badges for one application. Rendered on the
 /// admin Applications list and the edit page so an admin can see at a glance
 /// which surfaces an app is (and is not) served in.
@@ -315,6 +323,7 @@ fn surface_tags(s: &SurfaceVisibility) -> Markup {
     }
 }
 
+// SPEC-12.4.1
 /// Render the application create/edit form. `identity` is `Some` only for
 /// create (the edit form posts distribution fields only). `surfaces` is `Some`
 /// only on the edit page of a persisted app, where the Hub/Binary/OCI badges
@@ -406,6 +415,7 @@ fn details_view_from_dist_form(f: &DistributionForm) -> DetailsView<'_> {
     }
 }
 
+// SPEC-12.4.3, SPEC-12.4.7: blank detail fields are omitted so the API keeps the stored value
 /// Add every non-empty descriptive field (`DetailsView` columns) to an update /
 /// create body, trimmed. Empty inputs are omitted so the backend keeps the
 /// existing column (its UPDATE COALESCEs a NULL to the old value), matching the
@@ -435,6 +445,7 @@ fn insert_detail_fields(
     }
 }
 
+// SPEC-12.4.7: forgejo_package is always sent so an empty value clears it
 /// Body for PUT /admin/applications/{id}: set every non-empty distribution
 /// field. Empty inputs are omitted so the backend keeps the existing column
 /// (its UPDATE COALESCEs a NULL to the old value), EXCEPT `forgejo_package`,
@@ -524,6 +535,7 @@ pub struct AppEditQuery {
     pub error: Option<String>,
 }
 
+// SPEC-12.4.5: a failed list fetch is told apart from a missing application
 pub async fn application_edit(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -618,6 +630,7 @@ pub async fn application_edit(
     )
 }
 
+// SPEC-12.4.6
 /// Danger zone on the edit page: hard-delete the application. Mirrors the
 /// account self-delete UI; the API requires the admin's password + 2FA code, so
 /// both fields are collected and posted to the delete handler.
@@ -642,6 +655,7 @@ fn app_danger_zone(id: &str, error: Option<&str>) -> Markup {
     }
 }
 
+// SPEC-12.4.8
 /// POST /admin/applications/{id}/distribution
 pub async fn application_distribution_save(
     State(st): State<AppState>,
@@ -687,6 +701,7 @@ pub struct ReorderForm {
     pub ordered_ids: Vec<String>,
 }
 
+// SPEC-12.3.5: bare status because the client script calls it with fetch
 /// POST /admin/applications/reorder
 /// Persist a new application display order from the drag-and-drop / keyboard
 /// reorder control (BUNYIP-473). Called by `fetch`, so it returns a bare status
@@ -716,6 +731,7 @@ pub struct DeleteAppForm {
     pub totp_code: String,
 }
 
+// SPEC-12.3.7
 /// POST /admin/applications/{id}/delete
 pub async fn application_delete(
     State(st): State<AppState>,
@@ -796,6 +812,7 @@ pub struct CreateAppForm {
     pub is_hosted: String,
 }
 
+// SPEC-12.4.2, SPEC-12.4.3: slug ends up in OCI pull paths, so it is checked at the edge
 /// Body for POST /admin/applications: required identity fields plus every
 /// non-empty distribution field. Empty distribution inputs are omitted (a new
 /// row has nothing to clear, and an empty string would fail backend
@@ -850,6 +867,7 @@ pub(super) fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, St
     Ok(serde_json::Value::Object(m))
 }
 
+// SPEC-12.4.1
 /// GET /admin/applications/new
 pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -895,6 +913,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
     admin_response(&c, &user, "/admin/applications", "New application", content)
 }
 
+// SPEC-12.4.4
 /// POST /admin/applications
 pub async fn application_create(
     State(st): State<AppState>,
@@ -970,6 +989,7 @@ pub struct DocForm {
     pub sort_order: String,
 }
 
+// SPEC-12.5.2
 /// The four docs-editor fields, shared by the per-page edit form and the add
 /// form (`None` renders the empty add form).
 ///
@@ -1013,6 +1033,7 @@ pub struct AppDocsQuery {
     pub error: Option<String>,
 }
 
+// SPEC-12.5.1
 /// GET /admin/applications/{id}/docs - manage an app's documentation pages.
 pub async fn application_docs(
     State(st): State<AppState>,
@@ -1096,6 +1117,7 @@ pub async fn application_docs(
     )
 }
 
+// SPEC-12.5.3, SPEC-12.5.4
 /// POST /admin/applications/{id}/docs - create a page, then back to the manager.
 pub async fn application_doc_create(
     State(st): State<AppState>,
@@ -1139,6 +1161,7 @@ pub async fn application_doc_create(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.5.3, SPEC-12.5.4
 /// POST /admin/applications/{id}/docs/{doc_id} - update a page.
 pub async fn application_doc_update(
     State(st): State<AppState>,
@@ -1182,6 +1205,7 @@ pub async fn application_doc_update(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.5.5
 /// POST /admin/applications/{id}/docs/{doc_id}/delete - delete a page.
 pub async fn application_doc_delete(
     State(st): State<AppState>,

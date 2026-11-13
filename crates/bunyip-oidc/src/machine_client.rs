@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::errors::AppError;
 use crate::services::OAuthClient;
 
+// SPEC-5.35.3: entitlement checked after the secret
 /// The grant a registration must list to be allowed at a machine endpoint.
 ///
 /// `oauth_clients.allowed_grant_types` is the existing per-client opt-in
@@ -30,6 +31,7 @@ use crate::services::OAuthClient;
 /// these endpoints, even holding a valid secret.
 pub const MACHINE_GRANT: &str = "client_credentials";
 
+// SPEC-5.35.1
 /// `(client_id, client_secret)` from an HTTP Basic `Authorization` header.
 ///
 /// Returns `None` when the header is absent, is not `Basic`, does not decode,
@@ -53,6 +55,7 @@ pub fn basic_credentials(req: &HttpRequest) -> Option<(String, String)> {
     ))
 }
 
+// SPEC-5.35.2
 /// Load the registration behind `client_id`, or fail as an unknown client.
 ///
 /// Takes the pool, not an `OidcProvider`: authenticating a calling app needs the
@@ -72,6 +75,7 @@ pub async fn load_machine_client(pool: &PgPool, client_id: &str) -> Result<OAuth
         .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))
 }
 
+// SPEC-5.35.4
 /// Hash a client secret for storage in `oauth_clients.client_secret_hash`.
 ///
 /// The counterpart to [`verify_machine_client`], so provisioning a machine
@@ -93,6 +97,7 @@ pub async fn hash_client_secret(secret: &str) -> Result<String, AppError> {
     .await
 }
 
+// SPEC-5.35.3: secret first so 403 is no existence oracle
 /// Verify a machine caller against an already-loaded registration.
 ///
 /// Split from [`load_machine_client`] so the credential and entitlement rules

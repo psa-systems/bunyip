@@ -9,6 +9,7 @@ use crate::models::mirzam::{MirzamConfigRow, MirzamSettings};
 pub struct MirzamConfigRepository;
 
 impl MirzamConfigRepository {
+    // SPEC-7.3.141
     pub async fn get(pool: &PgPool) -> Result<MirzamConfigRow, AppError> {
         let row = sqlx::query_as::<_, MirzamConfigRow>("SELECT * FROM mirzam_config WHERE id = 1")
             .fetch_one(pool)
@@ -19,6 +20,7 @@ impl MirzamConfigRepository {
     /// Replace the four non-secret settings as an operator edit. The token
     /// columns are left alone: the token is written through the governed-secret
     /// path.
+    // SPEC-7.3.142
     pub async fn update_settings(
         pool: &PgPool,
         settings: &MirzamSettings,
@@ -49,6 +51,7 @@ impl MirzamConfigRepository {
 
     /// Write the encrypted API token (ciphertext + nonce) under `key_version`
     /// as an operator edit.
+    // SPEC-7.3.143
     pub async fn update_api_token(
         pool: &PgPool,
         api_token: &[u8],
@@ -79,6 +82,7 @@ impl MirzamConfigRepository {
     /// Rewrite the stored API token under a new key version (re-encrypt,
     /// `secrets-migrate` and settings-import passes), touching nothing else and
     /// claiming no operator edit.
+    // SPEC-7.3.143
     pub async fn update_api_token_encryption(
         pool: &PgPool,
         api_token: &[u8],
@@ -105,6 +109,7 @@ impl MirzamConfigRepository {
 
     /// Record a sync call that ran out of attempts (BUNYIP-998). Runtime
     /// state, so `updated_at` / `updated_by` (the operator-edit stamp) stay.
+    // SPEC-7.3.144
     pub async fn record_sync_error(pool: &PgPool, error: &str) -> Result<(), AppError> {
         sqlx::query("UPDATE mirzam_config SET last_error = $1, last_error_at = NOW() WHERE id = 1")
             .bind(error)
@@ -115,6 +120,7 @@ impl MirzamConfigRepository {
 
     /// Clear the recorded failure after a sync call succeeded. A no-op write
     /// when nothing is recorded, which is the common case.
+    // SPEC-7.3.144
     pub async fn clear_sync_error(pool: &PgPool) -> Result<(), AppError> {
         sqlx::query(
             "UPDATE mirzam_config SET last_error = NULL, last_error_at = NULL \

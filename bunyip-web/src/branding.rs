@@ -27,10 +27,12 @@ use crate::api::types::Branding;
 use crate::api::{ok_data, parse, Api, ApiError};
 use crate::web::AppState;
 
+// SPEC-11.5.6
 /// How often the BFF re-reads `/v1/branding`. An admin edit is visible within
 /// one interval; that is documented rather than worked around.
 pub const BRANDING_REFRESH_SECS: u64 = 60;
 
+// SPEC-11.5.5, SPEC-2.3.1
 /// Cap on the startup fetch. Short: an unreachable API must not hold the
 /// listener closed, it must serve unbranded and keep retrying.
 pub const BRANDING_STARTUP_TIMEOUT_SECS: u64 = 5;
@@ -47,12 +49,14 @@ pub enum BrandingSource {
     UnbrandedOnError,
 }
 
+// SPEC-11.5.1
 /// Last-good branding. `None` until the first successful fetch, which renders
 /// as fully unbranded chrome rather than as bunyip's old literals.
 pub struct BrandingCache {
     slot: RwLock<Option<Arc<Branding>>>,
 }
 
+// SPEC-11.5.1, SPEC-11.5.3: the default is empty, never a compiled-in name.
 /// The unbranded value every reader shares before anything has been loaded.
 fn unbranded() -> Arc<Branding> {
     static UNBRANDED: OnceLock<Arc<Branding>> = OnceLock::new();
@@ -82,6 +86,7 @@ impl BrandingCache {
         *self.slot.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(branding));
     }
 
+    // SPEC-11.5.2: stale kept on failure; error when nothing is cached, warn otherwise.
     /// Fetch and publish, keeping the last good values on failure.
     ///
     /// A failure is never silent and never substitutes copy: the first one
@@ -142,6 +147,7 @@ impl Default for BrandingCache {
 /// The process-wide cache `views::layout` renders from.
 static BRANDING: BrandingCache = BrandingCache::new();
 
+// SPEC-11.5.1, SPEC-11.5.3
 /// The branding every page renders. Unbranded until the first fetch lands.
 pub fn current() -> Arc<Branding> {
     BRANDING.get()
@@ -153,12 +159,14 @@ pub fn install(branding: Branding) {
     BRANDING.install(branding);
 }
 
+// SPEC-11.5.4
 /// `GET /v1/branding` - public, unauthenticated, enveloped like every other
 /// endpoint except `/v1/pricing`.
 pub async fn fetch(api: &Api) -> Result<Branding, ApiError> {
     parse(api.get("/branding", None).await?)
 }
 
+// SPEC-11.5.5, SPEC-2.3.1: a timeout is a logged failure, not an abort.
 /// One blocking fetch before the listener binds, so the very first page render
 /// already carries the brand. A timeout is a failure like any other: it is
 /// logged and the process serves unbranded while the refresh task retries.
@@ -186,6 +194,7 @@ pub async fn load_at_startup(api: &Api) {
     BRANDING.refresh(fetch_with_timeout).await;
 }
 
+// SPEC-11.5.6
 /// Background refresh, so an admin edit reaches the pages without a redeploy.
 pub fn spawn_refresh(api: Api) {
     tokio::spawn(async move {
@@ -196,6 +205,7 @@ pub fn spawn_refresh(api: Api) {
     });
 }
 
+// SPEC-11.5.7
 /// `GET /v1/admin/branding` - the saved record behind the admin form. The
 /// response carries `updated_at` / `updated_by` too; the form does not render
 /// them, and serde ignores what it does not read.
@@ -203,6 +213,7 @@ pub async fn admin_get(api: &Api, cookie: Option<&str>) -> Result<Branding, ApiE
     parse(api.get("/admin/branding", cookie).await?)
 }
 
+// SPEC-11.5.7
 /// `PUT /v1/admin/branding`. A rejected save arrives as a 4xx whose per-field
 /// message the form renders verbatim (BUNYIP-506: a 5xx would be collapsed into
 /// the generic line, and the admin would never learn which field was wrong).
@@ -211,6 +222,7 @@ pub async fn admin_update(api: &Api, cookie: Option<&str>, body: Value) -> Resul
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.5.8
 /// BUNYIP-560: upload one brand asset (`mark`, `favicon` or `mascot`). The
 /// bytes are relayed as a multipart file part; bunyip-api sniffs the real type
 /// from content, so the declared `mime` is advisory, and it derives the whole
@@ -241,6 +253,7 @@ pub async fn admin_upload_asset(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.5.8
 /// BUNYIP-560: clear one brand asset slot. Idempotent.
 pub async fn admin_clear_asset(
     api: &Api,
@@ -253,6 +266,7 @@ pub async fn admin_clear_asset(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.5.10
 /// BUNYIP-560: stream one brand asset's bytes for the `/brand/{kind}` BFF
 /// proxy, so the browser loads every brand image from bunyip-web's own origin
 /// (the same shape the avatar proxy uses). No cookie is forwarded: these are
@@ -262,6 +276,7 @@ pub async fn fetch_asset(api: &Api, kind: &str) -> Result<reqwest::Response, Api
         .await
 }
 
+// SPEC-11.5.9: allow-list stops a crafted segment reaching another upstream endpoint.
 /// BUNYIP-560: every asset key the BFF will relay.
 ///
 /// The path segment is interpolated into the upstream URL, and a percent-encoded
@@ -282,6 +297,7 @@ pub const BRAND_ASSET_KINDS: &[&str] = &[
     "apple-touch-icon",
 ];
 
+// SPEC-11.5.9, SPEC-11.5.10, SPEC-11.5.11
 /// GET /brand/{kind} - same-origin proxy of one brand image, so the favicon
 /// links, the nav mark and the hero mascot all load from bunyip-web's own
 /// origin rather than needing the api origin in the CSP.
@@ -325,14 +341,17 @@ pub async fn brand_asset(State(st): State<AppState>, Path(kind): Path<String>) -
     }
 }
 
+// SPEC-11.5.14
 /// The committed favicon the root probe falls back to. Relative to the working
 /// directory, exactly like the `ServeDir` that answers `/assets`.
 const COMMITTED_FAVICON: &str = "assets/favicon.ico";
 
+// SPEC-11.5.10, SPEC-11.5.13
 /// Brand images are relayed with a day-long lifetime; the `?v=` in every
 /// reference is what makes a re-upload visible immediately.
 const BRAND_ASSET_CACHE_CONTROL: &str = "public, max-age=86400";
 
+// SPEC-11.5.10
 /// The upstream `Content-Type`, or `fallback` when the header is absent or not
 /// text. An absent optional header is not a failure; a wrong one would be, and
 /// the api always sets the stored MIME.
@@ -344,6 +363,7 @@ fn relayed_content_type(resp: &reqwest::Response, fallback: &str) -> String {
         .to_string()
 }
 
+// SPEC-11.5.12
 /// Build one image response. A builder failure is logged with its cause rather
 /// than collapsing into a bare 404: every input here is server-controlled, so a
 /// failure is a defect in this file and there would otherwise be no trace of it.
@@ -362,6 +382,7 @@ fn image_response(kind: &str, content_type: String, cache: &str, body: Body) -> 
     }
 }
 
+// SPEC-11.5.13, SPEC-11.5.14
 /// GET /favicon.ico - the root probe browsers issue regardless of the
 /// `<link rel="icon">` tags in `<head>`.
 ///

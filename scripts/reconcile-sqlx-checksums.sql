@@ -30,6 +30,7 @@
 -- IMPORTANT: psql's --single-transaction wraps the whole script in one
 -- transaction. If any block raises, NOTHING commits and the DB is unchanged.
 
+-- SPEC-3.35.1
 \echo '== reconcile starting; --single-transaction means all-or-nothing =='
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -38,6 +39,7 @@
 --    already ran on the live DB; running it again would no-op (columns
 --    already gone). Only the checksum needs reconciling.
 -- ─────────────────────────────────────────────────────────────────────────
+-- SPEC-3.35.2
 UPDATE _sqlx_migrations
    SET checksum = decode('200f652329b161a252e47f1fdd29cace60bbb89dd3ce28fc9fcf4d0955cba8b8315cda3b6d0c646a36b89eebad253a69', 'hex')
  WHERE version = 20260319000025;
@@ -110,6 +112,7 @@ DO $$
 DECLARE
     dup_count INT;
 BEGIN
+    -- SPEC-3.35.3
     SELECT count(*) INTO dup_count FROM (
         SELECT token_hash FROM email_change_requests
          GROUP BY token_hash HAVING count(*) > 1
@@ -263,6 +266,7 @@ DO $$
 DECLARE
     updated_count INT;
 BEGIN
+    -- SPEC-3.35.4
     SELECT count(*) INTO updated_count FROM _sqlx_migrations
      WHERE version IN (
         20260319000025, 20260313000021, 20260605000010, 20241230000014,

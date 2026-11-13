@@ -23,6 +23,7 @@ use crate::errors::AppError;
 use crate::models::stripe::decrypt_secret;
 use crate::services::EncryptionKeySet;
 
+// SPEC-8.34.1
 /// BUNYIP-516: a Stripe restricted-key permission, spelled the way Stripe's own
 /// key editor spells it. The variants are the complete set bunyip's Stripe calls
 /// need, and their labels are the only permission names that reach a user: a
@@ -69,6 +70,7 @@ impl StripePermission {
     }
 }
 
+// SPEC-8.34.7
 /// BUNYIP-532: the outcome of probing one restricted-key permission by making a
 /// harmless read against that resource. `Untested` is not a probe result: it
 /// marks a permission bunyip needs but cannot classify from a bunyip-only call
@@ -89,6 +91,7 @@ pub enum ProbeStatus {
     Untested,
 }
 
+// SPEC-8.34.6
 /// BUNYIP-532: classify a probe read into a [`ProbeStatus`]. Reuses the same
 /// key-rejected / permission-denied predicates BUNYIP-516 uses to build the
 /// reactive error copy, so the proactive test and the reactive message agree on
@@ -116,6 +119,7 @@ pub fn classify_probe<T>(res: &Result<T, StripeServiceError>) -> ProbeStatus {
 const KEY_FIX_STEPS: &str =
     "in the Stripe dashboard, paste the key into Secret key above, and save.";
 
+// SPEC-8.34.4
 /// BUNYIP-516: Stripe rejected the key itself (401, or one of the key-specific
 /// codes) rather than the operation.
 const KEY_REJECTED_MESSAGE: &str = "Stripe rejected your secret key: it is invalid, expired or revoked. Create a new restricted key in the Stripe dashboard, paste it into Secret key above, and save.";
@@ -136,6 +140,7 @@ fn is_key_rejected(details: &StripeErrorDetails) -> bool {
         )
 }
 
+// SPEC-8.34.3
 /// The user-facing copy for a permission failure. Naming the permission needs
 /// the call site's context, so an unattributed failure falls back to the generic
 /// phrasing rather than guessing a permission.
@@ -151,6 +156,7 @@ fn permission_message(permission: Option<StripePermission>) -> String {
     }
 }
 
+// SPEC-8.34.2
 /// Map the shared crate's neutral [`StripeServiceError`] to bunyip's `AppError`.
 /// Used as `.map_err(stripe_err)?` at every `StripeService` call site: a blanket
 /// `From<StripeServiceError> for AppError` is impossible (both are foreign types,
@@ -159,6 +165,7 @@ pub fn stripe_err(e: StripeServiceError) -> AppError {
     map_stripe_err(e, None)
 }
 
+// SPEC-8.34.2
 /// BUNYIP-516: [`stripe_err`] for a call site that knows which restricted-key
 /// permission it needs, so a 403 is answered with the permission's name instead
 /// of a generic "an unexpected error occurred". Used as
@@ -167,6 +174,7 @@ pub fn stripe_err_for(permission: StripePermission) -> impl Fn(StripeServiceErro
     move |e| map_stripe_err(e, Some(permission))
 }
 
+// SPEC-8.34.2
 fn map_stripe_err(e: StripeServiceError, permission: Option<StripePermission>) -> AppError {
     match e {
         StripeServiceError::Internal(message) => AppError::internal(message),
@@ -188,6 +196,7 @@ fn map_stripe_err(e: StripeServiceError, permission: Option<StripePermission>) -
     }
 }
 
+// SPEC-8.34.3, SPEC-8.34.4, SPEC-8.34.5: 400 so the copy reaches the page
 /// BUNYIP-516: turn Stripe's error code into an answer the admin can act on.
 ///
 /// The two causes bunyip can actually explain answer `400`, which is what makes
@@ -223,6 +232,7 @@ fn stripe_upstream_err(
 /// via `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` so ops can dial it without a redeploy.
 const DEFAULT_TRIAL_PERIOD_DAYS: u32 = 30;
 
+// SPEC-8.35.1
 /// BUNYIP-482: app tag used to filter products/prices in a shared Stripe
 /// account when the `stripe_config.app_tag` column is NULL. Admins override it
 /// from the admin Stripe page.
@@ -236,6 +246,7 @@ fn first_origin(raw: &str) -> Option<&str> {
     raw.split(',').map(str::trim).find(|s| !s.is_empty())
 }
 
+// SPEC-8.35.2
 /// The single frontend origin used to derive the default checkout URLs: the
 /// first non-empty entry of `CORS_ORIGIN` (a comma-list on multi-RP
 /// deployments), trailing slash trimmed (BUNYIP-188).
@@ -248,6 +259,7 @@ fn checkout_base_from_env() -> String {
         .to_string()
 }
 
+// SPEC-8.35.2
 /// BUNYIP-351/482: default Stripe Checkout success URL, derived from the first
 /// `CORS_ORIGIN` entry. Shared by the runtime config and the admin read model so
 /// the DB NULL fallback can never diverge. Admins override it from the admin
@@ -256,11 +268,13 @@ pub fn default_success_url() -> String {
     format!("{}/checkout/success", checkout_base_from_env())
 }
 
+// SPEC-8.35.2
 /// BUNYIP-351/482: default Stripe Checkout cancel URL (see [`default_success_url`]).
 pub fn default_cancel_url() -> String {
     format!("{}/pricing?checkout=canceled", checkout_base_from_env())
 }
 
+// SPEC-8.35.3
 /// BUNYIP-351: env default for the signup free-trial length (days). A blank or
 /// unparseable `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` falls back to the 30-day
 /// default rather than disabling the trial.
@@ -271,6 +285,7 @@ pub fn trial_period_days_from_env() -> u32 {
         .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS)
 }
 
+// SPEC-8.35.4, SPEC-8.35.7
 /// BUNYIP-482: the runtime [`StripeConfig`] for a deployment with no saved
 /// Stripe config. The placeholder secrets keep `StripeService::is_configured()`
 /// reporting false, so the api boots with payment disabled until an admin saves
@@ -289,6 +304,7 @@ pub fn unconfigured_stripe_config() -> StripeConfig {
     }
 }
 
+// SPEC-8.35.5, SPEC-8.35.7
 /// Build a runtime [`StripeConfig`] from the DB row's NON-SECRET columns only
 /// (app tag, checkout URLs, trial length), leaving the two secrets on their
 /// unconfigured placeholders (BUNYIP-542).
@@ -312,6 +328,7 @@ pub fn stripe_settings_from_db_model(db: &crate::models::stripe::StripeConfig) -
     }
 }
 
+// SPEC-8.35.6, SPEC-8.35.7
 /// Build a runtime [`StripeConfig`] from the DB model, decrypting secrets and
 /// falling back to the derived defaults for any field that is NULL (was
 /// `StripeConfig::from_db_model`). Bunyip-side because it decrypts with bunyip's

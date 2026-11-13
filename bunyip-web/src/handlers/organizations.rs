@@ -20,6 +20,7 @@ use crate::views::layout::orgs_enabled;
 use crate::views::ui::empty_state;
 use crate::web::AppState;
 
+// SPEC-12.45.2: placeholder claims no capability
 /// The page body served while the feature is switched on. A placeholder until
 /// the feature itself lands; it names no capability the product does not have.
 fn organizations_content() -> Markup {
@@ -38,6 +39,7 @@ fn organizations_content() -> Markup {
     }
 }
 
+// SPEC-12.45.1, SPEC-12.45.2: flag off answers 404 before auth so the route stays dark
 /// `GET /organizations` - the flagged surface.
 ///
 /// With the flag off the caller gets the same 404 the router fallback renders,

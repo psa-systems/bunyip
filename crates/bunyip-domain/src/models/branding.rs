@@ -26,6 +26,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// SPEC-7.2.97: asset markers live on the singleton row.
 /// Database row for the `branding` singleton table.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BrandingRow {
@@ -53,6 +54,7 @@ pub struct BrandingRow {
     pub updated_by: Option<Uuid>,
 }
 
+// SPEC-7.2.80, SPEC-7.2.81: empty means omit; version empty means no asset.
 /// The resolved branding values, as served by `GET /v1/branding` and rendered
 /// by bunyip-web. An empty field means "omit the markup", never "substitute a
 /// default".
@@ -77,6 +79,7 @@ pub struct Branding {
     pub mascot_version: String,
 }
 
+// SPEC-7.2.96: flattened branding plus attribution.
 /// Admin view: the resolved values plus the attribution the email and Stripe
 /// config rows carry.
 #[derive(Debug, Clone, Serialize)]
@@ -87,6 +90,7 @@ pub struct BrandingResponse {
     pub updated_by: Option<Uuid>,
 }
 
+// SPEC-7.2.82: full replacement, omitted is empty.
 /// Request body for `PUT /v1/admin/branding`. Every field is a full
 /// replacement, not a COALESCE: clearing a field to empty is the way an admin
 /// removes a tagline, description or Open Graph image, so "absent" and "empty"
@@ -111,6 +115,7 @@ pub struct UpdateBrandingRequest {
     pub theme_color_dark: String,
 }
 
+// SPEC-7.2.84: length caps in characters.
 /// Length caps. Generous enough for any real brand, tight enough that a paste
 /// accident does not become the `<title>` of every page.
 pub const MAX_BRAND_NAME_LEN: usize = 120;
@@ -126,6 +131,7 @@ pub const MAX_THEME_CSS_LEN: usize = 4096;
 /// `#rgb`, `#rrggbb` or `#rrggbbaa`.
 pub const MAX_THEME_COLOR_LEN: usize = 9;
 
+// SPEC-7.2.87: hex colour check for the theme-color metas.
 /// BUNYIP-560: is this a CSS hex colour (`#rgb`, `#rrggbb`, `#rrggbbaa`)?
 ///
 /// `theme-color` is exactly a colour, and hex is the one notation every browser
@@ -138,6 +144,7 @@ fn is_hex_color(value: &str) -> bool {
     matches!(digits.len(), 3 | 4 | 6 | 8) && digits.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+// SPEC-7.2.88: typed rejection the caller maps to a 4xx.
 /// A rejected branding save: the field that failed and the message the admin
 /// form renders. Pure, so the caller maps it to one 4xx (never a 5xx, which
 /// bunyip-web collapses into the generic error line, BUNYIP-506).
@@ -147,6 +154,7 @@ pub struct BrandingFieldError {
     pub message: String,
 }
 
+// SPEC-7.2.83: trims, then first failing field wins in this order.
 /// Validate a branding update and return the trimmed values to persist.
 ///
 /// `og_image_url` must be absolute (`http://` or `https://`): it is rendered as
@@ -193,6 +201,7 @@ pub fn validate_branding(
     ) {
         return Err(e);
     }
+    // SPEC-7.2.85: og:image must be absolute.
     let absolute = og_image_url.starts_with("https://") || og_image_url.starts_with("http://");
     if !og_image_url.is_empty() && !absolute {
         return Err(BrandingFieldError {
@@ -227,6 +236,7 @@ pub fn validate_branding(
     // The value is emitted verbatim inside a `<style>` element, so an angle
     // bracket is the one character that could close it and start markup. There
     // is no legitimate `<` or `>` in a custom-property declaration list.
+    // SPEC-7.2.86: value is emitted raw inside a style element.
     if theme_css.contains('<') || theme_css.contains('>') {
         return Err(BrandingFieldError {
             field: "theme_css",
@@ -260,6 +270,7 @@ pub fn validate_branding(
     })
 }
 
+// SPEC-7.2.89: slot names and version columns.
 /// BUNYIP-560: one uploadable brand asset slot. The favicon slot is the odd one
 /// out: the admin uploads ONE source and the whole icon set is derived from it,
 /// so the slot's stored rows are `favicon-source` plus [`DERIVED_FAVICONS`].
@@ -290,6 +301,7 @@ impl BrandingAssetSlot {
         }
     }
 
+    // SPEC-7.2.90: clearing deletes every key so derived images cannot outlive the source.
     /// Every storage key this slot owns. Clearing the slot deletes all of them,
     /// so a derived icon can never outlive the source it came from.
     pub fn storage_kinds(self) -> Vec<&'static str> {
@@ -335,6 +347,7 @@ pub struct DerivedFavicon {
     pub mime: &'static str,
 }
 
+// SPEC-7.2.91: exact derived favicon set.
 /// The icon set derived from one uploaded source, matching the committed
 /// fallback set under `bunyip-web/assets/` one for one. The 512 is PNG here
 /// (the committed fallback is WebP, hand-tuned for the byte budget of art this
@@ -386,6 +399,7 @@ pub const DERIVED_FAVICONS: &[DerivedFavicon] = &[
 /// re-derive without asking the admin to upload again.
 pub const MARK_SOURCE_KIND: &str = "mark-source";
 
+// SPEC-7.2.92: derived mark edge in pixels.
 /// BUNYIP-744: the derived mark's square edge, in pixels. 2x the 28 CSS pixel
 /// nav render, with headroom for a larger future placement.
 pub const MARK_DERIVED_SIZE: u32 = 64;
@@ -404,6 +418,7 @@ pub struct DerivedMascot {
     pub size: u32,
 }
 
+// SPEC-7.2.92: exact derived mascot sizes.
 /// The two sizes the landing page's hero `srcset` uses: `mascot` at the 448
 /// CSS pixel box the layout renders (`max-w-md`), `mascot-2x` for a 2x device
 /// pixel ratio.
@@ -418,6 +433,7 @@ pub const DERIVED_MASCOTS: &[DerivedMascot] = &[
     },
 ];
 
+// SPEC-7.2.93: unknown kinds are 404 before any query.
 /// Every storage key that can be served from `GET /v1/branding/assets/{kind}`.
 /// A key outside this set is a 404 before any query runs, so the path parameter
 /// can never name an arbitrary row.
@@ -430,6 +446,7 @@ pub fn is_servable_asset_kind(kind: &str) -> bool {
         || DERIVED_FAVICONS.iter().any(|d| d.kind == kind)
 }
 
+// SPEC-7.2.94: process-wide resolved branding.
 /// Process-wide cache of the resolved branding, refreshed on an admin `PUT` and
 /// on a TTL by the background task `main` spawns.
 ///
@@ -458,6 +475,7 @@ impl BrandingCache {
         }
     }
 
+    // SPEC-7.2.80, SPEC-7.2.81: brand_name falls back, version is epoch millis.
     /// Resolve a row against the bootstrap default without storing it.
     pub fn resolve(&self, row: &BrandingRow) -> Branding {
         let brand_name = match row.brand_name.trim() {
@@ -485,6 +503,7 @@ impl BrandingCache {
         }
     }
 
+    // SPEC-7.2.95: recover through a poisoned lock.
     /// Resolve `row` and make it the value every reader sees.
     pub fn store(&self, row: &BrandingRow) -> Arc<Branding> {
         let resolved = Arc::new(self.resolve(row));

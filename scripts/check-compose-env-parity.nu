@@ -23,8 +23,10 @@
 #   scripts/check-compose-env-parity.nu --self-test
 
 const COMPOSE_FILES = ["compose.yml", "compose.dev.yml", "compose.dev-sso.yml"]
+# SPEC-3.21.3
 const REQUIRED_KEYS = ["APP_URL", "BUNYIP_WEB_ORIGIN"]
 const PROD_ONLY_FILE = "compose.yml"
+# SPEC-3.21.4
 const PROD_ONLY_KEYS = [
     "SUPPORT_INBOX_EMAIL",
     "SUPPORT_IMAP_POLL_SECS",
@@ -59,6 +61,7 @@ def missing-prod-only-keys [content: string]: nothing -> list<string> {
     $PROD_ONLY_KEYS | where {|key| $key not-in $present }
 }
 
+# SPEC-3.21.5
 def self-test []: nothing -> nothing {
     mut ok = true
 

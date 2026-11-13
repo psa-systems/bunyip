@@ -4,12 +4,14 @@
 
 name: Renovate
 
+# SPEC-3.8.1
 on:
   schedule:
     - cron: "0 2 * * 6"
   workflow_dispatch:
 
 jobs:
+  # SPEC-3.8.2
   renovate:
     name: Renovate (caller)
     uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/renovate-reusable.yml@f466fa87127d4c5d78e9b8d5a730bfc59ef45450  # main
@@ -18,6 +20,7 @@ jobs:
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
     with:
       target_repository: ${{ github.repository }}
+    # SPEC-3.8.3
     secrets:
       RENOVATE_CI_TOKEN: ${{ secrets.RENOVATE_CI_TOKEN }}
       PUBLIC_GITHUB_REPO_TOKEN: ${{ secrets.PUBLIC_GITHUB_REPO_TOKEN }}

@@ -12,6 +12,7 @@ pub struct AuditLogRepository;
 /// Push the optional admin-filter predicates onto a `QueryBuilder`, binding
 /// each value so placeholders and bindings can never drift apart. Used for
 /// both the page query and the count query in `list_paginated`.
+// SPEC-7.3.4, SPEC-7.3.65
 #[allow(clippy::too_many_arguments)]
 fn push_audit_filters<'a>(
     qb: &mut QueryBuilder<'a, Postgres>,
@@ -67,6 +68,7 @@ fn push_audit_filters<'a>(
 
 impl AuditLogRepository {
     /// Create a new audit log entry.
+    // SPEC-7.3.64
     pub async fn create(pool: &PgPool, data: CreateAuditLog) -> Result<AuditLog, AppError> {
         Self::create_in_tx(pool, data).await
     }
@@ -76,6 +78,7 @@ impl AuditLogRepository {
     /// that must commit the audit row alongside their own writes so a
     /// rolled-back save cannot leave a "config changed" trail without
     /// the change.
+    // SPEC-7.3.64
     pub async fn create_in_tx<'e, E>(exec: E, data: CreateAuditLog) -> Result<AuditLog, AppError>
     where
         E: sqlx::Executor<'e, Database = sqlx::Postgres>,
@@ -114,6 +117,7 @@ impl AuditLogRepository {
     /// BUNYIP-936 / BUNYIP-937 added `severity` and `search`; the caller
     /// validates severity against `AuditSeverity::parse` and caps search
     /// at 128 chars before passing them in.
+    // SPEC-7.3.65, SPEC-7.3.66
     #[allow(clippy::too_many_arguments)]
     pub async fn list_paginated(
         pool: &PgPool,
@@ -130,6 +134,7 @@ impl AuditLogRepository {
         // BUNYIP-995: compute the offset in i64 and saturate, mirroring
         // BUNYIP-946 F14, so a page value large enough to overflow an i32
         // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
+        // SPEC-7.3.3
         let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         // Build the same filter clause on both the page query and the count
@@ -165,6 +170,7 @@ impl AuditLogRepository {
     }
 
     /// List recent audit logs for a user
+    // SPEC-7.3.67
     pub async fn list_by_actor(
         pool: &PgPool,
         actor_id: Uuid,
@@ -187,6 +193,7 @@ impl AuditLogRepository {
     }
 
     /// List security-related events
+    // SPEC-7.3.68
     pub async fn list_security_events(
         pool: &PgPool,
         limit: i32,

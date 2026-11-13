@@ -33,6 +33,7 @@
 # `write:repository` scope to call the /api/v1/repos/.../releases endpoint.
 name: Create release
 
+# SPEC-3.7.1: pull_request_target runs main's copy, which a PR cannot edit
 on:
   pull_request_target:
     types:
@@ -52,10 +53,12 @@ jobs:
   # `main`'s copy, so a PR cannot edit it. psa-systems/common is the org's own
   # shared workflow repo; `@main` is how a shared-workflow fix reaches this
   # caller, and a SHA pin is tracked separately.
+  # SPEC-3.7.2, SPEC-3.7.3
   create-release:
     if: >-
       github.event.pull_request.merged == true
       && startsWith(github.event.pull_request.head.ref, 'release/v')
+    # SPEC-3.7.4
     uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     # MEDIUM: git and API calls, nothing compiles (see governance CI.md "Runner labels").
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}

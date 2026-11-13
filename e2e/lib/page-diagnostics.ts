@@ -13,6 +13,7 @@ const URL_SAMPLE_CAP = 30;
 /// suitable for folding into a thrown error message. The page is captured at
 /// attach time so callers cannot accidentally hand in a stale or different one
 /// at snapshot time.
+// SPEC-3.39.10
 export function attachPageDiagnostics(page: Page): {
   snapshot(label: string): string;
 } {

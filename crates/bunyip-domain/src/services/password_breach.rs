@@ -10,11 +10,13 @@
 //! so a transient outage degrades to "no server backstop this minute" rather
 //! than blocking signup.
 
+// SPEC-8.22.3
 pub use dunite_hibp::{check_password_breach, BreachCheckOutcome};
 
 #[cfg(not(test))]
 pub use dunite_hibp::is_breached;
 
+// SPEC-8.22.4
 /// BUNYIP-947: a test-only override so a regression test can stub "this
 /// password is breached" without a real HIBP call. Thread-local because
 /// `#[tokio::test]` defaults to a current-thread runtime (one OS thread per

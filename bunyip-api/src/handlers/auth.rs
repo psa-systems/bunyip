@@ -53,6 +53,7 @@ pub(crate) struct EstablishedOpSession {
     pub session_id: uuid::Uuid,
 }
 
+// SPEC-10.21.1, SPEC-10.21.2, SPEC-10.21.3, SPEC-10.21.4: OP session at every login path
 pub(crate) async fn establish_op_session(
     provider: &OidcProviderData,
     req: &HttpRequest,
@@ -105,6 +106,7 @@ pub(crate) async fn establish_op_session(
 /// effort: a link failure warns and does NOT fail the login, because the
 /// token still works and simply falls back to the legacy
 /// `refresh_absolute_ttl` deadline on rotation.
+// SPEC-10.21.5: best-effort link, never fails the login
 pub(crate) async fn link_hub_refresh_to_op_session(
     auth_service: &AuthService,
     established: &Option<EstablishedOpSession>,
@@ -128,6 +130,7 @@ pub(crate) async fn link_hub_refresh_to_op_session(
 }
 
 /// BUNYIP-257: ACR for a password-only login (no second factor).
+// SPEC-10.21.6: recorded ACR values
 pub(crate) const ACR_PASSWORD: &str = "urn:bunyip:loa:pwd";
 
 /// BUNYIP-257: ACR after a TOTP-verified login (second factor satisfied).
@@ -142,6 +145,7 @@ pub(crate) const ACR_OTP: &str = "urn:bunyip:loa:otp";
 /// `/oauth2/authorize` sees no active session (the BUNYIP-53 race). Only the
 /// back-channel HTTP delivery to registered clients (e.g. DMARC) is spawned.
 /// No-op when the OP provider is not configured.
+// SPEC-10.21.7, SPEC-10.21.8, SPEC-10.21.9: DB revoke awaited, delivery spawned
 pub(crate) async fn revoke_op_sessions(provider: &OidcProviderData, user_id: uuid::Uuid) {
     let Some(provider_arc) = provider.as_ref().as_ref().cloned() else {
         return;
@@ -319,6 +323,8 @@ pub struct AuthResponse {
 
 /// POST /v1/auth/register
 /// Register a new user and log them in
+// SPEC-10.21.10, SPEC-10.21.11, SPEC-10.21.12, SPEC-10.21.13, SPEC-10.21.14, SPEC-10.21.15, SPEC-10.21.16,
+// SPEC-10.21.17:
 pub async fn register(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -473,6 +479,7 @@ pub async fn register(
 /// rendered register form. Unauthenticated; the token is just a signed
 /// timestamp, so minting one is harmless and needs no rate limit. The register
 /// handler verifies it (when SIGNUP_BOT_GUARD_ENABLED is on).
+// SPEC-10.21.18: unauthenticated timing challenge
 pub async fn register_challenge(
     req: HttpRequest,
     auth_service: web::Data<Arc<AuthService>>,
@@ -484,6 +491,7 @@ pub async fn register_challenge(
 
 /// POST /v1/auth/login
 /// Login with email and password
+// SPEC-10.21.19, SPEC-10.21.20, SPEC-10.21.21, SPEC-10.21.22: password login
 pub async fn login(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -614,6 +622,7 @@ pub async fn login(
 
 /// POST /v1/auth/magic-link
 /// Request a magic link for passwordless login
+// SPEC-10.22.1, SPEC-10.22.2: enumeration-safe 202
 pub async fn request_magic_link(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -662,6 +671,7 @@ pub async fn request_magic_link(
 
 /// POST /v1/auth/magic-link/verify
 /// Verify a magic link and login
+// SPEC-10.22.3, SPEC-10.22.4, SPEC-10.22.5, SPEC-10.22.6: magic-link login
 pub async fn verify_magic_link(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -788,6 +798,7 @@ pub async fn verify_magic_link(
 /// BUNYIP-373: complete a login that was withheld pending email approval (NO
 /// auth required - it is gated by the challenge token). Verifies the emailed
 /// code and, on success, sets the same session cookies a normal login would.
+// SPEC-10.22.7, SPEC-10.22.8: gated by challenge token, not a session
 pub async fn verify_login_approval(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -881,6 +892,7 @@ pub struct AcceptInviteRequest {
 
 /// POST /v1/auth/invite/accept
 /// Accept an admin invite
+// SPEC-10.22.9, SPEC-10.22.10: admin invite accept
 pub async fn accept_admin_invite(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -970,6 +982,7 @@ pub async fn accept_admin_invite(
 
 /// POST /v1/auth/refresh
 /// Refresh access token using refresh token
+// SPEC-10.22.11, SPEC-10.22.12: refresh from cookie
 pub async fn refresh_token(
     req: HttpRequest,
     auth_service: web::Data<Arc<AuthService>>,
@@ -1059,6 +1072,7 @@ pub async fn refresh_token(
 /// browser purges its cookies; the residual DB state (an expired refresh
 /// token or an unreachable op_session) is either already unusable or gets
 /// GC'd on its own schedule.
+// SPEC-10.22.13, SPEC-10.22.14: must clear cookies even with a dead session
 pub async fn logout(
     req: HttpRequest,
     optional_user: OptionalUser,
@@ -1133,6 +1147,7 @@ pub async fn logout(
 /// unset, the parsed host of `web_origin`) so logouts can only
 /// redirect to the bunyip apex or one of its subdomains; anything
 /// else is rejected with 422.
+// SPEC-10.22.15, SPEC-10.22.16: redirect limited to the apex and its subdomains
 pub async fn logout_redirect(
     req: HttpRequest,
     query: web::Query<RedirectQuery>,
@@ -1208,6 +1223,7 @@ pub async fn logout_redirect(
 
 /// POST /v1/auth/logout-all
 /// Logout from all sessions
+// SPEC-10.22.17: all-session logout
 pub async fn logout_all(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -1239,6 +1255,7 @@ pub async fn logout_all(
 
 /// POST /v1/auth/password-reset
 /// Request a password reset
+// SPEC-10.22.18, SPEC-10.22.19: enumeration-safe 202
 pub async fn request_password_reset(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -1294,6 +1311,7 @@ pub async fn request_password_reset(
 
 /// POST /v1/auth/password-reset/confirm
 /// Complete password reset with token
+// SPEC-10.22.20: reset confirm
 pub async fn confirm_password_reset(
     req: HttpRequest,
     pool: web::Data<PgPool>,
@@ -1326,6 +1344,7 @@ pub async fn confirm_password_reset(
 
 /// GET /v1/auth/password-reset/verify
 /// Verify a password reset token (without using it)
+// SPEC-10.22.21: non-consuming token check
 pub async fn verify_password_reset_token(
     req: HttpRequest,
     auth_service: web::Data<Arc<AuthService>>,
@@ -1349,6 +1368,7 @@ pub struct RedirectQuery {
 /// Check authentication and redirect to the target URL if valid.
 /// If not authenticated, redirects to the login page with ?redirect=<url>.
 /// Also refreshes the access token cookie if expired but refresh token is valid.
+// SPEC-10.22.22, SPEC-10.22.23, SPEC-10.22.24, SPEC-10.22.25: SSO bounce
 pub async fn auth_redirect(
     req: HttpRequest,
     query: web::Query<RedirectQuery>,
@@ -1478,6 +1498,7 @@ pub async fn auth_redirect(
 /// Feature-flags probe: reports which optional integrations are wired
 /// (email, Stripe) so the web UI can hide unavailable actions. BUNYIP-290
 /// dropped the first-admin `setup_required` flag along with the setup wizard.
+// SPEC-10.22.26: table-free feature probe
 pub async fn setup_status(
     req: HttpRequest,
     config: web::Data<crate::config::Config>,

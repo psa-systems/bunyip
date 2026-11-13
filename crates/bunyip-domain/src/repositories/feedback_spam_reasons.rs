@@ -23,6 +23,7 @@ impl FeedbackSpamReasonsRepository {
     /// Record the classifier verdict for one feedback row. Upsert on
     /// `(feedback_id)` keeps the admin UI stable if a replay (e.g. a demo
     /// seed) re-submits the same id.
+    // SPEC-7.3.63
     pub async fn insert(pool: &PgPool, feedback_id: Uuid, reason: &str) -> Result<(), AppError> {
         sqlx::query(
             "INSERT INTO feedback_spam_reasons (feedback_id, reason) \
@@ -39,6 +40,7 @@ impl FeedbackSpamReasonsRepository {
     /// Fetch the reason for one feedback row. `None` for a row that was
     /// honeypot-flagged (no classifier reason) or manually marked by an
     /// admin.
+    // SPEC-7.3.63
     pub async fn find(
         pool: &PgPool,
         feedback_id: Uuid,

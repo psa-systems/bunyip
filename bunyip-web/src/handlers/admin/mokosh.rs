@@ -60,6 +60,7 @@ impl MokoshValues {
     }
 }
 
+// SPEC-12.16.1
 pub(super) fn mokosh_content(
     cfg: Result<&MokoshConfigResponse, &ApiError>,
     values: &MokoshValues,
@@ -127,6 +128,7 @@ pub(super) fn mokosh_content(
     }
 }
 
+// SPEC-12.16.1
 pub async fn mokosh(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
@@ -156,6 +158,7 @@ pub struct MokoshForm {
     pub confirm_client_id_change: String,
 }
 
+// SPEC-12.16.2
 /// The PUT body. The id is always sent, because the API replaces it whole (a
 /// blank id is a deliberate clear); the secret is sent only when typed, since a
 /// blank one means "keep the stored one". Pure so it can be unit-tested; the
@@ -172,6 +175,7 @@ pub(super) fn mokosh_update_body(f: &MokoshForm) -> serde_json::Value {
     body
 }
 
+// SPEC-12.16.4: a changed id stops contact sync for every tenant, so it needs a second save
 /// Whether an API refusal is the changed-id warning rather than a plain error.
 ///
 /// Matched on the status and the sentence the API sends, not on a code of our
@@ -181,6 +185,7 @@ pub(super) fn is_client_id_warning(e: &ApiError) -> bool {
     e.user_message().contains("confirm_client_id_change")
 }
 
+// SPEC-12.16.4
 /// What the admin reads above the form on the first attempt. The API's sentence
 /// minus the machine instruction, which the "Save anyway" button now is.
 pub(super) fn warning_text(e: &ApiError) -> String {
@@ -192,6 +197,7 @@ pub(super) fn warning_text(e: &ApiError) -> String {
         .to_string()
 }
 
+// SPEC-12.16.3, SPEC-12.16.4
 pub async fn mokosh_save(
     State(st): State<AppState>,
     headers: HeaderMap,

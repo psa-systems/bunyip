@@ -14,6 +14,7 @@ pub struct SupportRepository;
 
 impl SupportRepository {
     /// Open a new ticket in the `open` state.
+    // SPEC-7.3.221
     pub async fn create_ticket(
         pool: &PgPool,
         subject: &str,
@@ -51,6 +52,7 @@ impl SupportRepository {
 
     /// Append a message to a ticket and bump its activity timestamps in one
     /// transaction, so `last_message_at` can never drift from the message set.
+    // SPEC-7.3.222
     pub async fn add_message(
         pool: &PgPool,
         ticket_id: Uuid,
@@ -104,6 +106,7 @@ impl SupportRepository {
 
     /// Find a stored message by its mail Message-ID, keyed on the same partial
     /// unique index (`message_id IS NOT NULL`) that dedupes re-polled mail.
+    // SPEC-7.3.223
     pub async fn find_message_by_id(
         pool: &PgPool,
         message_id: &str,
@@ -124,6 +127,7 @@ impl SupportRepository {
     /// Message-ID (the reply's `In-Reply-To` plus its `References` chain) against
     /// a message already stored. Returns the newest match's ticket, or `None`
     /// when nothing threads.
+    // SPEC-7.3.224
     pub async fn find_ticket_by_message_ids(
         pool: &PgPool,
         candidate_ids: &[String],
@@ -157,6 +161,7 @@ impl SupportRepository {
     /// and `add_message` commit as one transaction, so a message-insert
     /// failure (for instance a `message_id` collision this check missed under
     /// a race) rolls back the ticket creation instead of leaving an orphan.
+    // SPEC-7.3.225, SPEC-7.3.226
     pub async fn ingest_inbound(
         pool: &PgPool,
         msg: &NewInboundMessage,
@@ -225,6 +230,7 @@ impl SupportRepository {
     }
 
     /// Fetch a ticket by id.
+    // SPEC-7.3.227
     pub async fn get_ticket(pool: &PgPool, id: Uuid) -> Result<Option<SupportTicket>, AppError> {
         let ticket =
             sqlx::query_as::<_, SupportTicket>("SELECT * FROM support_tickets WHERE id = $1")
@@ -236,6 +242,7 @@ impl SupportRepository {
 
     /// The most recent message on a ticket, used to thread a new outbound reply
     /// (In-Reply-To its Message-ID, References its chain plus itself).
+    // SPEC-7.3.227
     pub async fn latest_message(
         pool: &PgPool,
         ticket_id: Uuid,
@@ -255,6 +262,7 @@ impl SupportRepository {
     }
 
     /// All messages on a ticket, oldest first (thread order).
+    // SPEC-7.3.227
     pub async fn list_messages(
         pool: &PgPool,
         ticket_id: Uuid,
@@ -273,6 +281,7 @@ impl SupportRepository {
     }
 
     /// Tickets by most recent activity, for the admin queue (BUNYIP-572).
+    // SPEC-7.3.228
     pub async fn list_tickets(
         pool: &PgPool,
         limit: i64,
@@ -293,6 +302,7 @@ impl SupportRepository {
     }
 
     /// Total ticket count, for paginating the admin queue (BUNYIP-725).
+    // SPEC-7.3.228
     pub async fn count_tickets(pool: &PgPool) -> Result<i64, AppError> {
         let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM support_tickets")
             .fetch_one(pool)
@@ -301,6 +311,7 @@ impl SupportRepository {
     }
 
     /// Change a ticket's status.
+    // SPEC-7.3.229
     pub async fn set_status(pool: &PgPool, id: Uuid, status: TicketStatus) -> Result<(), AppError> {
         sqlx::query("UPDATE support_tickets SET status = $1, updated_at = NOW() WHERE id = $2")
             .bind(status.as_str())

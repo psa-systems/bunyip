@@ -29,6 +29,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 export const TOKEN_FILE = resolve(here, '..', '.auth', 'token.txt');
 export const OP_STORAGE_STATE_FILE = resolve(here, '..', '.auth', 'op-state.json');
 
+// SPEC-3.38.7
 export function readToken(): string {
   if (!existsSync(TOKEN_FILE)) {
     throw new Error(
@@ -63,6 +64,7 @@ export interface OpStorageState {
   origins: never[];
 }
 
+// SPEC-3.38.7
 export function readOpStorageState(): OpStorageState {
   if (!existsSync(OP_STORAGE_STATE_FILE)) {
     throw new Error(

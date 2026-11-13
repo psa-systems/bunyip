@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+// SPEC-8.27.2: no redirects either, set at the client
 /// A slow or unreachable Mirzam fails the check rather than holding the admin
 /// page open.
 pub const MIRZAM_HTTP_TIMEOUT: Duration = Duration::from_secs(10);
@@ -82,6 +83,7 @@ struct ListAnswer {
     kind: String,
 }
 
+// SPEC-8.27.1, SPEC-8.27.3
 /// Check both lists against `base_url` with `token`. The two reads run
 /// concurrently.
 pub async fn check_connection(
@@ -100,6 +102,7 @@ pub async fn check_connection(
     {
         Ok(client) => client,
         Err(e) => {
+            // SPEC-8.27.4
             let message = format!("Could not build the HTTP client: {e}");
             return MirzamCheckReport {
                 ok: false,
@@ -161,6 +164,7 @@ async fn check_list(
     );
     let response = match client.get(&url).bearer_auth(token).send().await {
         Ok(response) => response,
+        // SPEC-8.27.5
         Err(e) if e.is_timeout() => {
             return failed(
                 role,
@@ -180,6 +184,7 @@ async fn check_list(
         }
     };
 
+    // SPEC-8.27.6, SPEC-8.27.7
     let status = response.status().as_u16();
     match status {
         200 => {}
@@ -234,6 +239,7 @@ async fn check_list(
         other => return failed(role, slug, format!("Mirzam answered with status {other}.")),
     }
 
+    // SPEC-8.27.8
     let answer: ListAnswer = match response.json().await {
         Ok(answer) => answer,
         Err(_) => {
@@ -248,6 +254,7 @@ async fn check_list(
         }
     };
 
+    // SPEC-8.27.9
     let expected = role.expected_kind();
     let ok = answer.kind == expected;
     let message = if ok {
@@ -270,6 +277,7 @@ async fn check_list(
     }
 }
 
+// SPEC-8.28.3
 /// A transport error's cause without the request URL reqwest prefixes it with,
 /// since the message already names the address.
 pub(crate) fn without_url(e: &reqwest::Error) -> String {

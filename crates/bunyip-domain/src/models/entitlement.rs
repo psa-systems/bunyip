@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+// SPEC-7.2.43: closed set matching the DB check constraint.
 /// How an entitlement was granted. Provenance matters because a Stripe-driven
 /// revoke must not clobber a manual admin grant and vice versa.
 pub mod entitlement_source {
@@ -20,6 +21,7 @@ pub mod entitlement_source {
     pub const SEED: &str = "seed";
 }
 
+// SPEC-7.2.44: revoked grants are kept with revoked_at.
 /// A grant linking one user to one product. Revoked grants are retained
 /// (`revoked_at` set) for audit rather than deleted.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -32,6 +34,7 @@ pub struct ApplicationEntitlement {
     pub revoked_at: Option<DateTime<Utc>>,
 }
 
+// SPEC-7.2.45: entitlement joined to product fields.
 /// Admin-facing row: an entitlement joined to its product's display fields, for
 /// the "what can this user access" view.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]

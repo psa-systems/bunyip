@@ -36,12 +36,14 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+// SPEC-8.32.1
 /// The contract version this Bunyip understands. An envelope reporting a
 /// different `schema_version` is shown as [`AppProviderStatus::VersionMismatch`]
 /// rather than parsed, per the epic's "reports its version rather than
 /// failing to parse" rule.
 pub const PROVIDER_STATUS_SCHEMA_VERSION: &str = "1";
 
+// SPEC-8.33.3
 /// The outbound HTTP timeout for a provider-status fetch. A slow or
 /// unreachable peer must fail fast rather than hang the admin page render.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -50,6 +52,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 // The wire contract
 // ---------------------------------------------------------------------------
 
+// SPEC-8.32.2
 /// The schema-versioned envelope every application serves its report in.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderStatusEnvelope {
@@ -59,6 +62,7 @@ pub struct ProviderStatusEnvelope {
     pub generated_at: Option<DateTime<Utc>>,
 }
 
+// SPEC-8.32.3
 /// One application's whole report. Only names, booleans, small integers,
 /// timestamps and statuses; no values, no credentials, no URLs beyond an
 /// unreachable-provider message that may name a host and a status code.
@@ -150,6 +154,7 @@ pub struct KeyReport {
     pub providers: Vec<String>,
 }
 
+// SPEC-8.32.6
 /// The `list()` outcome for a kind that supports enumeration. An empty
 /// `Supported` and `Unsupported` are different facts and never collapse into
 /// each other.
@@ -163,6 +168,7 @@ pub enum KindEnumerationStatus {
 // Per-application outcome
 // ---------------------------------------------------------------------------
 
+// SPEC-8.32.4
 /// What reading one application's provider status produced. Every variant is
 /// shown on the aggregate page; none is ever omitted, and only [`Ok`](Self::Ok)
 /// reads as healthy.
@@ -211,6 +217,7 @@ pub struct AppStatusRow {
 // Discrepancy flags
 // ---------------------------------------------------------------------------
 
+// SPEC-8.32.5
 /// One of the three conditions the epic requires flagged without the reader
 /// comparing columns by eye.
 ///
@@ -279,6 +286,7 @@ pub fn discrepancies_for(app: &str, report: &ProviderStatusReport) -> Vec<Provid
                 any_key_tracks_providers = true;
             }
 
+            // SPEC-8.32.7, SPEC-8.32.8
             match &key.recorded_served_by {
                 None if key.providers.is_empty() => {
                     out.push(ProviderDiscrepancy::DeclaredProviderHoldsNothing {
@@ -303,6 +311,7 @@ pub fn discrepancies_for(app: &str, report: &ProviderStatusReport) -> Vec<Provid
                 None => {}
             }
 
+            // SPEC-8.32.9
             if key.providers.len() > 1 {
                 out.push(ProviderDiscrepancy::PresentInMultipleProviders {
                     app: app.to_string(),
@@ -313,6 +322,7 @@ pub fn discrepancies_for(app: &str, report: &ProviderStatusReport) -> Vec<Provid
             }
         }
 
+        // SPEC-8.32.10
         // Kind-level approximation: an application that does not track full
         // per-key provider membership (PMS-989/DMARC-41's shape) still names
         // more than one enabled provider only when a second one is actually
@@ -344,6 +354,7 @@ pub struct AggregatedProviderStatus {
     pub discrepancies: Vec<ProviderDiscrepancy>,
 }
 
+// SPEC-8.32.11
 /// Build the aggregate from already-fetched rows. Pure, so the discrepancy
 /// rules are unit-tested without a network call; the async fetch is a
 /// separate, thin step ([`fetch_remote`]) that produces these rows.
@@ -386,12 +397,14 @@ pub struct MachineCredential {
     pub client_secret: String,
 }
 
+// SPEC-8.33.1
 /// Fetch and classify one remote application's provider status.
 ///
 /// Never panics and never propagates a transport error: every outcome is an
 /// [`AppProviderStatus`] variant, because every outcome must render on the
 /// aggregate page.
 pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
+    // SPEC-8.33.2
     let Some(status_url) = &app.status_url else {
         return AppProviderStatus::Unreachable {
             reason: "no status endpoint is configured for this application".to_string(),
@@ -412,6 +425,7 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
         request = request.basic_auth(&credential.client_id, Some(&credential.client_secret));
     }
 
+    // SPEC-8.33.4
     let response = match request.send().await {
         Ok(response) => response,
         Err(e) => {
@@ -421,6 +435,7 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
         }
     };
 
+    // SPEC-8.33.4, SPEC-8.33.5
     let status = response.status();
     if status.as_u16() == 401 || status.as_u16() == 403 {
         return AppProviderStatus::Unauthenticated;
@@ -440,6 +455,7 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
         }
     };
 
+    // SPEC-8.33.6, SPEC-8.33.8
     let envelope: ProviderStatusEnvelope = match serde_json::from_str(&body) {
         Ok(envelope) => envelope,
         Err(e) => {
@@ -449,6 +465,7 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
         }
     };
 
+    // SPEC-8.33.7
     if envelope.schema_version != PROVIDER_STATUS_SCHEMA_VERSION {
         return AppProviderStatus::VersionMismatch {
             reported_version: envelope.schema_version,

@@ -24,6 +24,7 @@ impl DownloadCacheRepository {
         Self { pool }
     }
 
+    // SPEC-7.3.71
     pub async fn find(
         &self,
         application_id: Uuid,
@@ -52,6 +53,7 @@ impl DownloadCacheRepository {
     /// row lock (`SELECT ... FOR UPDATE`), as the `AssetStore::upsert`
     /// contract requires: a non-atomic find-then-write could mis-report the
     /// replaced SHA under concurrent upserts and break orphan-file cleanup.
+    // SPEC-7.3.72, SPEC-7.3.73
     pub async fn upsert(
         &self,
         asset: &NewCachedAsset,
@@ -97,6 +99,7 @@ impl DownloadCacheRepository {
         Ok((row, replaced))
     }
 
+    // SPEC-7.3.74
     pub async fn touch(&self, id: Uuid) -> Result<(), AppError> {
         let res = sqlx::query("UPDATE download_cache SET last_accessed_at = NOW() WHERE id = $1")
             .bind(id)
@@ -110,6 +113,7 @@ impl DownloadCacheRepository {
 
     /// Delete all rows for `(application_id, version)`. Returns the SHA-256
     /// values whose on-disk files may now be unreferenced.
+    // SPEC-7.3.75
     pub async fn delete_for_version(
         &self,
         application_id: Uuid,
@@ -130,6 +134,7 @@ impl DownloadCacheRepository {
     }
 
     /// Returns true if any row still references this SHA (after a delete).
+    // SPEC-7.3.76
     pub async fn sha_referenced(&self, content_sha256: &str) -> Result<bool, AppError> {
         let (count,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM download_cache WHERE content_sha256 = $1")
@@ -139,6 +144,7 @@ impl DownloadCacheRepository {
         Ok(count > 0)
     }
 
+    // SPEC-7.3.77
     pub async fn total_size_bytes(&self) -> Result<i64, AppError> {
         // Postgres `SUM(bigint)` returns NUMERIC, which does NOT decode into
         // i64 and made this query fail on every non-empty table, silently
@@ -152,6 +158,7 @@ impl DownloadCacheRepository {
     }
 
     /// Returns up to `limit` oldest-by-last-accessed rows.
+    // SPEC-7.3.78
     pub async fn oldest(&self, limit: i64) -> Result<Vec<DownloadCacheRow>, AppError> {
         let rows = sqlx::query_as::<_, DownloadCacheRow>(
             "SELECT * FROM download_cache ORDER BY last_accessed_at ASC LIMIT $1",
@@ -162,6 +169,7 @@ impl DownloadCacheRepository {
         Ok(rows)
     }
 
+    // SPEC-7.3.79
     pub async fn delete(&self, id: Uuid) -> Result<(), AppError> {
         sqlx::query("DELETE FROM download_cache WHERE id = $1")
             .bind(id)
@@ -173,6 +181,7 @@ impl DownloadCacheRepository {
 
 /// Wire the Postgres repository to the engine's storage trait. Each method
 /// simply delegates to the inherent SQL method above.
+// SPEC-7.3.80
 #[async_trait]
 impl dunite_download::store::AssetStore for DownloadCacheRepository {
     async fn find(

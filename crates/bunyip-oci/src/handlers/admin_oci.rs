@@ -11,6 +11,7 @@ use crate::repositories::ApplicationRepository;
 use crate::responses::{get_request_id, success_no_data};
 use crate::services::{ForgejoRegistryClient, ManifestCache};
 
+// SPEC-6.17.1, SPEC-6.17.5: admin-only; 404 when the registry is off
 /// POST /v1/admin/applications/{slug}/oci/refresh
 ///
 /// Invalidates the in-memory manifest cache for the app and best-effort
@@ -39,10 +40,12 @@ pub async fn refresh_oci(
     let app = ApplicationRepository::find_active_by_slug(pool.get_ref(), &slug)
         .await?
         .ok_or_else(|| AppError::not_found("Application"))?;
+    // SPEC-6.17.2: only pullable applications have a manifest to refresh
     if !app.is_pullable() {
         return Err(AppError::not_found("Application not pullable"));
     }
 
+    // SPEC-6.17.3: drop every cached manifest of the app, then warm the pinned tag
     mc.invalidate_app(app.id).await;
 
     // Best-effort: re-fetch the pinned tag's manifest and insert it into the
@@ -75,6 +78,7 @@ pub async fn refresh_oci(
             .await;
         }
         Err(e) => {
+            // SPEC-6.17.4: invalidation already took effect; the next pull repopulates
             tracing::warn!(error = ?e, slug = %slug, "oci refresh: upstream manifest refetch failed");
         }
     }

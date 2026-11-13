@@ -52,6 +52,7 @@ def parse-steps [log: string]: nothing -> table {
 }
 
 # Warnings for one build log, as human-readable lines.
+# SPEC-3.13.4
 def analyse [log: string]: nothing -> list<string> {
     mut warnings = []
     let steps = (parse-steps $log)
@@ -86,6 +87,7 @@ def analyse [log: string]: nothing -> list<string> {
     $warnings
 }
 
+# SPEC-3.13.2
 def preflight []: nothing -> nothing {
     let token = ($env | get -o ACTIONS_RUNTIME_TOKEN | default "")
     let cache_url = ($env | get -o ACTIONS_CACHE_URL | default "")
@@ -105,6 +107,7 @@ def preflight []: nothing -> nothing {
     print "check-build-cache-health: gha cache credentials present; type=gha can reach the cache server"
 }
 
+# SPEC-3.13.7
 def self-test []: nothing -> nothing {
     let healthy = "#7 importing cache manifest from gha:123\n#7 DONE 0.5s\n#18 [builder 1/4] COPY --from=planner /build/recipe.json recipe.json\n#18 CACHED\n#19 [builder 2/4] RUN cargo chef cook --release --recipe-path recipe.json\n#19 CACHED\n"
     let poisoned = "#7 importing cache manifest from gha:123\n#7 DONE 0.5s\n#18 [builder 1/4] COPY --from=planner /build/recipe.json recipe.json\n#18 CACHED\n#19 [builder 2/4] RUN cargo chef cook --release --recipe-path recipe.json\n#19 DONE 461.3s\n"
@@ -140,6 +143,7 @@ def main [
     --log: string # analyse a captured buildx log and warn on cache damage
     --self-test   # prove the signal fires on damage and stays quiet on a healthy build
 ]: nothing -> nothing {
+    # SPEC-3.13.1, SPEC-3.13.3, SPEC-3.13.5, SPEC-3.13.6
     if $self_test { self-test; return }
     if $preflight { preflight; return }
     if ($log | is-empty) {

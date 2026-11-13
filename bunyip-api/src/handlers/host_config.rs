@@ -25,6 +25,7 @@ use super::host_auth::{
 /// route's: a product reading its configuration every boot and one reading a
 /// secret every boot are different callers, and one's burst must not spend the
 /// other's budget.
+// SPEC-10.37.5: config-route budgets
 const CAPS: HostRouteCaps = HostRouteCaps {
     read: &RateLimitConfig::HOST_CONFIG_READ,
     auth_failures: &RateLimitConfig::HOST_CONFIG_AUTH_FAILURES,
@@ -32,6 +33,7 @@ const CAPS: HostRouteCaps = HostRouteCaps {
 };
 
 /// GET /v1/host/config/{key}
+// SPEC-10.37.1, SPEC-10.37.6, SPEC-10.37.7, SPEC-10.37.8, SPEC-10.37.9: entitlement before existence
 pub async fn get_host_config(
     req: HttpRequest,
     pool: web::Data<PgPool>,

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 // to every consumer. CI injects the same vars from Forgejo secrets, so a
 // missing file is fine (override:false keeps real env winning).
 const here = dirname(fileURLToPath(import.meta.url));
+// SPEC-3.36.1
 loadEnv({ path: resolve(here, '..', '.env'), override: false });
 
 function required(name: string): string {
@@ -32,6 +33,7 @@ function optional(name: string): string | undefined {
 // canonical staging deploy serves the hub at `a8n.systems` and the API/OP at
 // `api.a8n.systems` (prod: `psa.systems` -> `api.psa.systems`). Returns null
 // when the hub host is already prefixed or the URL cannot be parsed.
+// SPEC-3.36.3
 function deriveApiBase(hubUrl: string): string | null {
   try {
     const u = new URL(hubUrl);
@@ -60,6 +62,7 @@ const apiBaseURL = stripTrailingSlash(optional('E2E_API_BASE_URL') ?? opBaseURL)
 
 // Whether the hub host is the production apex. Billing write specs skip on
 // production so a manual prod dispatch never creates a live subscription.
+// SPEC-3.36.4
 function isProductionApex(hubUrl: string): boolean {
   try {
     return new URL(hubUrl).hostname === 'psa.systems';
@@ -68,6 +71,7 @@ function isProductionApex(hubUrl: string): boolean {
   }
 }
 
+// SPEC-3.36.2
 export const env = {
   // Where a human browser hits bunyip-web (login form, /settings, /membership).
   // The `ui` project navigates here.
@@ -143,6 +147,7 @@ const REQUIRED: Array<{ name: string; purpose: string }> = [
 /// configuration gap in one round trip instead of fixing-and-rerunning once
 /// per missing key. Called from the `preflight` setup project so it runs
 /// before any other project's tests.
+// SPEC-3.36.5
 export function preflightRequiredEnv(): void {
   const missing = REQUIRED.filter(({ name }) => {
     const value = process.env[name];

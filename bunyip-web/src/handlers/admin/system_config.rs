@@ -52,6 +52,7 @@ fn text_field(
     }
 }
 
+// SPEC-12.23.4: provenance sentence per serving provider
 /// BUNYIP-648: the one line under each field naming the provider that serves it,
 /// and what saving here does to the other providers holding it. The api reports
 /// the same facts `config-status` does and never a value, so this sentence is
@@ -85,6 +86,7 @@ fn provenance_text(entry: Option<&SettingProvenance>, field: &str) -> String {
     }
 }
 
+// SPEC-12.23.3: every field carries a provenance line
 /// The provenance line for one form field. Every field on this page renders one;
 /// `every_rendered_setting_carries_its_provenance` fails the build otherwise.
 fn provenance_line(cfg: &SystemConfigResponse, field: &str) -> Markup {
@@ -129,6 +131,7 @@ impl SystemSettingsValues {
     }
 }
 
+// SPEC-12.23.1, SPEC-12.23.2: form, or error box when the fetch failed
 pub(super) fn system_settings_content(
     cfg: Result<&SystemConfigResponse, &ApiError>,
     values: &SystemSettingsValues,
@@ -183,7 +186,9 @@ pub(super) fn system_settings_content(
     }
 }
 
+// SPEC-12.23.1: system settings page
 pub async fn system_config(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -216,6 +221,7 @@ pub struct SystemSettingsForm {
     pub country_deny: String,
 }
 
+// SPEC-12.24.1: full body, a cleared field clears the setting
 /// The full PUT body. Every setting is rewritten from the form, so a cleared
 /// field clears the setting. The API validates before writing (BUNYIP-580 AC4).
 pub(super) fn system_config_update_body(f: &SystemSettingsForm) -> Value {
@@ -227,11 +233,13 @@ pub(super) fn system_config_update_body(f: &SystemSettingsForm) -> Value {
     })
 }
 
+// SPEC-12.24.2, SPEC-12.24.3, SPEC-12.20.2: save, redirect on success
 pub async fn system_config_save(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<SystemSettingsForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -250,6 +258,7 @@ pub async fn system_config_save(
         Err(e) => e.user_message(),
     };
 
+    // SPEC-12.24.3: failure re-renders with submitted values and the error
     // Re-render with the submitted values plus the inline error; only the
     // record's non-form info (path, provenance) needs a re-fetch (BUNYIP-731).
     let cfg = admin_api::system_config(&st.api, c.forward.as_deref()).await;

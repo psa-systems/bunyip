@@ -17,6 +17,7 @@ ipnetwork = "0.20"
 tower = { version = "0.5", features = ["util"] }
 tokio = { workspace = true }
 
+# SPEC-13.1.4: unused public helpers must not fail the build
 # Mirrors bunyip-web: the toolkit exposes a wider surface than any single
 # consumer wires up, so pub-but-unused helpers must not fail the build.
 [lints.rust]

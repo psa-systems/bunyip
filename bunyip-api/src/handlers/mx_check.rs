@@ -25,10 +25,12 @@ use std::time::{Duration, Instant};
 
 /// Per-lookup DNS timeout. A bulk spam burst does not deserve a long wait,
 /// and a slow resolver should degrade to `Unknown` (fail open) quickly.
+// SPEC-10.35.7: a slow resolver degrades to Unknown
 const MX_LOOKUP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long a resolved outcome is cached before a re-lookup. One hour matches
 /// the ticket's assumption; long enough that a spam burst pays for one lookup.
+// SPEC-10.35.8: one lookup per domain per hour
 const MX_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
 
 /// Outcome of the MX lookup. The classifier only fires on `NoMx`; `HasMx`
@@ -56,6 +58,7 @@ pub trait MxResolver: Send + Sync {
 /// Lower-cases the result so the cache keys and the lookup hostname match
 /// the DNS canonical form. Deliberately permissive on the local-part: this
 /// gate runs AFTER `validate_email`, so the string is already a sane address.
+// SPEC-10.35.6: DNS canonical lowercase domain
 pub fn domain_of(email: &str) -> Option<String> {
     let at = email.rfind('@')?;
     let domain = email[at + 1..].trim();
@@ -75,6 +78,7 @@ pub struct HickoryMxResolver {
 }
 
 impl HickoryMxResolver {
+    // SPEC-10.35.9: system resolver config first
     pub fn new() -> Self {
         let (config, opts) = match hickory_resolver::system_conf::read_system_conf() {
             Ok(parts) => parts,
@@ -112,6 +116,7 @@ impl Default for HickoryMxResolver {
     }
 }
 
+// SPEC-10.35.7, SPEC-10.35.8: outcome mapping and cache
 #[async_trait]
 impl MxResolver for HickoryMxResolver {
     async fn lookup(&self, domain: &str) -> MxLookupOutcome {
@@ -138,6 +143,7 @@ impl MxResolver for HickoryMxResolver {
 /// Map a hickory resolver error to an outcome. NXDOMAIN counts as `NoMx`;
 /// everything else (timeout, upstream SERVFAIL, I/O error) is `Unknown` so
 /// we fail open.
+// SPEC-10.35.7: only NXDOMAIN counts as NoMx
 fn resolver_error_to_outcome(e: &NetError) -> MxLookupOutcome {
     match e {
         NetError::Dns(DnsError::NoRecordsFound(_)) => MxLookupOutcome::NoMx,

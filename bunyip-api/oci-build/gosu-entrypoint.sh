@@ -3,6 +3,7 @@
 # As non-root (compose `user:` pin): no remap, hooks or chown; fail unless every $DATA_DIRS entry is writable.
 set -eu
 
+# SPEC-14.36.1: fail fast on a missing contract variable
 : "${APP_USER:?entrypoint: APP_USER must be set by the image}"
 : "${DATA_DIRS?entrypoint: DATA_DIRS must be set by the image (empty when it writes nothing)}"
 
@@ -14,6 +15,7 @@ fi
 CURRENT_UID=$(id -u)
 CURRENT_GID=$(id -g)
 
+# SPEC-14.36.2: pinned-uid path: verify, never fix
 if [ "$CURRENT_UID" != "0" ]; then
     echo "entrypoint: started as ${CURRENT_UID}:${CURRENT_GID} (not root), skipping the PUID/PGID remap, hooks and chown" >&2
     if [ -n "${PUID:-}" ] && [ "$PUID" != "$CURRENT_UID" ]; then
@@ -34,6 +36,7 @@ if [ "$CURRENT_UID" != "0" ]; then
     exec "$@"
 fi
 
+# SPEC-14.36.3: restore /etc under a read-only root
 # BUNYIP-981: under read_only, /etc is mounted as an empty tmpfs so the
 # usermod/groupmod rewrite below (and any /etc/entrypoint.d hook) has
 # somewhere to write; repopulate it from the image's pristine copy first. A
@@ -51,6 +54,7 @@ if [ -d /etc.dist ]; then
     done
 fi
 
+# SPEC-14.36.4: the workload never runs as root
 # PUID/PGID must be numeric and non-zero: the workload never runs as root.
 check_id() {
     case "$2" in
@@ -59,6 +63,7 @@ check_id() {
     esac
 }
 
+# SPEC-14.36.4: unset ids adopt the first data dir owner
 # Unset PUID/PGID adopt the owner of the first data dir; a root owner, or no data dir, falls back to 1001.
 FIRST_DIR=""
 for dir in $DATA_DIRS; do FIRST_DIR=$dir; break; done
@@ -85,12 +90,14 @@ else
 fi
 echo "entrypoint: resolved ${APP_USER} to ${RESOLVED_UID}:${RESOLVED_GID} (uid from ${UID_SOURCE}, gid from ${GID_SOURCE})" >&2
 
+# SPEC-14.36.5: -o allows an id already in the image
 # -o allows an id already present in the image.
 groupmod -o -g "$RESOLVED_GID" "$APP_USER"
 usermod -o -u "$RESOLVED_UID" -g "$RESOLVED_GID" "$APP_USER"
 
 # Image-specific root steps (e.g. joining the docker socket's group) live in hooks, never in this file.
 export APP_USER RESOLVED_UID RESOLVED_GID
+# SPEC-14.36.5: a failing hook refuses to start
 for hook in /etc/entrypoint.d/*.sh; do
     [ -e "$hook" ] || continue
     echo "entrypoint: running root hook ${hook}" >&2
@@ -102,5 +109,6 @@ for dir in $DATA_DIRS; do
     find "$dir" \( ! -user "$RESOLVED_UID" -o ! -group "$RESOLVED_GID" \) -exec chown "$RESOLVED_UID:$RESOLVED_GID" {} +
 done
 
+# SPEC-14.36.5: user form so supplementary groups apply
 # User form, not uid:gid, so supplementary groups come from /etc/group.
 exec gosu "$APP_USER" "$@"

@@ -1,3 +1,5 @@
+<!-- SPEC-11.34.1, SPEC-11.34.3: embedded guide; keeps the username placeholder for personalization -->
+
 # Downloading apps
 
 Apps come in two forms: a **container image** you pull with Docker, or a **binary release** you download for your platform. Each app's page on the **Applications** catalog shows whichever ones it offers.

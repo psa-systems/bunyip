@@ -13,6 +13,7 @@ use crate::api::types::User;
 
 pub use web_kit::avatar::{Avatar, AVATAR_PICKER_CSS, AVATAR_SLOT_CSS};
 
+// SPEC-11.27.7
 impl Avatar for User {
     // The inherent `User` methods win method resolution over these same-named
     // trait methods, so `self.avatar_*()` calls the inherent ones, not itself.
@@ -24,6 +25,7 @@ impl Avatar for User {
     }
 }
 
+// SPEC-11.27.7, SPEC-11.27.8: callers must also ship the picker assets
 /// Render the avatar picker for bunyip-web's `User`, wired to the `/settings`
 /// avatar routes.
 pub fn avatar_picker(user: &User) -> Markup {

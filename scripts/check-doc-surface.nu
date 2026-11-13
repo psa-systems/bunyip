@@ -52,6 +52,7 @@ def between [content: string, start: string, end: string]: nothing -> string {
 # deduplicated. Requires an underscore (or the literal name `ENVIRONMENT`) so
 # a prose word like `WARN`, `INFO` or `BYTEA` inside backticks is not mistaken
 # for a variable name.
+# SPEC-3.22.4
 def backtick-names [text: string]: nothing -> list<string> {
     $text
     | parse --regex '`([A-Z][A-Z0-9_]*)`'
@@ -78,6 +79,7 @@ def table-first-column-names [section: string]: nothing -> list<string> {
 # `ENV_INVENTORY`'s flat slice of string literals: the quoted names inside
 # `WRITTEN_ENV_INVENTORY`'s array literal (the generated `RATE_LIMIT_*` family
 # appended at runtime carries no source literal, so it is out of scope here).
+# SPEC-3.22.1
 def env-inventory-names [content: string]: nothing -> list<string> {
     let body = (between $content "static WRITTEN_ENV_INVENTORY" "\n];")
     $body | parse --regex '"([A-Z][A-Z0-9_]*)"' | get capture0 | uniq | sort
@@ -100,6 +102,7 @@ def governed-secret-names [content: string]: nothing -> list<string> {
 # the Required table, the Feature-gating table, the Defaulted bullet list, and
 # the bunyip-web variable list (its own binary, sharing the one inventory
 # per BUNYIP-751).
+# SPEC-3.22.2
 def doc-env-inventory-names [doc: string]: nothing -> list<string> {
     let required = (table-first-column-names (between $doc "\n## Required\n" "\n## "))
     let gating = (table-first-column-names (between $doc "\n## Feature-gating" "\n## "))
@@ -116,6 +119,7 @@ def doc-governed-secret-names [doc: string]: nothing -> list<string> {
     table-first-column-names (between $doc "\n## `SECRETS_STORAGE`" "\n## ")
 }
 
+# SPEC-3.22.3
 def diff-report [label: string, source: list<string>, doc: list<string>]: nothing -> list<string> {
     let only_source = ($source | where {|n| $n not-in $doc })
     let only_doc = ($doc | where {|n| $n not-in $source })
@@ -136,6 +140,7 @@ def all-problems [config_content: string, sys_content: string, doc_content: stri
     $env_problems | append $sys_problems | append $secret_problems
 }
 
+# SPEC-3.22.5
 def self-test []: nothing -> nothing {
     mut ok = true
 

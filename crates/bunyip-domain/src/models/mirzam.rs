@@ -14,6 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// SPEC-7.2.98, SPEC-7.2.99: token is ciphertext + nonce under key_version.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct MirzamConfigRow {
     pub id: i32,
@@ -34,6 +35,7 @@ pub struct MirzamConfigRow {
 }
 
 impl MirzamConfigRow {
+    // SPEC-7.2.98: switched on needs address and both slugs.
     /// Switched on with the address and both slugs set. The token is the other
     /// half of "fully configured" and is read from its provider by the caller.
     pub fn settings_complete(&self) -> bool {
@@ -42,6 +44,7 @@ impl MirzamConfigRow {
             && !self.notices_list.trim().is_empty()
     }
 
+    // SPEC-7.2.99: undecryptable token logs at error and reads as absent.
     /// Decrypt the API token held by the `database` provider, mirroring
     /// `EmailConfig::db_imap_password`. A ciphertext no key decrypts is
     /// reported at `error` and treated as no token, so a stale row never blocks
@@ -67,6 +70,7 @@ impl MirzamConfigRow {
     }
 }
 
+// SPEC-7.2.100: whole-replace settings; empty token keeps the stored one.
 /// `PUT /v1/admin/mirzam`. The four settings are replaced whole; `api_token`
 /// empty or absent leaves the stored token unchanged.
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -83,6 +87,7 @@ pub struct UpdateMirzamConfigRequest {
     pub api_token: Option<String>,
 }
 
+// SPEC-7.2.101, SPEC-7.2.55: token never returned; wire key secrets_storage.
 /// The admin read model. The token is never sent back, not even masked:
 /// `has_api_token` is the only fact about it that leaves the server.
 #[derive(Debug, Clone, Serialize)]
@@ -152,10 +157,12 @@ impl MirzamFieldError {
     }
 }
 
+// SPEC-7.2.104: base URL length cap in bytes.
 pub const MAX_MIRZAM_BASE_URL_LEN: usize = 2048;
 /// Mirzam's own limit on a list slug.
 pub const MAX_MIRZAM_SLUG_LEN: usize = 64;
 
+// SPEC-7.2.105: mirrors the list-slug rule of the newsletter service.
 /// Mirzam's list-slug rule: lowercase words of letters and digits joined by
 /// single dashes, at most 64 characters (the `lists.slug` CHECK in Mirzam).
 pub fn valid_list_slug(slug: &str) -> bool {
@@ -169,6 +176,7 @@ pub fn valid_list_slug(slug: &str) -> bool {
         })
 }
 
+// SPEC-7.2.102: normalise then validate; blanks allowed only while disabled.
 /// Validate the four settings and return them normalised.
 ///
 /// A blank field is allowed only while the integration is off, so a half-typed
@@ -185,6 +193,7 @@ pub fn validate_mirzam_settings(
     let updates_list = updates_list.trim();
     let notices_list = notices_list.trim();
 
+    // SPEC-7.2.103, SPEC-7.2.104: address rules.
     if base_url.is_empty() {
         if enabled {
             return Err(MirzamFieldError::new(
@@ -223,6 +232,7 @@ pub fn validate_mirzam_settings(
         }
     }
 
+    // SPEC-7.2.106: slug rules per list.
     for (field, slug, label) in [
         ("updates_list", updates_list, "product-updates"),
         ("notices_list", notices_list, "notices"),
@@ -244,6 +254,7 @@ pub fn validate_mirzam_settings(
             ));
         }
     }
+    // SPEC-7.2.107: the two lists must differ.
     if !updates_list.is_empty() && updates_list == notices_list {
         return Err(MirzamFieldError::new(
             "notices_list",

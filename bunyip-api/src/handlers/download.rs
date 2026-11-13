@@ -25,6 +25,7 @@ use crate::repositories::{
 use crate::responses::{get_request_id, success};
 use crate::services::{AppDownloadCache, DownloadLimiter, ErrorClass, LimitDenial, ReleaseCache};
 
+// SPEC-10.32.1: percent-encoded asset links
 fn asset_href(slug: &str, asset_name: &str) -> String {
     format!(
         "/v1/applications/{}/downloads/{}",
@@ -43,6 +44,7 @@ fn to_public_asset(a: &crate::models::download::ReleaseAsset, slug: &str) -> Dow
 }
 
 /// GET /v1/applications/{slug}/downloads
+// SPEC-10.32.2, SPEC-10.32.3, SPEC-10.32.4: empty list, not 403, for an unentitled caller
 pub async fn list_app_downloads(
     req: HttpRequest,
     user: MemberUser,
@@ -105,6 +107,7 @@ pub async fn list_app_downloads(
 /// One group per active product that has at least one distribution surface
 /// with something to offer: downloadable binary assets, a pullable OCI
 /// image, or both.
+// SPEC-10.32.5, SPEC-10.32.6, SPEC-10.32.7: one entitlement query for the whole page
 pub async fn list_all_downloads(
     req: HttpRequest,
     user: MemberUser,
@@ -166,6 +169,7 @@ pub async fn list_all_downloads(
 /// UNLESS it has docs, in which case it yields a docs-only locked group
 /// (`has_access = false`, no `oci`, no `assets`); an accessible app with no
 /// distributable surface and no docs is also `None`.
+// SPEC-10.32.8, SPEC-10.32.9, SPEC-10.32.10: locked docs-only card; a bad release degrades one group
 async fn build_download_group(
     app: &Application,
     release_cache: Option<&Arc<ReleaseCache>>,
@@ -240,6 +244,8 @@ async fn build_download_group(
 // (serve the current pinned release) and Some(tag) for the versioned route (serve a
 // specific historical release). Kept as one function so the entitlement, rate-limit,
 // cache and streaming logic below cannot drift between the two entrypoints.
+// SPEC-10.32.11, SPEC-10.32.12, SPEC-10.32.13, SPEC-10.32.14, SPEC-10.32.15, SPEC-10.32.16, SPEC-10.32.17,
+// SPEC-10.32.18, SPEC-10.32.19:
 #[allow(clippy::too_many_arguments)]
 async fn download_asset_core(
     req: HttpRequest,
@@ -566,6 +572,7 @@ async fn download_asset_core(
 
 /// `GET /applications/{slug}/downloads/{asset_name}` - serve an asset from the app's
 /// current pinned release.
+// SPEC-10.32.11: current pinned release
 pub async fn download_asset(
     req: HttpRequest,
     user: MemberUser,
@@ -595,6 +602,7 @@ pub async fn download_asset(
 /// `GET /applications/{slug}/downloads/{version}/{asset_name}` - serve an asset from a
 /// specific recorded historical release (BUNYIP-386), so a pin bump no longer makes the
 /// old binary version unreachable through Bunyip.
+// SPEC-10.32.11, SPEC-10.32.12: historical release
 pub async fn download_asset_versioned(
     req: HttpRequest,
     user: MemberUser,
@@ -621,6 +629,7 @@ pub async fn download_asset_versioned(
     .await
 }
 
+// SPEC-10.32.4: upstream failure is a 502
 async fn fetch_release_or_502(
     cache: &ReleaseCache,
     app_id: uuid::Uuid,
@@ -633,6 +642,7 @@ async fn fetch_release_or_502(
 }
 
 /// POST /v1/admin/applications/{slug}/downloads/refresh
+// SPEC-10.32.20, SPEC-10.32.21: forces a fresh release fetch
 pub async fn admin_refresh_release(
     req: HttpRequest,
     _admin: AdminUser,

@@ -2,6 +2,7 @@
 //!
 //! This module contains all database models and data transfer objects.
 
+// SPEC-7.2.1: module list and re-exports below are the models surface.
 pub mod application;
 pub mod application_doc;
 pub mod application_group;

@@ -27,6 +27,7 @@ const EXPENSIVE = ["cargo chef cook" "bun install" "cargo install cargo-chef"]
 # Dockerfile instructions, with backslash continuations joined onto the line the
 # instruction starts on, so a multi-line `ENV a=1 \` + `b=2` is seen whole and
 # reported at the line the author has to edit.
+# SPEC-3.14.4
 def logical-lines [content: string]: nothing -> list<record<line: int, text: string>> {
     mut out = []
     mut buf = ""
@@ -47,6 +48,7 @@ def logical-lines [content: string]: nothing -> list<record<line: int, text: str
 }
 
 # Problems in one Dockerfile, as human-readable lines.
+# SPEC-3.14.3, SPEC-3.14.4
 def check-dockerfile [path: string]: nothing -> list<string> {
     let content = (try { open --raw $path | decode utf-8 } catch { null })
     if $content == null {
@@ -99,6 +101,7 @@ def dockerfiles []: nothing -> list<string> {
     ^git ls-files | lines | where {|f| ($f | path basename) =~ 'Dockerfile' }
 }
 
+# SPEC-3.14.5
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 

@@ -7,6 +7,7 @@ use crate::models::stripe::StripeConfig;
 pub struct StripeConfigRepository;
 
 impl StripeConfigRepository {
+    // SPEC-7.3.161
     pub async fn get(pool: &PgPool) -> Result<StripeConfig, AppError> {
         let config = sqlx::query_as::<_, StripeConfig>("SELECT * FROM stripe_config WHERE id = 1")
             .fetch_one(pool)
@@ -16,6 +17,7 @@ impl StripeConfigRepository {
 
     /// Clears encrypted secrets (secret_key, webhook_secret and their nonces) from the DB.
     /// Called when decryption fails (e.g. encryption key was rotated).
+    // SPEC-7.3.162
     pub async fn clear_secrets(pool: &PgPool) -> Result<(), AppError> {
         sqlx::query(
             r#"
@@ -37,6 +39,7 @@ impl StripeConfigRepository {
     /// (BUNYIP-483 re-encrypt pass). A `None` ciphertext leaves that column
     /// alone; `updated_by` is left alone because re-encryption is not an
     /// operator edit of the configuration.
+    // SPEC-7.3.163
     pub async fn update_secret_encryption(
         pool: &PgPool,
         secret_key: Option<Vec<u8>>,
@@ -74,6 +77,7 @@ impl StripeConfigRepository {
     /// Also covers key rotation (formerly a separate `update_encryption`): pass
     /// the re-encrypted secrets plus the rotating admin's id and the new
     /// `key_version`, and `app_tag: None` to leave the tag untouched.
+    // SPEC-7.3.164
     #[allow(clippy::too_many_arguments)]
     pub async fn update(
         pool: &PgPool,

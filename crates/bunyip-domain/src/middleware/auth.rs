@@ -59,6 +59,7 @@ pub use kernel_at_jwt::AtJwtVerifier;
 /// `<AccessTokenClaims, User>` type-parameters stay in one place.
 pub type BunyipAtJwtVerifier = dyn AtJwtVerifier<AccessTokenClaims, User>;
 
+// SPEC-7.4.4
 /// Stub verifier that rejects every at+jwt with `Unauthorized`. Wired
 /// in by `bunyip-api`'s `main.rs` when the OIDC provider is disabled
 /// (no `OIDC_ISSUER` env), so the extractor logic can call
@@ -69,6 +70,7 @@ pub type BunyipAtJwtVerifier = dyn AtJwtVerifier<AccessTokenClaims, User>;
 /// `DisabledAtJwtVerifier::new()`.
 pub type DisabledAtJwtVerifier = kernel_at_jwt::DisabledAtJwtVerifier<AccessTokenClaims, User>;
 
+// SPEC-7.4.9
 impl AccessTokenClaims {
     /// Build the legacy [`AccessTokenClaims`] shape from a verified
     /// at+jwt's standard claims plus a `User` row fetched from the DB.
@@ -100,6 +102,7 @@ impl AccessTokenClaims {
     }
 }
 
+// SPEC-7.4.8: a missing user means a stale or forged token
 /// Look up a user by `sub` for the at+jwt resolution path. Pulled into
 /// the domain crate so any future verifier implementation can reuse it
 /// without duplicating the repo call. Returns `AppError::Unauthorized`
@@ -118,6 +121,7 @@ pub async fn resolve_user_for_atjwt(pool: &PgPool, sub: &str) -> Result<User, Ap
 /// so both extractors compose under one [`FromRequest::Future`].
 type ExtractorFuture<T> = Pin<Box<dyn Future<Output = Result<T, AppError>>>>;
 
+// SPEC-7.4.7
 /// A successfully verified access token, plus the caller's `users` row when
 /// the verifying path had to read it (BUNYIP-557).
 ///
@@ -131,6 +135,7 @@ pub struct VerifiedIdentity {
     pub user: Option<User>,
 }
 
+// SPEC-7.4.3, SPEC-7.4.6: failures are not cached so no error needs replaying
 /// Verify `token` at most once per request (BUNYIP-557).
 ///
 /// Thin wrapper around `dunite_core::middleware::at_jwt::verify_once`
@@ -152,6 +157,7 @@ pub async fn verify_once(req: &HttpRequest, token: &str) -> Result<VerifiedIdent
     .await
 }
 
+// SPEC-7.4.7
 /// The caller's `users` row when a verification earlier in THIS request
 /// already read it, else `None` (BUNYIP-557).
 ///
@@ -172,6 +178,7 @@ pub fn request_user(req: &HttpRequest, token: &str) -> Option<User> {
     kernel_at_jwt::request_memo::<VerifiedIdentity>(req, token).and_then(|v| v.user)
 }
 
+// SPEC-7.4.10
 /// Extractor for authenticated users - returns 401 if not authenticated
 #[derive(Debug, Clone)]
 pub struct AuthenticatedUser(pub AccessTokenClaims);
@@ -191,6 +198,7 @@ impl FromRequest for AuthenticatedUser {
     }
 }
 
+// SPEC-7.4.11
 /// Extractor for optionally authenticated users - returns None if not authenticated
 #[derive(Debug, Clone)]
 pub struct OptionalUser(pub Option<AccessTokenClaims>);
@@ -218,6 +226,7 @@ impl FromRequest for OptionalUser {
     }
 }
 
+// SPEC-7.4.12
 /// Extractor for admin users - returns 403 if not admin
 #[derive(Debug, Clone)]
 pub struct AdminUser(pub AccessTokenClaims);
@@ -240,6 +249,7 @@ impl FromRequest for AdminUser {
     }
 }
 
+// SPEC-7.4.14
 /// BUNYIP-732: the message a refused verification-gated API call answers with.
 /// Wording is pinned identical to bunyip-web's `VERIFICATION_REQUIRED_MESSAGE`
 /// (`bunyip-web/src/handlers/mod.rs`) by a source-scan test in
@@ -248,6 +258,7 @@ impl FromRequest for AdminUser {
 pub const VERIFICATION_REQUIRED_MESSAGE: &str =
     "Verify your email before performing this action. Use the resend link on your settings page.";
 
+// SPEC-7.4.13
 /// BUNYIP-732: a principal is verification-complete once their name is present
 /// AND their email is verified. Mirrors bunyip-web's `is_verified`
 /// (`bunyip-web/src/handlers/mod.rs`), which is the property a privileged
@@ -260,6 +271,7 @@ pub fn is_verified(user: &User) -> bool {
     present(&user.first_name) && present(&user.last_name) && user.email_verified
 }
 
+// SPEC-7.4.14
 /// Error type for [`VerifiedAdminUser`]. Distinct from `AppError` because the
 /// verification refusal must name verification as the reason
 /// (`VERIFICATION_REQUIRED_MESSAGE`), and `AppError::Forbidden`'s message is
@@ -302,6 +314,7 @@ impl actix_web::ResponseError for VerifiedAdminError {
     }
 }
 
+// SPEC-7.4.14
 /// Extractor for a verified admin - the [`AdminUser`] check PLUS
 /// [`is_verified`] (BUNYIP-732). Refuses a non-admin exactly as `AdminUser`
 /// does, then refuses an admin whose `users` row is not verification-complete
@@ -349,6 +362,7 @@ impl FromRequest for VerifiedAdminUser {
     }
 }
 
+// SPEC-7.4.15
 /// Whether a request may use a super-admin-only surface (BUNYIP-413): the
 /// caller must hold the admin role AND the persisted `is_super_admin` flag.
 /// Pure so the gate is unit-testable without a request or a database.
@@ -356,6 +370,7 @@ pub fn super_admin_allowed(role: &str, is_super_admin: bool) -> bool {
     role == "admin" && is_super_admin
 }
 
+// SPEC-7.4.15: flag read per request so revocation is immediate
 /// Extractor for the super admin (the first setup account) - returns 403 for
 /// every other caller, including ordinary admins (BUNYIP-413).
 ///
@@ -404,6 +419,7 @@ impl FromRequest for SuperAdminUser {
     }
 }
 
+// SPEC-7.4.12
 /// Extractor for users with active membership - returns 403 if not a member
 #[derive(Debug, Clone)]
 pub struct MemberUser(pub AccessTokenClaims);
@@ -426,6 +442,7 @@ impl FromRequest for MemberUser {
     }
 }
 
+// SPEC-7.4.3, SPEC-7.4.4, SPEC-7.4.5
 /// Route the token through the right verifier and produce a unified
 /// [`AccessTokenClaims`]. Peeks at the JWT's header `typ` claim so an
 /// `at+jwt` is never passed to the HS256 verifier (which would reject
@@ -481,6 +498,7 @@ async fn verify_either(
     }
 }
 
+// SPEC-7.4.16
 /// BUNYIP-426 F7: the verified subject of `req`, if it carries a usable access
 /// token by either scheme.
 ///
@@ -502,6 +520,7 @@ pub async fn resolve_rate_limit_subject(req: &HttpRequest) -> Option<Uuid> {
         .map(|identity| identity.claims.sub)
 }
 
+// SPEC-7.4.2
 /// Extract JWT token from request
 /// Checks cookie first (access_token), then Authorization header
 pub fn extract_token(req: &HttpRequest) -> Option<String> {
@@ -526,6 +545,7 @@ pub fn extract_token(req: &HttpRequest) -> Option<String> {
 pub struct AuthCookies;
 
 impl AuthCookies {
+    // SPEC-7.4.17
     /// Create access token cookie
     pub fn access_token(token: &str, secure: bool, cookie_domain: Option<&str>) -> Cookie<'static> {
         let mut builder = Cookie::build("access_token", token.to_owned())
@@ -543,6 +563,7 @@ impl AuthCookies {
         builder.finish()
     }
 
+    // SPEC-7.4.17
     /// Create refresh token cookie
     pub fn refresh_token(
         token: &str,
@@ -571,6 +592,7 @@ impl AuthCookies {
         builder.finish()
     }
 
+    // SPEC-7.4.17
     /// Name of the trusted-device cookie (BUNYIP-138). Holds the opaque secret
     /// matched (hashed) against `trusted_devices.token_hash` to skip the login
     /// TOTP prompt for a remembered device.
@@ -597,6 +619,7 @@ impl AuthCookies {
         builder.finish()
     }
 
+    // SPEC-7.4.17
     /// Name of the OIDC OP session cookie. Holds the opaque `op_sessions.sid`
     /// value that `/oauth2/authorize` validates server-side.
     pub const OP_SESSION_COOKIE: &'static str = "bunyip_op_session";
@@ -618,6 +641,7 @@ impl AuthCookies {
         builder.finish()
     }
 
+    // SPEC-7.4.18
     /// Set the OP session cookie, dual-emitting a stale host-only clear when a
     /// `cookie_domain` is configured.
     ///
@@ -660,6 +684,7 @@ impl AuthCookies {
         cookies
     }
 
+    // SPEC-7.4.19
     /// Cookies that clear ONLY the OP session cookie (preserving
     /// access_token and refresh_token, which may still be valid hub
     /// auth state). Used by `/oauth2/authorize` when it detects the
@@ -705,6 +730,7 @@ impl AuthCookies {
         cookies
     }
 
+    // SPEC-7.4.20
     /// Create cookies to clear stale hostname-scoped tokens.
     /// When COOKIE_DOMAIN is set (e.g. `.example.com`), any old cookies set
     /// without a domain attribute (scoped to the exact hostname like `api.example.com`)
@@ -726,6 +752,7 @@ impl AuthCookies {
             .collect()
     }
 
+    // SPEC-7.4.20
     /// Create cookies to clear auth tokens
     pub fn clear(secure: bool, cookie_domain: Option<&str>) -> Vec<Cookie<'static>> {
         let mut cookies = Self::clear_stale(secure);
@@ -765,6 +792,7 @@ impl AuthCookies {
     }
 }
 
+// SPEC-7.4.21: forwarding headers are spoofable, so only trusted peers
 /// Extract the client IP address from a request.
 ///
 /// `X-Forwarded-For` (first hop) and `X-Real-IP` are spoofable: any client can
@@ -790,6 +818,7 @@ fn trusted_proxies(req: &HttpRequest) -> Option<&[ipnetwork::IpNetwork]> {
         .map(|cfg| cfg.trusted_proxies.as_slice())
 }
 
+// SPEC-7.4.22
 /// Extract device info from User-Agent header
 pub fn extract_device_info(req: &HttpRequest) -> Option<String> {
     req.headers()

@@ -34,6 +34,7 @@ use crate::web::{redirect_cookies, AppState};
 /// key simply could not see them.
 pub(super) type Loaded<'a, T> = Result<&'a [T], &'a ApiError>;
 
+// SPEC-12.27.6: cause line for an unreadable list
 /// The cause line under a "could not read" box.
 ///
 /// bunyip-api answers a permission or key failure with a 4xx whose message is
@@ -48,6 +49,7 @@ fn load_failure_cause(e: &ApiError, permission_hint: &str) -> String {
     }
 }
 
+// SPEC-12.27.6: could-not-read box carries the request id
 /// The "could not read this list" box: what bunyip does not know, why it
 /// probably happened, and the request id that finds it in the api log.
 fn load_failure_box(headline: &str, e: &ApiError, permission_hint: &str) -> Markup {
@@ -100,6 +102,7 @@ pub(super) fn stripe_setup_docs() -> Markup {
     }
 }
 
+// SPEC-12.30.7, SPEC-12.30.8, SPEC-12.30.9, SPEC-12.30.10: products block
 /// The Products block: a create form plus the app-tagged product list, each with
 /// an Edit disclosure (BUNYIP-511, name/description in place) and an
 /// Archive/Unarchive action. `Err` is the "could not read" state (BUNYIP-516) and
@@ -175,6 +178,7 @@ pub(super) fn stripe_products_block(
     )
 }
 
+// SPEC-12.30.8: disabled archive control with member count
 /// BUNYIP-512: the courtesy control shown in place of a live Archive button when
 /// a plan still has members: a disabled button plus the member count. The server
 /// guard is authoritative (a direct POST is refused with 409); this only spares
@@ -193,6 +197,7 @@ fn archive_blocked_by_members(member_count: i64) -> Markup {
     }
 }
 
+// SPEC-12.30.7: product edit disclosure
 /// BUNYIP-511: the inline "edit name / description" disclosure for one product
 /// row. A native `<details>` (no JS, matching the app's other disclosures) whose
 /// form posts to `/admin/stripe/products/{id}`. The request carries name +
@@ -218,6 +223,7 @@ fn product_edit_details(p: &crate::api::types::StripeProduct) -> Markup {
     }
 }
 
+// SPEC-12.31.8: price replace disclosure
 /// BUNYIP-511: the inline "replace" disclosure for one active price row. Stripe
 /// prices are immutable, so this posts the NEW amount/currency/interval to
 /// `/admin/stripe/prices/{id}/replace`, which creates a new price on the same
@@ -278,6 +284,7 @@ fn price_replace_details(pr: &crate::api::types::StripePrice) -> Markup {
 /// form of the api's `ActivePriceKey`, used to group the rendered price rows.
 type PriceDupKey = (String, String, Option<String>, Option<i64>);
 
+// SPEC-12.31.9: duplicate key mirrors the api
 /// BUNYIP-514: the uniqueness key two active prices on one product must not
 /// share, mirroring the api's `ActivePriceKey`. A one-time price
 /// (`recurring_interval = None`) buckets separately; a recurring price's missing
@@ -295,6 +302,7 @@ fn price_dup_key(p: &crate::api::types::StripePrice) -> PriceDupKey {
     )
 }
 
+// SPEC-12.31.9: active siblings per duplicate price
 /// BUNYIP-514: for each ACTIVE price that shares its key with another active
 /// price, the ids of its conflicting siblings. Prices not in a duplicate group
 /// are absent from the map. Archived prices never take part.
@@ -315,6 +323,7 @@ fn duplicate_price_siblings<'a>(
     out
 }
 
+// SPEC-12.31.9: duplicate warning
 /// BUNYIP-514: the inline warning shown next to a price that shares its currency
 /// and interval with another active price on the same product. Names the
 /// conflicting sibling ids and states only one should stay active.
@@ -337,6 +346,7 @@ fn duplicate_price_warning(siblings: &[&str]) -> Markup {
     }
 }
 
+// SPEC-12.31.6, SPEC-12.31.7, SPEC-12.31.8, SPEC-12.31.10: prices block
 pub(super) fn stripe_prices_block(
     prices: Loaded<'_, crate::api::types::StripePrice>,
     products: Loaded<'_, crate::api::types::StripeProduct>,
@@ -437,6 +447,7 @@ pub(super) fn stripe_prices_block(
     )
 }
 
+// SPEC-12.32.5: default event set
 /// The tier -> Stripe catalog mapping (BUNYIP-417, moved here from Tier
 /// Settings). Wires each tier to its Stripe price / product IDs. Its own form
 /// (separate from the keys/checkout config) posting to `/admin/stripe/catalog`,
@@ -453,6 +464,7 @@ const RECOMMENDED_WEBHOOK_EVENTS: &[&str] = &[
     "invoice.payment_failed",
 ];
 
+// SPEC-12.32.1: webhook path is under /v1
 /// BUNYIP-510: the webhook URL an admin must register in Stripe.
 /// `webhook::configure` mounts `/webhooks/stripe` INSIDE the `/v1` scope
 /// (`bunyip-api/src/routes/mod.rs`), so the path is `/v1/webhooks/stripe`; a
@@ -464,6 +476,7 @@ pub(super) fn stripe_webhook_url(api_public_origin: &str) -> String {
     )
 }
 
+// SPEC-12.32.2: only a public https origin is reachable by Stripe
 /// BUNYIP-510: whether the derived origin is one Stripe can actually reach.
 /// `Config::api_public_origin` falls back to the internal `api_url` when
 /// `BUNYIP_API_PUBLIC_ORIGIN` is unset, which prefills an unreachable Docker
@@ -480,6 +493,7 @@ pub(super) fn is_public_https_origin(origin: &str) -> bool {
     !host.is_empty() && !matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
+// SPEC-12.27.7: failed create hands its entries back to the form
 /// DEV-518: the Webhook Endpoints block - a create form (endpoint URL + enabled
 /// events, pre-filled with the events bunyip processes) plus the list of
 /// registered endpoints, each with a Delete action. Fills the admin-UI gap the
@@ -502,6 +516,7 @@ pub(super) struct WebhookRetry<'a> {
     pub reference: Option<&'a str>,
 }
 
+// SPEC-12.32.2, SPEC-12.32.3, SPEC-12.32.9: webhook endpoints block
 pub(super) fn stripe_webhooks_block(
     webhooks: Loaded<'_, crate::api::types::StripeWebhookEndpoint>,
     api_public_origin: &str,
@@ -583,6 +598,7 @@ pub(super) fn stripe_webhooks_block(
     )
 }
 
+// SPEC-12.33.8: what /pricing is doing and why
 /// BUNYIP-524: what `/pricing` is doing right now, in plain words, next to the
 /// switch that controls it. Published tiers in a success box; every reason it is
 /// not publishing in its own error box, quoting the tier, the price id and (for
@@ -618,6 +634,7 @@ fn pricing_status_block(status: Result<&crate::api::types::PricingStatus, &str>)
     }
 }
 
+// SPEC-12.33.3, SPEC-12.33.4, SPEC-12.33.5, SPEC-12.33.6, SPEC-12.33.7: catalog section
 /// BUNYIP-517: the tier catalog mapping. The admin picks the Stripe PRICE per
 /// tier; bunyip derives and stores the product it needs for webhook tier
 /// classification from that price on save, so the two can never disagree. Only
@@ -773,6 +790,7 @@ pub(super) fn stripe_catalog_section(
     }
 }
 
+// SPEC-12.27.5, SPEC-12.27.7: stripe page query
 /// BUNYIP-516: the query a failed webhook create redirects back with, so the
 /// Webhook endpoints block can restate the failure and redisplay the submitted
 /// values. Every field is optional; a plain page load leaves them empty.
@@ -799,6 +817,7 @@ fn present(s: &str) -> Option<&str> {
     Some(s.trim()).filter(|v| !v.is_empty())
 }
 
+// SPEC-12.33.4: submitted catalog values over the stored row
 /// BUNYIP-616: the catalog form's submitted values, carried on the `toast_err`
 /// redirect after a rejected save so the re-rendered form shows what the admin
 /// submitted rather than the stored `tier_config` row (BUNYIP-609 made that
@@ -830,6 +849,7 @@ pub struct CatalogFormValues {
     pub standard_visible: Option<String>,
 }
 
+// SPEC-12.33.2: submitted values ride the failure redirect
 /// BUNYIP-616: the submitted catalog values as query parameters for the
 /// `toast_err` redirect. Prices go back verbatim (an empty one is a real
 /// "(none)" selection); the four checkbox flags go back as `"0"` / `"1"` so an
@@ -850,6 +870,7 @@ pub(super) fn catalog_form_query(f: &StripeCatalogForm) -> String {
     )
 }
 
+// SPEC-12.29.4: permission status badge
 /// BUNYIP-532: the status pill for one probed permission. Colour and wording are
 /// bunyip's, keyed off the machine `status` string so an unrecognised value reads
 /// as a neutral "Unknown" rather than a panic.
@@ -864,6 +885,7 @@ fn permission_status_badge(status: &str) -> Markup {
     }
 }
 
+// SPEC-12.29.3: permission row
 /// One row of the permission checklist: what the permission is, the access level
 /// it needs, and how the saved key fared.
 fn permission_row(c: &StripePermissionCheck) -> Markup {
@@ -878,6 +900,7 @@ fn permission_row(c: &StripePermissionCheck) -> Markup {
     }
 }
 
+// SPEC-12.29.1, SPEC-12.29.2, SPEC-12.29.3, SPEC-12.29.5: self-test result
 /// BUNYIP-532: render the self-test result. An unreadable test says so; a
 /// rejected key is reported once (not as N missing permissions); an unconfigured
 /// account is told to save a key first. Otherwise the checklist splits into the
@@ -932,6 +955,7 @@ fn stripe_permission_results(r: &Result<StripePermissionReport, ApiError>) -> Ma
     }
 }
 
+// SPEC-12.29.6: test control links to the check query
 /// BUNYIP-532: the "Key and permissions" card. Always shows the Test button; when
 /// a report is present (the admin clicked Test) it shows the results underneath.
 pub(super) fn stripe_permission_block(
@@ -955,6 +979,7 @@ pub(super) fn stripe_permission_block(
     }
 }
 
+// SPEC-12.27.4: secrets editable only when the store is writable
 /// BUNYIP-542: both secrets live in the store `SECRETS_STORAGE` declares.
 /// `environment` has no writable store, so the fields render read-only and
 /// name the file to edit rather than accepting a value that would land
@@ -991,11 +1016,13 @@ pub(super) fn stripe_secret_fields(s: &crate::api::types::StripeConfigResponse) 
     }
 }
 
+// SPEC-12.27.1, SPEC-12.27.2, SPEC-12.27.3: stripe page
 pub async fn stripe(
     State(st): State<AppState>,
     headers: HeaderMap,
     axum::extract::Query(q): axum::extract::Query<StripePageQuery>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1016,12 +1043,14 @@ pub async fn stripe(
     let products_loaded: Loaded<'_, _> = products.as_ref().map(Vec::as_slice);
     let prices_loaded: Loaded<'_, _> = prices.as_ref().map(Vec::as_slice);
     let webhooks_loaded: Loaded<'_, _> = webhooks.as_ref().map(Vec::as_slice);
+    // SPEC-12.27.7: restore a failed webhook create
     let retry = WebhookRetry {
         error: present(&q.webhook_error),
         url: present(&q.webhook_url),
         events: present(&q.webhook_events),
         reference: present(&q.webhook_ref),
     };
+    // SPEC-12.27.5: probe only on the check query
     // BUNYIP-532: only probe when the admin clicked Test, so a plain page load
     // does not fire three extra Stripe reads.
     let permission_report = if q.check == "permissions" {
@@ -1086,12 +1115,14 @@ pub struct StripeProductForm {
     pub description: String,
 }
 
+// SPEC-12.30.1, SPEC-12.30.2, SPEC-12.20.2, SPEC-12.20.3: create product
 /// POST /admin/stripe/products - create a Stripe product, then redirect back.
 pub async fn stripe_product_create(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<StripeProductForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1124,6 +1155,7 @@ pub struct StripeProductEditForm {
     pub description: String,
 }
 
+// SPEC-12.30.3: trimmed, required, at most 250 bytes
 /// BUNYIP-511: name validation for a product edit - trimmed, required, 1 to 250
 /// chars. A blank name is an error (never sent upstream); this is the check the
 /// edit handler runs before building the request body.
@@ -1134,6 +1166,7 @@ pub(super) fn validate_product_name(raw: &str) -> Result<String, String> {
     }
 }
 
+// SPEC-12.30.4: name and description only, never active or metadata
 /// BUNYIP-511: the body of a product edit. Name + description ONLY. It must never
 /// carry an `active` key (lifecycle is owned by archive/unarchive, BUNYIP-512/513)
 /// nor a `metadata` key (Stripe replaces the whole metadata map on update, so
@@ -1143,6 +1176,7 @@ pub(super) fn product_edit_body(name: &str, description: &str) -> serde_json::Va
     json!({ "name": name, "description": description })
 }
 
+// SPEC-12.30.3, SPEC-12.30.5: edit product
 /// POST /admin/stripe/products/{id} - edit a product's name/description in place
 /// (BUNYIP-511), then redirect back.
 pub async fn stripe_product_edit(
@@ -1151,6 +1185,7 @@ pub async fn stripe_product_edit(
     Path(id): Path<String>,
     Form(f): Form<StripeProductEditForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1186,12 +1221,14 @@ pub async fn stripe_product_edit(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.30.6: archive product
 /// POST /admin/stripe/products/{id}/archive
 pub async fn stripe_product_archive(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1206,12 +1243,14 @@ pub async fn stripe_product_archive(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.30.6: unarchive product
 /// POST /admin/stripe/products/{id}/unarchive (BUNYIP-513)
 pub async fn stripe_product_unarchive(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1231,6 +1270,7 @@ pub struct StripeWebhookForm {
     pub enabled_events: String,
 }
 
+// SPEC-12.32.4, SPEC-12.32.5, SPEC-12.32.7: create webhook endpoint
 /// POST /admin/stripe/webhooks - create a Stripe webhook endpoint (DEV-518). On
 /// success renders a one-time page showing the signing secret (Stripe returns it
 /// only at creation); on error redirects back with a toast.
@@ -1239,6 +1279,7 @@ pub async fn stripe_webhook_create(
     headers: HeaderMap,
     Form(f): Form<StripeWebhookForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1291,6 +1332,7 @@ pub async fn stripe_webhook_create(
     }
 }
 
+// SPEC-12.32.6: one-time confirmation page
 /// BUNYIP-510: the post-create confirmation page. `create_stripe_webhook`
 /// (`bunyip-api/src/handlers/admin_stripe.rs`) already encrypts and stores the
 /// signing secret Stripe returns and hot-reloads `StripeService`, so the
@@ -1324,12 +1366,14 @@ pub(super) fn webhook_created_page(w: &crate::api::types::StripeWebhookEndpoint)
     }
 }
 
+// SPEC-12.32.8: delete webhook endpoint
 /// POST /admin/stripe/webhooks/{id}/delete (DEV-518).
 pub async fn stripe_webhook_delete(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1352,6 +1396,7 @@ pub struct StripePriceForm {
     pub interval: String,
 }
 
+// SPEC-12.31.1: dollars to cents, zero allowed
 /// Parse a dollars-and-cents amount string into integer cents. Zero is allowed
 /// (the lifetime-plan case); negatives and non-numbers are rejected. Pure so it
 /// is unit-testable.
@@ -1362,6 +1407,7 @@ pub(super) fn parse_price_cents(amount: &str) -> Result<i64, String> {
     }
 }
 
+// SPEC-12.31.2, SPEC-12.31.3: create price
 /// POST /admin/stripe/prices - create a Stripe price (dollars -> cents; 0 is a
 /// valid lifetime price), then redirect back.
 pub async fn stripe_price_create(
@@ -1369,6 +1415,7 @@ pub async fn stripe_price_create(
     headers: HeaderMap,
     Form(f): Form<StripePriceForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1411,12 +1458,14 @@ pub struct StripePriceReplaceForm {
     pub interval: String,
 }
 
+// SPEC-12.31.4: replace body
 /// BUNYIP-511: the body of a price replace - the new amount (cents), currency and
 /// interval. Reuses [`parse_price_cents`] for the amount, exactly like create.
 pub(super) fn price_replace_body(cents: i64, currency: &str, interval: &str) -> serde_json::Value {
     json!({ "unit_amount": cents, "currency": currency, "interval": interval })
 }
 
+// SPEC-12.31.4: replace price
 /// POST /admin/stripe/prices/{id}/replace - replace a price (BUNYIP-511). The API
 /// creates the new price, repoints bunyip's references, and archives this one; a
 /// partial failure comes back as an error the toast shows verbatim.
@@ -1426,6 +1475,7 @@ pub async fn stripe_price_replace(
     Path(id): Path<String>,
     Form(f): Form<StripePriceReplaceForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1451,12 +1501,14 @@ pub async fn stripe_price_replace(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.31.5: archive price
 /// POST /admin/stripe/prices/{id}/archive
 pub async fn stripe_price_archive(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1471,12 +1523,14 @@ pub async fn stripe_price_archive(
     redirect_cookies(&target, &c.set_cookies)
 }
 
+// SPEC-12.31.5: unarchive price
 /// POST /admin/stripe/prices/{id}/unarchive (BUNYIP-513)
 pub async fn stripe_price_unarchive(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1513,6 +1567,7 @@ pub struct StripeCatalogForm {
     pub standard_visible: Option<String>,
 }
 
+// SPEC-12.33.1: prices and flags always sent; empty price clears
 /// Build the catalog-save body. BUNYIP-527: each price select ALWAYS submits its
 /// value, and "(none)" submits `""`, so the price fields are always sent - an
 /// empty one as an explicit `""` that the API reads as "clear this mapping"
@@ -1549,6 +1604,7 @@ pub(super) fn catalog_save_body(f: &StripeCatalogForm) -> serde_json::Value {
     serde_json::Value::Object(body)
 }
 
+// SPEC-12.33.2: catalog save
 /// POST /admin/tier-settings/catalog - persist the tier -> Stripe price mapping
 /// and the publish switch (BUNYIP-527, moved from the Stripe page).
 pub async fn stripe_catalog_save(
@@ -1556,6 +1612,7 @@ pub async fn stripe_catalog_save(
     headers: HeaderMap,
     Form(f): Form<StripeCatalogForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (_, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1589,11 +1646,13 @@ pub struct StripeForm {
     #[serde(default)]
     pub cancel_url: String,
 }
+// SPEC-12.28.4, SPEC-12.28.5: stripe configuration save
 pub async fn stripe_save(
     State(st): State<AppState>,
     headers: HeaderMap,
     Form(f): Form<StripeForm>,
 ) -> Response {
+    // SPEC-12.20.1: admin gate runs before any API call
     let (user, c) = match admin_guard(&st, &headers).await {
         Ok(v) => v,
         Err(r) => return r,
@@ -1605,6 +1664,7 @@ pub async fn stripe_save(
     // Empty inputs leave the persisted value untouched (the API treats
     // omission as "no change"). Replaces the prior `let _ = ...` that
     // swallowed API rejections so the operator now sees an inline error.
+    // SPEC-12.28.1, SPEC-12.28.2: edge validation before the API call
     use crate::handlers::validate;
     let render_error = |err: &str| -> Response { stripe_error_page(&c, &user, err) };
     let app_tag = match validate::trim_bounded_opt(&f.app_tag, "App tag", 200) {
@@ -1635,6 +1695,7 @@ pub async fn stripe_save(
     let success_url = f.success_url.trim();
     let cancel_url = f.cancel_url.trim();
 
+    // SPEC-12.28.3: blank means keep the stored value
     let mut body = json!({ "app_tag": app_tag });
     if !secret_key.is_empty() {
         body["secret_key"] = json!(secret_key);
@@ -1656,6 +1717,7 @@ pub async fn stripe_save(
     }
 }
 
+// SPEC-12.28.5: inline error page for a failed save
 /// Re-render the Stripe settings page with the supplied inline error so a
 /// failed save surfaces context instead of the prior silent 200 + redirect.
 fn stripe_error_page(c: &AuthCtx, user: &User, err: &str) -> Response {

@@ -32,6 +32,7 @@ pub struct GroupForm {
     pub sort_order: String,
 }
 
+// SPEC-12.6.2
 /// JSON body for create/update of a group. Required identity fields are
 /// bounded and slug-checked; description / icon_url collapse empty to null;
 /// sort_order is parsed as a bounded `i32` so non-numeric and out-of-INTEGER
@@ -102,6 +103,7 @@ pub(super) fn group_form(
     }
 }
 
+// SPEC-12.6.7: a degraded fetch must not let the form clear a real assignment
 /// A group `<select>` + save button for the application edit page. Posts to the
 /// dedicated set-group endpoint so it never collides with the distribution save
 /// (which COALESCEs and cannot clear group_id).
@@ -143,6 +145,7 @@ pub(super) fn group_assignment_form(
     )
 }
 
+// SPEC-12.6.1
 /// GET /admin/application-groups
 pub async fn application_groups(State(st): State<AppState>, headers: HeaderMap) -> Response {
     let (user, c) = match admin_guard(&st, &headers).await {
@@ -202,6 +205,7 @@ pub async fn application_group_new(State(st): State<AppState>, headers: HeaderMa
     admin_response(&c, &user, "/admin/application-groups", "New group", content)
 }
 
+// SPEC-12.6.2, SPEC-12.6.3
 /// POST /admin/application-groups
 pub async fn application_group_create(
     State(st): State<AppState>,
@@ -233,6 +237,7 @@ pub async fn application_group_create(
     }
 }
 
+// SPEC-12.6.4
 /// GET /admin/application-groups/{id}/edit
 pub async fn application_group_edit(
     State(st): State<AppState>,
@@ -272,6 +277,7 @@ pub async fn application_group_edit(
     )
 }
 
+// SPEC-12.6.2, SPEC-12.6.3
 /// POST /admin/application-groups/{id}
 pub async fn application_group_save(
     State(st): State<AppState>,
@@ -321,6 +327,7 @@ pub async fn application_group_save(
     }
 }
 
+// SPEC-12.6.5
 /// POST /admin/application-groups/{id}/delete
 pub async fn application_group_delete(
     State(st): State<AppState>,
@@ -354,6 +361,7 @@ pub struct SetGroupForm {
     pub group_id: String,
 }
 
+// SPEC-12.6.6
 /// POST /admin/applications/{id}/group
 pub async fn application_set_group(
     State(st): State<AppState>,

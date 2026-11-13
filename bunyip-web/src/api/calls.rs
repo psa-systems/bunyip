@@ -12,6 +12,7 @@ use super::{ok_data, parse, parse_bare, Api, ApiError};
 
 // --- OAuth client identity ---------------------------------------------------
 
+// SPEC-11.16.1
 /// The public display identity (name + logo) of the OAuth client `client_id`
 /// names, resolved server-side (BUNYIP-697) so the consent screen never
 /// trusts a query-string-supplied `client_name`/`logo_uri`.
@@ -29,6 +30,7 @@ pub async fn client_identity(
 
 // --- sessions ---------------------------------------------------------------
 
+// SPEC-11.16.2
 /// A page of the signed-in user's active sessions (BUNYIP-137 / BUNYIP-177).
 /// The API returns a `PaginatedResponse<SessionInfo>` inside the data envelope.
 pub async fn list_sessions(
@@ -46,6 +48,7 @@ pub async fn list_sessions(
     )
 }
 
+// SPEC-11.16.2
 /// Revoke a single session by id. The API enforces that the session belongs to
 /// the caller.
 pub async fn revoke_session(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
@@ -55,6 +58,7 @@ pub async fn revoke_session(api: &Api, cookie: Option<&str>, id: &str) -> Result
     Ok(())
 }
 
+// SPEC-11.16.2
 /// Revoke every session except the caller's current one ("log out all other
 /// devices").
 pub async fn revoke_other_sessions(api: &Api, cookie: Option<&str>) -> Result<(), ApiError> {
@@ -67,6 +71,7 @@ pub async fn revoke_other_sessions(api: &Api, cookie: Option<&str>) -> Result<()
 
 // --- pricing ----------------------------------------------------------------
 
+// SPEC-11.16.3
 /// BUNYIP-487: the public pricing payload. Unauthenticated: it is what the
 /// marketing pages render, and the admin Pricing tiers page is its only source.
 /// BUNYIP-515: the one endpoint that answers with a bare body, hence
@@ -78,11 +83,13 @@ pub async fn pricing(api: &Api) -> Result<PricingResponse, ApiError> {
 
 // --- applications -----------------------------------------------------------
 
+// SPEC-11.16.4
 pub async fn applications(api: &Api, cookie: Option<&str>) -> Result<Vec<Application>, ApiError> {
     let list: ApplicationList = parse(api.get("/applications", cookie).await?)?;
     Ok(list.applications)
 }
 
+// SPEC-11.16.4
 /// Application groups for grouping the applications page (BUNYIP-100).
 pub async fn application_groups(
     api: &Api,
@@ -94,10 +101,12 @@ pub async fn application_groups(
 
 // --- membership -------------------------------------------------------------
 
+// SPEC-11.16.5
 pub async fn membership(api: &Api, cookie: Option<&str>) -> Result<Option<Membership>, ApiError> {
     parse(api.get("/memberships/me", cookie).await?)
 }
 
+// SPEC-11.16.6
 pub async fn checkout(
     api: &Api,
     cookie: Option<&str>,
@@ -113,17 +122,21 @@ pub async fn checkout(
     )
 }
 
+// SPEC-11.16.7
 /// These mutate JWT claims, so relay any rotated cookies.
 pub async fn cancel(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     membership_action(api, cookie, "/memberships/cancel").await
 }
+// SPEC-11.16.7
 pub async fn cancel_now(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     membership_action(api, cookie, "/memberships/cancel-now").await
 }
+// SPEC-11.16.7
 pub async fn reactivate(api: &Api, cookie: Option<&str>) -> Result<Vec<String>, ApiError> {
     membership_action(api, cookie, "/memberships/reactivate").await
 }
 
+// SPEC-11.16.7
 async fn membership_action(
     api: &Api,
     cookie: Option<&str>,
@@ -135,6 +148,7 @@ async fn membership_action(
     Ok(cookies)
 }
 
+// SPEC-11.16.7
 /// Open a Stripe-hosted billing-portal session for the caller's own customer
 /// record (BUNYIP-760). Wraps `POST /v1/memberships/billing-portal`, which
 /// 404s when the caller has no Stripe customer id yet.
@@ -148,6 +162,7 @@ pub async fn billing_portal(
     )
 }
 
+// SPEC-11.16.5
 pub async fn payment_history(
     api: &Api,
     cookie: Option<&str>,
@@ -157,12 +172,14 @@ pub async fn payment_history(
 
 // --- billing ----------------------------------------------------------------
 
+// SPEC-11.16.5
 pub async fn invoices(api: &Api, cookie: Option<&str>) -> Result<Vec<StripeInvoice>, ApiError> {
     parse(api.get("/billing/invoices", cookie).await?)
 }
 
 // --- downloads --------------------------------------------------------------
 
+// SPEC-11.16.8
 pub async fn downloads_all(
     api: &Api,
     cookie: Option<&str>,
@@ -171,6 +188,7 @@ pub async fn downloads_all(
     Ok(g.groups)
 }
 
+// SPEC-11.16.8
 /// Proxy a single application download asset. Streams the raw bytes from the
 /// API's `/applications/{slug}/downloads/{asset}` (which gates on membership +
 /// entitlement) so the BFF can relay them to the browser. Returns the raw
@@ -194,6 +212,7 @@ pub async fn download_asset(
 
 // --- feedback ---------------------------------------------------------------
 
+// SPEC-11.16.9
 pub struct FeedbackInput {
     pub name: String,
     pub email: String,
@@ -215,6 +234,7 @@ pub struct FeedbackAttachment {
     pub bytes: Vec<u8>,
 }
 
+// SPEC-11.16.9
 pub async fn submit_feedback(
     api: &Api,
     cookie: Option<&str>,
@@ -256,6 +276,7 @@ pub async fn submit_feedback(
 
 // --- application docs (BUNYIP-388, public read) -----------------------------
 
+// SPEC-11.16.10
 /// Public: the applications that have published documentation (BUNYIP-635).
 /// Not `applications()`: that endpoint filters `is_hosted = TRUE` and returns
 /// none of the apps whose docs the `/docs` hub links.
@@ -263,6 +284,7 @@ pub async fn documented_apps(api: &Api) -> Result<Vec<DocumentedApp>, ApiError> 
     parse(api.get("/application-docs", None).await?)
 }
 
+// SPEC-11.16.10
 /// Public: an application's documentation index (page metadata, ordered).
 pub async fn app_docs(api: &Api, app_slug: &str) -> Result<Vec<AppDocSummary>, ApiError> {
     parse(
@@ -274,6 +296,7 @@ pub async fn app_docs(api: &Api, app_slug: &str) -> Result<Vec<AppDocSummary>, A
     )
 }
 
+// SPEC-11.16.10
 /// Public: one documentation page by app slug + doc slug.
 pub async fn app_doc(api: &Api, app_slug: &str, doc_slug: &str) -> Result<AppDoc, ApiError> {
     parse(

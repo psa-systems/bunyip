@@ -23,6 +23,7 @@ use crate::api::ApiError;
 use crate::handlers::{admin_guard, admin_response};
 use crate::views::ui::{badge, empty_state, error_box_for};
 
+// SPEC-12.19.5
 /// The badge for one application's state.
 fn state_badge(status: &ProviderAppState) -> Markup {
     match status {
@@ -34,6 +35,7 @@ fn state_badge(status: &ProviderAppState) -> Markup {
     }
 }
 
+// SPEC-12.19.5
 /// The failure detail line for a non-healthy row. Empty for a healthy one
 /// (the caller skips rendering it).
 fn state_detail(status: &ProviderAppState, brand_name: &str) -> Option<String> {
@@ -55,6 +57,7 @@ fn state_detail(status: &ProviderAppState, brand_name: &str) -> Option<String> {
     }
 }
 
+// SPEC-12.19.5
 /// One provider kind's row within a healthy application: which providers are
 /// enabled, in priority order, and which is serving.
 fn kind_row(kind: &ProviderKindEntry) -> Markup {
@@ -93,6 +96,7 @@ fn ok_report(status: &ProviderAppState) -> Option<&ProviderStatusReport> {
     }
 }
 
+// SPEC-12.19.5
 /// One application's card.
 fn app_card(row: &ProviderAppStatusRow, brand_name: &str) -> Markup {
     html! {
@@ -114,6 +118,7 @@ fn app_card(row: &ProviderAppStatusRow, brand_name: &str) -> Markup {
     }
 }
 
+// SPEC-12.19.6
 /// One flagged discrepancy line.
 fn discrepancy_row(d: &ProviderDiscrepancy) -> Markup {
     let text = match d {
@@ -149,6 +154,7 @@ fn discrepancy_row(d: &ProviderDiscrepancy) -> Markup {
     }
 }
 
+// SPEC-12.19.4
 fn discrepancies_card(discrepancies: &[ProviderDiscrepancy]) -> Markup {
     html! {
         div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
@@ -167,6 +173,7 @@ fn discrepancies_card(discrepancies: &[ProviderDiscrepancy]) -> Markup {
     }
 }
 
+// SPEC-12.19.7
 /// The intro sentence under the page heading. Empty brand name omits the
 /// possessive clause rather than substituting a literal.
 fn intro_note(brand_name: &str) -> String {
@@ -179,6 +186,7 @@ fn intro_note(brand_name: &str) -> String {
     }
 }
 
+// SPEC-12.19.4: a failed fetch is stated in the page, never an empty page
 fn provider_status_content(
     apps: &[ProviderAppStatusRow],
     discrepancies: &[ProviderDiscrepancy],
@@ -198,6 +206,7 @@ fn provider_status_content(
     }
 }
 
+// SPEC-12.19.4
 /// GET /admin/providers/status
 pub async fn provider_status_page(
     State(st): State<crate::web::AppState>,

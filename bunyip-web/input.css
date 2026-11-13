@@ -1,5 +1,6 @@
 @import "tailwindcss";
 
+/* SPEC-14.8.3, SPEC-14.8.4: committed output must equal a rebuild */
 /* Tailwind's automatic source detection is rooted at this crate, so it stops at
    bunyip-web/ and never sees the shared SSR components. Declare them (BUNYIP-566):
    the web-kit extraction moved shell/ui/common/avatar out of bunyip-web/src, and
@@ -8,12 +9,14 @@
    in the stale committed output. Any rebuild without this dropped them. */
 @source "../crates/web-kit/src";
 
+/* SPEC-14.8.5: class-based dark variant */
 /* Class-based dark mode: any descendant of `.dark` gets the dark variants.
    The class is set on <html> by the early script in index.html (and kept in
    sync at runtime by stores::theme). Mirrors the React tailwind.config
    `darkMode: ["class"]`. */
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* SPEC-14.10.1, SPEC-14.10.2, SPEC-14.10.3: self-hosted fonts, versioned file names */
 /* ---------------------------------------------------------------------------
    Self-hosted web fonts (BUNYIP-554). These replace the render-blocking
    `fonts.googleapis.com` stylesheet, which pulled up to 7 woff2 files from a
@@ -77,6 +80,7 @@
     U+A720-A7FF;
 }
 
+/* SPEC-14.9.1: same token set in all four theme blocks */
 /* ---------------------------------------------------------------------------
    Bunyip reed/water design tokens. The shadcn semantic token names are kept
    (so every existing `bg-background` / `text-foreground` / `from-primary`
@@ -204,6 +208,7 @@
   --ring: 0 0% 0%;
 }
 
+/* SPEC-14.9.3: full-opacity borders */
 /* Bunyip's cards lean heavily on `border-border/50` (50% opacity of the
    border token) for soft separators. Under `.high-contrast` that resolves
    to half-strength black - still grayish, which neutered the palette change
@@ -214,6 +219,7 @@
   border-color: hsl(var(--border)) !important;
 }
 
+/* SPEC-14.9.3: heavier body weight */
 /* And bump body weight one notch so text reads heavier (an a11y win that
    pairs with the colour overhaul, not a substitute for it). Headings keep
    their declared weight - they were already bold. */
@@ -256,6 +262,7 @@
   --ring: 110 35% 65%;
 }
 
+/* SPEC-14.9.2: tokens read live; skin overrides default palette */
 /* ---------------------------------------------------------------------------
    Theme mapping. `inline` keeps the `hsl(var(--token))` reference live in the
    generated utilities so the runtime class flips above actually reskin the UI.
@@ -381,6 +388,7 @@
     font-feature-settings: "cv11", "ss01", "ss03", "rlig" 1, "calt" 1;
   }
 
+/* SPEC-14.9.4: html painted so a transparent track shows no canvas */
   html {
     scroll-behavior: smooth;
     /* BUNYIP-867: the scrollbar track is intentionally transparent, so without a
@@ -396,6 +404,7 @@
     color-scheme: dark;
   }
 
+/* SPEC-14.12.3: visible focus ring and selection colors */
   *:focus-visible {
     outline: 2px solid var(--color-brand-primary-600);
     outline-offset: 2px;
@@ -413,6 +422,7 @@
   }
 }
 
+/* SPEC-14.9.5: overrides the core breakpoint caps */
 /* Centered, padded container. Reproduce the React `theme.container` (center,
    2rem padding, full-width until the 2xl 1400px cap).
 
@@ -519,6 +529,7 @@
   animation: float 12s ease-in-out infinite;
 }
 
+/* SPEC-14.12.1: hidden until in-view */
 /* Scroll-triggered fade-up (driven by the `in-view` class toggled from Rust). */
 .scroll-fade-up {
   opacity: 0;
@@ -564,6 +575,7 @@
   transform: translateY(0);
   transition-delay: 0.5s;
 }
+/* SPEC-14.12.1: no child past the sixth stays blank */
 /* BUNYIP-992: every child past the sixth, or it stays at opacity 0 and its row
    is a blank band (the landing page lists every application). */
 .scroll-fade-up-child.in-view > *:nth-child(n + 7) {
@@ -572,6 +584,7 @@
   transition-delay: 0.5s;
 }
 
+/* SPEC-14.12.2: CSS picks the visible password glyph */
 /* Password UX glyph states (BUNYIP-554). The show/hide eye and the three
    per-requirement indicators used to be Font Awesome `<i>` elements whose class
    `assets/js/password.js` rewrote. Every state is now a pre-rendered inline SVG
@@ -600,6 +613,7 @@
   display: inline-flex;
 }
 
+/* SPEC-14.11.1: animatable scrollbar alpha */
 /* Auto-hiding scrollbars (BUNYIP-848, superseding BUNYIP-509's always-visible rule): a 5px thumb,
    no track, BUNYIP-509's 14px grab zone; app.js reveals it and check-scrollbars.nu gates it. */
 @property --sb-alpha {
@@ -608,6 +622,7 @@
   initial-value: 1;
 }
 
+/* SPEC-14.11.1, SPEC-14.11.2: auto-hide only once the page tags html */
 /* Hidden at rest only once app.js tags <html>, so a page without it fails visible. `transition-*`
    utilities outrank this layer; reduced motion drops the glide, not the hold. */
 @layer base {
@@ -638,6 +653,7 @@
   }
 }
 
+/* SPEC-14.11.3: 14px grab zone, 5px pill */
 /* Any `scrollbar-width` / `scrollbar-color` Chromium sees makes it drop these rules (YOTUN-208),
    so those two live in the Firefox block alone. */
 ::-webkit-scrollbar {
@@ -668,6 +684,7 @@
   background-color: hsl(var(--foreground) / var(--sb-alpha));
 }
 
+/* SPEC-14.11.4: Firefox-only scrollbar properties */
 /* Firefox lacks ::-webkit-scrollbar and pixel widths, so `thin` is allowed here and nowhere else. */
 @supports not selector(::-webkit-scrollbar) {
   html,

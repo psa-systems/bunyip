@@ -5,6 +5,7 @@
 # /app (see compose.dev.yml). bun and cargo-watch ship in the builder image, so
 # there is nothing to install beyond the JS deps.
 
+# SPEC-14.35.4, SPEC-14.2.2: builder tag tracks the toolchain pin
 FROM ghcr.io/niceguyit/rust-builder-glibc:v1.2.0-rust1.98.1-trixie
 
 # The runner or caller owns parallelism; `default` is cargo's own CPU count (DEV-769).
@@ -18,10 +19,12 @@ WORKDIR /app
 # travels with it and the install is frozen (BUNYIP-566) so dev builds the CSS
 # with the pinned Tailwind rather than whatever `^4.0.0` resolves to today.
 COPY bunyip-web/package.json bunyip-web/bun.lock /app/bunyip-web/
+# SPEC-14.8.2, SPEC-14.35.1: frozen; repeated at run time because mounts shadow it
 RUN cd /app/bunyip-web && bun install --frozen-lockfile
 
 # Run as the host user (per governance CHECKLIST) so bind-mounted source and the
 # target volume stay writable. CARGO_HOME moves to the user's home for writes.
+# SPEC-14.35.2: run as the host user so mounts stay writable
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 ENV CARGO_HOME=/home/app/.cargo
@@ -46,4 +49,5 @@ EXPOSE 4400
 # build:css can find the tailwind CLI. That shadowing is exactly why this
 # install is frozen too: it, not the build-time one, decides which Tailwind the
 # running dev container uses.
+# SPEC-14.35.1, SPEC-14.35.3, SPEC-14.8.2: install, build css, watch css, run with reload
 CMD ["sh", "-c", "cd /app/bunyip-web && bun install --frozen-lockfile && bun run build:css && (bun run watch:css &) && cargo watch -w . -x 'run -p bunyip-web'"]

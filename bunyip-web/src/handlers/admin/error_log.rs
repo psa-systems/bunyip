@@ -18,6 +18,7 @@ pub struct LogsQuery {
     pub category: Option<String>,
 }
 
+// SPEC-12.8.8
 /// Render a single captured ERROR entry: message + category/level badges, the
 /// route/client attribution line, and any extra structured fields.
 pub(super) fn log_row(e: &AdminErrorLog) -> Markup {
@@ -48,6 +49,7 @@ pub(super) fn log_row(e: &AdminErrorLog) -> Markup {
     }
 }
 
+// SPEC-12.8.7, SPEC-12.8.8
 /// Admin error-log view (BUNYIP-327): newest-first ERROR events from the API's
 /// in-memory ring buffer, filterable by category. Warnings never appear (the
 /// buffer captures ERROR only).

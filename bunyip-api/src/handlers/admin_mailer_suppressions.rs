@@ -22,6 +22,7 @@ pub struct ListMailerSuppressionsQuery {
     pub per_page: Option<i32>,
 }
 
+// SPEC-10.18.1: paginated list, newest first.
 /// GET /v1/admin/mailer-suppressions
 ///
 /// Lists suppressed addresses, newest first. AdminUser-guarded.
@@ -42,6 +43,7 @@ pub async fn list_mailer_suppressions(
     Ok(paginated(items, total, page, per_page, request_id))
 }
 
+// SPEC-10.18.2: verified-admin lift, 404 when absent, audited.
 /// DELETE /v1/admin/mailer-suppressions/{address}
 ///
 /// Removes `address` from the suppression list, so it can be mailed again.

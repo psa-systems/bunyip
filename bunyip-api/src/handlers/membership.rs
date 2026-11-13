@@ -50,6 +50,7 @@ pub struct StripePaymentResponse {
 
 /// GET /v1/memberships/me
 /// Get current user's membership status
+// SPEC-10.29.1, SPEC-10.29.2: Stripe failure is an error, not a default
 pub async fn get_membership(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -93,6 +94,7 @@ pub async fn get_membership(
 
 /// POST /v1/memberships/checkout
 /// Create a Stripe checkout session
+// SPEC-10.29.3, SPEC-10.29.4, SPEC-10.29.5, SPEC-10.29.6, SPEC-10.29.7: row lock prevents duplicate customers
 pub async fn create_checkout(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -182,6 +184,7 @@ pub async fn create_checkout(
 /// `list_prices(None)` returns; this filters it to the one product
 /// `resolve_tier_for_product` (`webhook.rs`) also treats as standard, instead
 /// of taking the first active price regardless of product (BUNYIP-942).
+// SPEC-10.29.5: resolve the standard product's price, not the first active one
 fn standard_tier_fallback_price(
     tc: &TierConfig,
     prices: &[StripePriceResponse],
@@ -199,6 +202,7 @@ fn standard_tier_fallback_price(
 
 /// POST /v1/memberships/cancel
 /// Cancel membership at end of current billing period
+// SPEC-10.29.8, SPEC-10.29.9, SPEC-10.29.10: cancel at period end
 pub async fn cancel_membership(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -281,6 +285,7 @@ pub async fn cancel_membership(
 
 /// POST /v1/memberships/cancel-now
 /// Cancel membership immediately (for testing/development)
+// SPEC-10.29.11: immediate cancel
 pub async fn cancel_membership_immediate(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -356,6 +361,7 @@ pub async fn cancel_membership_immediate(
 
 /// POST /v1/memberships/reactivate
 /// Reactivate a membership that's scheduled for cancellation
+// SPEC-10.29.12: only a scheduled cancellation can be reversed
 pub async fn reactivate_membership(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -396,6 +402,7 @@ pub async fn reactivate_membership(
 
 /// POST /v1/memberships/billing-portal
 /// Get a link to the Stripe billing portal
+// SPEC-10.29.13: portal link
 pub async fn billing_portal(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -421,6 +428,7 @@ pub async fn billing_portal(
 
 /// GET /v1/memberships/payments
 /// Get payment history from Stripe
+// SPEC-10.29.14: invoice list limit
 pub async fn get_payment_history(
     req: HttpRequest,
     user: AuthenticatedUser,
@@ -435,6 +443,7 @@ pub async fn get_payment_history(
 
     let payments = if let Some(ref customer_id) = db_user.stripe_customer_id {
         let limit = query.per_page.map(|p| p.clamp(1, 100) as u64);
+        // SPEC-1.4: invoices are read live from Stripe, never stored
         let invoices = stripe
             .list_customer_invoices(customer_id, limit)
             .await

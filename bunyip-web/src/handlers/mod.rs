@@ -32,6 +32,7 @@ pub fn cookie_of(headers: &HeaderMap) -> Option<String> {
     auth::req_cookie(headers)
 }
 
+// SPEC-12.40.1: optional auth: anonymous is not an error
 /// Authenticate (optional) for a page that renders differently when signed in.
 pub async fn ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Option<String>) {
     let cookie = cookie_of(headers);
@@ -40,6 +41,7 @@ pub async fn ctx(st: &AppState, headers: &HeaderMap) -> (AuthCtx, Option<String>
     (ctx, fwd)
 }
 
+// SPEC-12.40.9: clock-derived index, no rand dependency
 /// Pseudo-random index (no rand dep): derive from the clock. Fine for picking a
 /// rotating hero/tagline line per request.
 pub fn rotating_index(len: usize) -> usize {
@@ -49,6 +51,7 @@ pub fn rotating_index(len: usize) -> usize {
     (chrono::Utc::now().timestamp_subsec_nanos() as usize) % len
 }
 
+// SPEC-12.40.2: pricing via the TTL cache, links resolved once per render
 /// Authenticate (optional) and fetch the chrome's shared data: the public
 /// pricing payload.
 ///
@@ -88,6 +91,7 @@ pub async fn public_ctx(
     (c, pricing, app_links_allowed)
 }
 
+// SPEC-12.40.3: link and destination gate read the same decision
 /// whether the visitor should be shown any application link.
 ///
 /// An anonymous visitor sees none, and a signed-in visitor sees them only when
@@ -107,6 +111,7 @@ pub async fn application_links_allowed(st: &AppState, user: Option<&User>) -> bo
     }
 }
 
+// SPEC-12.40.4: Pricing link follows pricing.published()
 /// Wrap content in the public shell + document and relay any refreshed cookies.
 pub fn public_response(
     st: &AppState,
@@ -128,6 +133,7 @@ pub fn public_response(
     html_cookies(document(title, body), &c.set_cookies)
 }
 
+// SPEC-12.40.5: auth pages carry no feedback launcher
 /// Render an auth/token page (public shell, no feedback launcher). `content` is
 /// computed by the caller.
 pub async fn auth_page(
@@ -140,6 +146,7 @@ pub async fn auth_page(
     public_response(st, &c, &pricing, app_links_allowed, title, false, content)
 }
 
+// SPEC-12.40.6: exact-name cookie lookup
 /// Read a single named cookie from the request.
 pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     let raw = cookie_of(headers)?;
@@ -153,6 +160,7 @@ pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
+// SPEC-12.40.7: server-side password policy
 /// Server-side password policy (mirrors the zod schema).
 pub fn password_ok(p: &str) -> bool {
     p.len() >= 12
@@ -162,6 +170,7 @@ pub fn password_ok(p: &str) -> bool {
         && p.chars().any(|c| !c.is_ascii_alphanumeric())
 }
 
+// SPEC-12.40.8: whitespace-only counts as missing
 /// BUNYIP-206: a user has supplied their name once both first AND last name are
 /// non-empty (phone is optional). Whitespace-only values count as empty,
 /// mirroring the trim-at-the-API-edge behaviour of the profile write.
@@ -172,6 +181,7 @@ pub fn names_present(user: &User) -> bool {
     present(&user.first_name) && present(&user.last_name)
 }
 
+// SPEC-12.41.4: allowlist so the onboarding gate cannot trap the flow
 /// BUNYIP-206: paths a not-yet-onboarded user may still reach, so the onboarding
 /// gate cannot trap them: the onboarding page itself, the emailed verification
 /// link landing plus its resend control, logout, and static assets.
@@ -184,6 +194,7 @@ fn onboarding_allowed(path: &str) -> bool {
     ) || path.starts_with("/assets")
 }
 
+// SPEC-12.41.6, SPEC-12.41.7: API only for named unverified non-admin; failure logged
 /// BUNYIP-206: the onboarding gate decision. A user still needs onboarding while
 /// they lack a name, or - WHEN email delivery is actually configured - while
 /// their email is unverified. Email verification is treated as not-required when
@@ -227,6 +238,7 @@ pub async fn needs_onboarding(st: &AppState, user: &User) -> bool {
     onboarding_needed(true, false, false, email_enabled)
 }
 
+// SPEC-12.41.5: pure gate policy matrix
 /// Pure onboarding-gate policy, split out of [`needs_onboarding`] so the
 /// name / verified / admin / email-delivery matrix is unit-testable without an
 /// [`AppState`]. A user still needs onboarding while they lack a name; once
@@ -252,6 +264,7 @@ fn onboarding_needed(
     email_enabled
 }
 
+// SPEC-12.41.1, SPEC-12.41.2, SPEC-12.41.3: login, admin 2FA and onboarding gates in that order
 /// Authenticate a protected page. `Err` is a ready redirect (to /login when
 /// signed out, to 2FA setup for an admin who hasn't enabled it yet, or to
 /// /onboarding for a user who hasn't finished onboarding - BUNYIP-206).
@@ -290,6 +303,7 @@ pub async fn guard(
     }
 }
 
+// SPEC-12.41.8, SPEC-12.41.9: admin role gate plus visible-on-failure feedback badge
 /// Like `guard` but also requires the admin role (non-admins -> dashboard).
 #[allow(clippy::result_large_err)] // Err is the ready-made redirect the caller returns as-is
 pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, AuthCtx), Response> {
@@ -315,6 +329,7 @@ pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, Au
     Ok((user, c))
 }
 
+// SPEC-12.42.4: names verification, not permission
 /// BUNYIP-619: the message a refused verification-gated action shows. It NAMES
 /// verification (not permission) so an admin knows the wall is their unverified
 /// email, and points at the resend control that clears it. The reason must be
@@ -322,6 +337,7 @@ pub async fn admin_guard(st: &AppState, headers: &HeaderMap) -> Result<(User, Au
 pub const VERIFICATION_REQUIRED_MESSAGE: &str =
     "Verify your email before performing this action. Use the resend link on your settings page.";
 
+// SPEC-12.42.1: distinct from the onboarding wall admins may pass
 /// BUNYIP-619: a principal is verification-complete once their name is present
 /// AND their email is verified. This is the property a privileged action
 /// requires, and it is deliberately distinct from the onboarding wall an admin
@@ -330,6 +346,7 @@ pub fn is_verified(user: &User) -> bool {
     names_present(user) && user.email_verified
 }
 
+// SPEC-12.42.2, SPEC-12.42.3: per-action floor, admin included
 /// BUNYIP-619: refuse a verification-gated action when the acting principal is
 /// not verification-complete, ADMIN INCLUDED. `Some(redirect)` bounces back to
 /// `back` carrying a toast that names verification as the reason; `None` lets the
@@ -369,6 +386,7 @@ pub fn dashboard_input() -> &'static str {
     "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 }
 
+// SPEC-12.40.10: relays refreshed cookies
 pub fn dashboard_response(
     c: &AuthCtx,
     user: &User,
@@ -385,6 +403,7 @@ pub fn dashboard_response(
     )
 }
 
+// SPEC-12.40.10: only /settings ships the picker assets
 /// BUNYIP-554: `dashboard_response` for the one page that renders
 /// `views::avatar_picker::avatar_picker` (`/settings`). Only this response
 /// carries the picker's stylesheet and `assets/js/avatar-picker.js`; every
@@ -407,6 +426,7 @@ pub fn dashboard_response_with_avatar_picker(
     )
 }
 
+// SPEC-12.40.10: relays cookies, renders feedback badge
 pub fn admin_response(
     c: &AuthCtx,
     user: &User,
@@ -668,6 +688,7 @@ mod verification_gate_tests {
         );
     }
 
+    // SPEC-12.42.5: scan fails the build if a gated action drops the gate
     /// The bunyip-web admin handler sources, with the set of gated action
     /// functions in each. Every listed function MUST refuse an unverified admin
     /// by calling `verification_gate`; the scan below fails the build if one
@@ -717,6 +738,7 @@ mod verification_gate_tests {
         ),
     ];
 
+    // SPEC-12.42.6: scan keeps the SMTP repair path ungated
     /// The escape-hatch handlers an unverified admin MUST still be able to run,
     /// so a mail-less deployment can repair SMTP and the admin can then verify
     /// (BUNYIP-401). The scan asserts none of them gates, so the hatch cannot be
@@ -784,6 +806,7 @@ mod verification_gate_tests {
         }
     }
 
+    // SPEC-12.42.7: scan forbids discarding admin_api results
     /// Every bunyip-web admin handler source that calls `admin_api::`
     /// (BUNYIP-723). Discarding the result with `let _ =` swallows a refused
     /// action into a fake redirect: the browser follows a 303 back to a page

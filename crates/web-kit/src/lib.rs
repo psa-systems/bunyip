@@ -11,6 +11,7 @@
 //! enters focus: a path dependency in a shared checkout, or a git dependency on
 //! this repository.
 
+// SPEC-13.1.1, SPEC-13.1.3: the kit stays brand-free; CSP and scripts live with the consumer
 // Two pieces of bunyip-web's SSR surface deliberately did NOT move here
 // (BUNYIP-589):
 //
@@ -26,6 +27,7 @@
 //   are already brand-free and guarded, so they stay beside the consumer's other
 //   static assets.
 
+// SPEC-13.1.2: the six public modules
 pub mod avatar;
 pub mod client_ip;
 pub mod common;

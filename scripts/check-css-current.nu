@@ -54,6 +54,7 @@ def normalise-path []: string -> string {
 
 # The `@source` paths declared in input.css, as repo-relative directories.
 # Tailwind resolves them against the stylesheet's own directory.
+# SPEC-3.24.1, SPEC-3.24.2
 def declared-sources [css: string]: nothing -> list<string> {
     let content = (try { open --raw $css | decode utf-8 } catch { null })
     if $content == null {
@@ -70,6 +71,7 @@ def declared-sources [css: string]: nothing -> list<string> {
 }
 
 # Repo-relative `crates/<name>/src` directories whose Rust sources emit markup.
+# SPEC-3.24.1, SPEC-3.24.2
 def markup-source-dirs [root: string]: nothing -> list<string> {
     let base = ($root | path expand)
     glob $"($base)/crates/*/src/**/*.rs"
@@ -100,6 +102,7 @@ def uncovered-source-dirs [root: string]: nothing -> list<string> {
 # -- freshness --------------------------------------------------------------
 
 # Byte-for-byte comparison, reported in a form an author can act on.
+# SPEC-3.24.5
 def css-diff [fresh: string, committed: string]: nothing -> list<string> {
     let a = (try { open --raw $fresh | into binary } catch { null })
     if $a == null {
@@ -122,6 +125,7 @@ def css-diff [fresh: string, committed: string]: nothing -> list<string> {
 
 # Run one external command, reporting its own output on failure rather than
 # collapsing it into a bare exit code.
+# SPEC-3.24.4
 def run-or-fail [what: string, cmd: closure]: nothing -> nothing {
     let r = (do $cmd | complete)
     if $r.exit_code != 0 {
@@ -134,6 +138,7 @@ def run-or-fail [what: string, cmd: closure]: nothing -> nothing {
 
 # Build the stylesheet to `out`. Uses the host's bun when it has one, else the
 # builder image (the only other place bun is known to live); never installs bun.
+# SPEC-3.24.3
 def build-css [out: string]: nothing -> nothing {
     if (which bun | is-not-empty) {
         run-or-fail "bun install --frozen-lockfile" {|| cd $WEB_DIR; ^bun install --frozen-lockfile }
@@ -168,6 +173,7 @@ def build-css [out: string]: nothing -> nothing {
 
 # -- entry point ------------------------------------------------------------
 
+# SPEC-3.24.7
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 
@@ -264,6 +270,7 @@ def main [
         exit 1
     }
 
+    # SPEC-3.24.6
     # Digest either side of the build: the gate proves the committed file is
     # current, so it must never be the thing that made it current.
     let before = (open --raw $BUILT_CSS | hash sha256)

@@ -46,6 +46,7 @@ fn http_scheme(scheme: &str) -> &'static str {
     }
 }
 
+// SPEC-9.14.3, SPEC-9.14.4: client ip is set at creation, never re-recorded
 /// A [`RootSpanBuilder`] that records the trusted external client IP in
 /// `http.client_ip` instead of the spoofable actix realip. All other fields
 /// (method, route, flavor, scheme, host, user-agent, target, status, request

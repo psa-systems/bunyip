@@ -1,3 +1,4 @@
+# SPEC-14.38.3: keep host-only and secret files out of image layers
 # Keep the prod build context lean and free of host-only / secret material.
 target/
 **/target/
@@ -13,6 +14,7 @@ secrets/
 node_modules/
 **/node_modules/
 docs/
+# SPEC-14.38.3, SPEC-14.8.3: rebuilt inside the web image
 # Generated Tailwind output; rebuilt inside the web image.
 bunyip-web/assets/styles.css
 *.rs.bk

@@ -15,8 +15,10 @@
 //! this module; a new form with a single guard condition may reach for
 //! `password.rs`'s guard instead.
 
+// SPEC-11.27.6: forms using these helpers render novalidate
 use maud::{html, Markup};
 
+// SPEC-11.27.3: literal true/false so CSS and JS can flip it
 /// `"true"` / `"false"` for an `aria-invalid` attribute. Rendering the literal
 /// value (not a valueless boolean attribute) lets an `aria-[invalid=true]:`
 /// Tailwind variant paint the invalid-state border, and lets client-side JS
@@ -29,6 +31,7 @@ pub fn aria_invalid(is_invalid: bool) -> &'static str {
     }
 }
 
+// SPEC-11.27.4
 /// The shared class for a text field, plus the invalid-state border/ring
 /// driven by `aria-invalid="true"`, so marking a field invalid is a single
 /// attribute flip on both the server redraw and the client path. `base` is
@@ -40,6 +43,7 @@ pub fn field_invalid_class(base: &str, extra: &str) -> String {
     )
 }
 
+// SPEC-11.27.5: always present so aria-describedby resolves
 /// The inline error slot rendered under a field. It always exists (so the
 /// input's `aria-describedby` target is real and client-side JS has a stable
 /// node to fill), and is hidden until it carries a message. `data-field-error`

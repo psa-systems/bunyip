@@ -20,10 +20,12 @@ use crate::util::urlenc;
 
 // --- stats ------------------------------------------------------------------
 
+// SPEC-11.17.1
 pub async fn stats(api: &Api, cookie: Option<&str>) -> Result<AdminStatsResponse, ApiError> {
     parse(api.get("/admin/stats", cookie).await?)
 }
 
+// SPEC-11.17.1
 /// System health (BUNYIP-474): used by the dashboard for the dataset-freshness
 /// card. Returns just the `health` block of `GET /v1/admin/health`.
 pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHealth, ApiError> {
@@ -31,6 +33,7 @@ pub async fn system_health(api: &Api, cookie: Option<&str>) -> Result<SystemHeal
     Ok(resp.health)
 }
 
+// SPEC-11.17.1
 /// The running build the bunyip-api process serves: version, short revision,
 /// and the update-check status when configured. Fetched from the root-level
 /// `GET /version` (NOT `/v1/version`), the same endpoint an operator would
@@ -39,6 +42,7 @@ pub async fn api_version(api: &Api) -> Result<ApiVersion, ApiError> {
     parse(api.get_root("/version").await?)
 }
 
+// SPEC-11.17.1
 /// Per-integration status (BUNYIP-623): the Configured / Unconfigured / Failing
 /// list the admin System Status page renders. `GET /v1/admin/integrations`.
 pub async fn integration_status(
@@ -49,6 +53,7 @@ pub async fn integration_status(
     Ok(resp.integrations)
 }
 
+// SPEC-11.17.1
 /// The suite provider-status aggregate (BUNYIP-634): Bunyip's own state plus
 /// every other application in the suite, and the discrepancies flagged across
 /// them. `GET /v1/admin/providers/status`.
@@ -61,6 +66,7 @@ pub async fn provider_status(
 
 // --- feedback ---------------------------------------------------------------
 
+// SPEC-11.17.1
 /// New-items count for the admin sidebar's Feedback badge (BUNYIP-919): rows
 /// with `status = 'new'` and not spam. `GET /v1/admin/feedback/new-count`. A
 /// dedicated endpoint, so the sidebar reads one number rather than a page of
@@ -77,6 +83,7 @@ pub async fn feedback_new_count(api: &Api, cookie: Option<&str>) -> Result<i64, 
 
 // --- users ------------------------------------------------------------------
 
+// SPEC-11.17.2
 #[allow(clippy::too_many_arguments)]
 pub async fn users(
     api: &Api,
@@ -118,6 +125,7 @@ pub async fn users(
     parse(api.get(&path, cookie).await?)
 }
 
+// SPEC-11.17.3
 pub async fn update_user_role(
     api: &Api,
     cookie: Option<&str>,
@@ -134,6 +142,7 @@ pub async fn update_user_role(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Correct a user's email address (BUNYIP-119). PUT /admin/users/{id}/email
 /// with `{email, verified}`; the API normalizes + validates the address and
 /// rejects a collision with another live account.
@@ -154,6 +163,7 @@ pub async fn update_user_email(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Force-verify a user's email (BUNYIP-119). POST /admin/users/{id}/email/verify.
 pub async fn verify_user_email(
     api: &Api,
@@ -170,6 +180,7 @@ pub async fn verify_user_email(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Clear a user's two-factor authentication (BUNYIP-119), letting a locked-out
 /// user re-enrol. POST /admin/users/{id}/two-factor/reset.
 pub async fn reset_user_two_factor(
@@ -187,6 +198,7 @@ pub async fn reset_user_two_factor(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
         .delete(&format!("/admin/users/{user_id}"), cookie, None)
@@ -194,6 +206,7 @@ pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Resu
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.4
 /// Hard-delete an application. The API gates this on the admin's password + 2FA
 /// code (DELETE /admin/applications/{id} with a JSON body), so both are required
 /// and an invalid value surfaces as a validation ApiError.
@@ -214,6 +227,7 @@ pub async fn delete_application(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Single-user details for the admin user-detail page. Wraps GET /admin/users/{id}.
 pub async fn get_user(
     api: &Api,
@@ -223,6 +237,7 @@ pub async fn get_user(
     parse(api.get(&format!("/admin/users/{user_id}"), cookie).await?)
 }
 
+// SPEC-11.17.3
 /// Soft-delete a user. (PUT /admin/users/{id}/status with active=false.)
 pub async fn suspend_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
@@ -235,6 +250,7 @@ pub async fn suspend_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Res
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Reactivate a suspended user. (PUT /admin/users/{id}/status with active=true.)
 /// The API clears `deleted_at`; it 404s when the id is not a soft-deleted row
 /// (already active or unknown), so reactivation cannot silently no-op (BUNYIP-120).
@@ -253,6 +269,7 @@ pub async fn reactivate_user(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.3
 /// Admin-triggered password reset. The backend emails the user a reset link.
 pub async fn admin_reset_password(
     api: &Api,
@@ -269,6 +286,7 @@ pub async fn admin_reset_password(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.4
 /// Grant lifetime membership. Creates a $0 Stripe subscription on the backend
 /// so invoices still flow. BUNYIP-943: gated on the acting admin's 2FA code,
 /// the same as `set_user_tier`; the API returns a validation error on a
@@ -289,6 +307,7 @@ pub async fn grant_lifetime(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.4
 /// Revoke a previously-granted lifetime membership. Returns the user to the
 /// standard tier with no active subscription. BUNYIP-943: gated on the acting
 /// admin's 2FA code, same as `grant_lifetime`.
@@ -308,6 +327,7 @@ pub async fn revoke_lifetime(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.4
 /// BUNYIP-431: move a member to any configured tier (lifetime, early adopter,
 /// standard, free), gated on the acting admin's 2FA code. Wraps POST
 /// /admin/users/{id}/tier. The API returns a validation error on a bad/absent
@@ -336,6 +356,7 @@ pub async fn set_user_tier(
 // The grant / revoke override actions below stay - they remain reachable via
 // `/admin/memberships/{id}/grant|revoke`, which now redirect to the user detail.
 
+// SPEC-11.17.5
 /// Grant an admin-override membership (free tier, `membership_override_by` set
 /// to the acting admin). Wraps POST /admin/memberships/grant. BUNYIP-118.
 pub async fn grant_membership(
@@ -353,6 +374,7 @@ pub async fn grant_membership(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.5
 /// Revoke an admin-override membership: cancels status, resets tier to standard
 /// and clears `membership_override_by`. Wraps POST /admin/memberships/revoke.
 /// BUNYIP-118.
@@ -373,6 +395,7 @@ pub async fn revoke_membership(
 
 // --- applications -----------------------------------------------------------
 
+// SPEC-11.17.6
 pub async fn applications(
     api: &Api,
     cookie: Option<&str>,
@@ -381,6 +404,7 @@ pub async fn applications(
     Ok(list.applications)
 }
 
+// SPEC-11.17.6
 pub async fn update_application(
     api: &Api,
     cookie: Option<&str>,
@@ -393,6 +417,7 @@ pub async fn update_application(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.6
 pub async fn create_application(
     api: &Api,
     cookie: Option<&str>,
@@ -402,6 +427,7 @@ pub async fn create_application(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.6
 /// Set the display order of all applications from an explicit id list
 /// (BUNYIP-473). Wraps `PUT /v1/admin/applications/reorder`, which assigns each
 /// id's sort_order from its index.
@@ -420,6 +446,7 @@ pub async fn reorder_applications(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.6
 /// Assign an application to a group, or clear it (`group_id = null`). BUNYIP-100.
 pub async fn set_application_group(
     api: &Api,
@@ -439,6 +466,7 @@ pub async fn set_application_group(
 
 // --- application groups (BUNYIP-100) ----------------------------------------
 
+// SPEC-11.17.7
 pub async fn application_groups(
     api: &Api,
     cookie: Option<&str>,
@@ -447,6 +475,7 @@ pub async fn application_groups(
     Ok(list.groups)
 }
 
+// SPEC-11.17.7
 pub async fn create_application_group(
     api: &Api,
     cookie: Option<&str>,
@@ -458,6 +487,7 @@ pub async fn create_application_group(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.7
 pub async fn update_application_group(
     api: &Api,
     cookie: Option<&str>,
@@ -474,6 +504,7 @@ pub async fn update_application_group(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.7
 pub async fn delete_application_group(
     api: &Api,
     cookie: Option<&str>,
@@ -491,6 +522,7 @@ pub async fn delete_application_group(
 
 // --- entitlements -----------------------------------------------------------
 
+// SPEC-11.17.8
 pub async fn list_user_entitlements(
     api: &Api,
     cookie: Option<&str>,
@@ -502,6 +534,7 @@ pub async fn list_user_entitlements(
     )
 }
 
+// SPEC-11.17.8
 pub async fn grant_user_entitlement(
     api: &Api,
     cookie: Option<&str>,
@@ -518,6 +551,7 @@ pub async fn grant_user_entitlement(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.8
 pub async fn revoke_user_entitlement(
     api: &Api,
     cookie: Option<&str>,
@@ -534,6 +568,7 @@ pub async fn revoke_user_entitlement(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.6
 pub async fn set_application_restricted(
     api: &Api,
     cookie: Option<&str>,
@@ -552,6 +587,7 @@ pub async fn set_application_restricted(
 
 // --- audit logs -------------------------------------------------------------
 
+// SPEC-11.17.9
 /// BUNYIP-936 / BUNYIP-937: filter parameters the admin audit page carries.
 /// Grouped into a struct so the helper signature does not grow a parameter
 /// per field as new filters land.
@@ -564,6 +600,7 @@ pub struct AuditFilters<'a> {
     pub q: Option<&'a str>,
 }
 
+// SPEC-11.17.9
 pub async fn audit_logs(
     api: &Api,
     cookie: Option<&str>,
@@ -596,6 +633,7 @@ pub async fn audit_logs(
 
 // --- error log (BUNYIP-327) -------------------------------------------------
 
+// SPEC-11.17.10
 /// Fetch the in-memory error-log ring buffer, optionally filtered to one
 /// category. Newest-first; the buffer is bounded so no pagination is needed.
 pub async fn error_logs(
@@ -612,6 +650,7 @@ pub async fn error_logs(
 
 // --- seed data import (PSA-52) ----------------------------------------------
 
+// SPEC-11.17.11
 /// Load a canonical seed file through the API's shared loader. The file is a
 /// pre-parsed JSON value (the web handler validates it is JSON first). Export
 /// is a direct download via `Api::get_stream`, so it needs no client method.
@@ -623,6 +662,7 @@ pub async fn import_seed(
     parse(api.post("/admin/seed/import", cookie, Some(file)).await?)
 }
 
+// SPEC-11.17.11
 /// List the embedded seed templates (PSA-57) for the first-run setup picker.
 /// Wraps `GET /v1/admin/seed/templates`, whose `data` is a bare array.
 pub async fn seed_templates(
@@ -632,6 +672,7 @@ pub async fn seed_templates(
     parse(api.get("/admin/seed/templates", cookie).await?)
 }
 
+// SPEC-11.17.11
 /// Load a named embedded template through the API loader (PSA-57). Sends the
 /// name as the `?template=` query with no body; the API 400s an unknown name.
 pub async fn import_seed_template(
@@ -645,6 +686,7 @@ pub async fn import_seed_template(
 
 // --- IP auto-bans (BUNYIP-320) ----------------------------------------------
 
+// SPEC-11.17.12
 /// List the currently-active IP auto-bans (IP, reason, strikes, banned-at,
 /// expires-at). Wraps `GET /v1/admin/ip-bans` (BUNYIP-319), whose `data` is a
 /// bare array of ban objects.
@@ -652,6 +694,7 @@ pub async fn ip_bans(api: &Api, cookie: Option<&str>) -> Result<Vec<AdminIpBan>,
     parse(api.get("/admin/ip-bans", cookie).await?)
 }
 
+// SPEC-11.17.12
 /// Advisory ASN / VPN enrichment for `ip` (BUNYIP-437). Wraps
 /// `GET /v1/admin/ip-enrichment?ip=<addr>`, which returns no data (mapped to
 /// `Ok(None)`) when enrichment is unavailable: no dataset configured, a
@@ -667,6 +710,7 @@ pub async fn ip_enrichment(
     )
 }
 
+// SPEC-11.17.12
 /// Ban `ip` by hand for `duration_secs` with `reason` (BUNYIP-413). Wraps
 /// `POST /v1/admin/ip-bans`, which is super-admin-only and audits the ban; a
 /// non-super-admin gets a 403 that surfaces as a permission ApiError.
@@ -687,6 +731,7 @@ pub async fn create_ip_ban(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.12
 /// Lift the auto-ban for `ip`, effective on the next request. Wraps
 /// `DELETE /v1/admin/ip-bans/{ip}` (BUNYIP-319); the API audits the lift and
 /// 404s when the IP was not banned. `ip` is percent-encoded into the path so an
@@ -700,6 +745,7 @@ pub async fn unban_ip(api: &Api, cookie: Option<&str>, ip: &str) -> Result<(), A
 
 // --- admin invites (BUNYIP-760) ---------------------------------------------
 
+// SPEC-11.17.13
 /// BUNYIP-939: filter parameters for the admin invites list.
 #[derive(Debug, Default, Clone)]
 pub struct InviteFilters<'a> {
@@ -707,6 +753,7 @@ pub struct InviteFilters<'a> {
     pub email: Option<&'a str>,
 }
 
+// SPEC-11.17.13
 /// List pending/past admin invites. Wraps `GET /v1/admin/invites`, paginated.
 pub async fn admin_invites(
     api: &Api,
@@ -725,6 +772,7 @@ pub async fn admin_invites(
     parse(api.get(&path, cookie).await?)
 }
 
+// SPEC-11.17.13
 /// Invite `email` as an admin. Wraps `POST /v1/admin/invites`, which emails the
 /// invite link and revokes any prior pending invite for the same address.
 pub async fn create_admin_invite(
@@ -738,6 +786,7 @@ pub async fn create_admin_invite(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.13
 /// Revoke a pending admin invite. Wraps `DELETE /v1/admin/invites/{invite_id}`.
 pub async fn revoke_admin_invite(
     api: &Api,
@@ -756,6 +805,7 @@ pub async fn revoke_admin_invite(
 
 // --- mailer suppressions (BUNYIP-762) ---------------------------------------
 
+// SPEC-11.17.14
 /// List suppressed addresses, newest first. Wraps
 /// `GET /v1/admin/mailer-suppressions`, paginated.
 pub async fn list_mailer_suppressions(
@@ -773,6 +823,7 @@ pub async fn list_mailer_suppressions(
     )
 }
 
+// SPEC-11.17.14
 /// Lift a suppression so `address` can be mailed again. Wraps
 /// `DELETE /v1/admin/mailer-suppressions/{address}`, which 404s when the
 /// address was not suppressed.
@@ -793,6 +844,7 @@ pub async fn delete_mailer_suppression(
 
 // --- rate limits (BUNYIP-317) -----------------------------------------------
 
+// SPEC-11.17.15
 /// List the currently-active throttles (user/IP, action, count/cap, window
 /// start, retry-in), each resolved to a user where possible. Wraps
 /// `GET /v1/admin/rate-limits` (BUNYIP-315), which paginates the unified list;
@@ -812,6 +864,7 @@ pub async fn rate_limits(
     )
 }
 
+// SPEC-11.17.15
 /// Clear one active throttle so the affected user/IP can act again immediately.
 /// Wraps `POST /v1/admin/rate-limits/reset` (BUNYIP-316); `action` and `key` are
 /// exactly the identifiers `rate_limits` returns for the row. The API audits the
@@ -832,6 +885,7 @@ pub async fn reset_rate_limit(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.15
 /// BUNYIP-933: list every row in the rate-limit whitelist. Wraps
 /// `GET /v1/admin/rate-limits/whitelist`, whose `data` is a bare array.
 pub async fn rate_limit_whitelist(
@@ -841,6 +895,7 @@ pub async fn rate_limit_whitelist(
     parse(api.get("/admin/rate-limits/whitelist", cookie).await?)
 }
 
+// SPEC-11.17.15
 /// BUNYIP-933: add a `(kind, value)` pair to the whitelist. Wraps
 /// `POST /v1/admin/rate-limits/whitelist`. The API audits the add and
 /// 400s on an unknown `kind`.
@@ -861,6 +916,7 @@ pub async fn add_rate_limit_whitelist(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.15
 /// BUNYIP-933: delete one whitelist row by id. Wraps
 /// `DELETE /v1/admin/rate-limits/whitelist/{id}`. The API audits the
 /// removal and 404s on an unknown id.
@@ -879,6 +935,7 @@ pub async fn delete_rate_limit_whitelist(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.15
 /// Past throttle events the admin page shows beside the active list. Wraps
 /// `GET /v1/admin/rate-limits/history`; `since` is clamped to the 24h
 /// retention floor on the API, so an older value is quietly bounded.
@@ -898,6 +955,7 @@ pub async fn rate_limit_history(
     parse(api.get(&path, cookie).await?)
 }
 
+// SPEC-11.17.15
 /// Traffic + Close-to-the-Limit rows for every `RateLimitConfig::ALL`
 /// action, batched into one call (BUNYIP-900). Wraps
 /// `GET /v1/admin/rate-limits/overview`; `window` is one of `1h`, `6h`, `1d`.
@@ -927,6 +985,7 @@ pub async fn rate_limit_overview(
 
 // --- rate-limit configuration (BUNYIP-413) ----------------------------------
 
+// SPEC-11.17.16
 /// The configured cap/window for every known rate-limit action, marking which
 /// ones a persisted override is in force for. Wraps
 /// `GET /v1/admin/rate-limit-configs`, whose `data` is a bare array.
@@ -937,6 +996,7 @@ pub async fn rate_limit_configs(
     parse(api.get("/admin/rate-limit-configs", cookie).await?)
 }
 
+// SPEC-11.17.16
 /// Create or update the persisted override for `action`. Wraps
 /// `PUT /v1/admin/rate-limit-configs/{action}`, which is super-admin-only,
 /// audits the change and 400s on an unknown action or out-of-range values.
@@ -957,6 +1017,7 @@ pub async fn set_rate_limit_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.17
 /// Every registered feature toggle (BUNYIP-840). Wraps
 /// `GET /v1/admin/feature-toggles`, open to any admin.
 pub async fn feature_toggles(
@@ -966,6 +1027,7 @@ pub async fn feature_toggles(
     parse(api.get("/admin/feature-toggles", cookie).await?)
 }
 
+// SPEC-11.17.17
 /// Flip one feature toggle. Wraps `PUT /v1/admin/feature-toggles/{key}`, which
 /// is super-admin-only, audits the change and 404s on an unknown key.
 pub async fn set_feature_toggle(
@@ -984,6 +1046,7 @@ pub async fn set_feature_toggle(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.16
 /// Drop the persisted override for `action`, reverting it to the bootstrap
 /// default. Wraps `DELETE /v1/admin/rate-limit-configs/{action}`, which 404s
 /// when no override was in force.
@@ -1004,6 +1067,7 @@ pub async fn delete_rate_limit_config(
 
 // --- feedback ---------------------------------------------------------------
 
+// SPEC-11.17.18
 /// BUNYIP-938: filter parameters for the admin feedback list. Grouped so
 /// adding a filter does not reshape every call site.
 #[derive(Debug, Default, Clone)]
@@ -1014,6 +1078,7 @@ pub struct FeedbackFilters<'a> {
     pub q: Option<&'a str>,
 }
 
+// SPEC-11.17.18
 /// Feedback list bucketed by admin tab (BUNYIP-92). Bucket strings map
 /// 1:1 to the API's accepted set: `active` (default, excludes closed +
 /// spam), `closed` (closed and not spam), `spam` (is_spam=true, any
@@ -1045,6 +1110,7 @@ pub async fn feedback(
     parse(api.get(&path, cookie).await?)
 }
 
+// SPEC-11.17.18
 pub async fn update_feedback_status(
     api: &Api,
     cookie: Option<&str>,
@@ -1061,6 +1127,7 @@ pub async fn update_feedback_status(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 pub async fn feedback_detail(
     api: &Api,
     cookie: Option<&str>,
@@ -1069,6 +1136,7 @@ pub async fn feedback_detail(
     parse(api.get(&format!("/admin/feedback/{id}"), cookie).await?)
 }
 
+// SPEC-11.17.18
 /// POST `/v1/admin/feedback/{id}/respond` with `{response, status?}`. When
 /// `status` is `None` the API defaults the row to `Responded`; we pass the
 /// explicit `Responded` for clarity. The bunyip-api handler sends an email
@@ -1092,6 +1160,7 @@ pub async fn respond_to_feedback(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 pub async fn feedback_archive(
     api: &Api,
     cookie: Option<&str>,
@@ -1107,6 +1176,7 @@ pub async fn feedback_archive(
     )
 }
 
+// SPEC-11.17.18
 pub async fn restore_feedback(
     api: &Api,
     cookie: Option<&str>,
@@ -1122,6 +1192,7 @@ pub async fn restore_feedback(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 /// BUNYIP-92: flip `is_spam` to TRUE.
 pub async fn mark_feedback_spam(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
@@ -1130,6 +1201,7 @@ pub async fn mark_feedback_spam(api: &Api, cookie: Option<&str>, id: &str) -> Re
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 /// BUNYIP-92: flip `is_spam` back to FALSE (false-positive recovery).
 pub async fn unmark_feedback_spam(
     api: &Api,
@@ -1142,6 +1214,7 @@ pub async fn unmark_feedback_spam(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 /// BUNYIP-92: hard delete. Writes a `FeedbackDeleted` audit row on the
 /// API; the row is unrecoverable after this returns.
 pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
@@ -1151,6 +1224,7 @@ pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Resul
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.18
 /// BUNYIP-93: move a single row from `feedback` to `feedback_archive`.
 /// Reversible via the existing archive-restore endpoint.
 pub async fn archive_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
@@ -1162,6 +1236,7 @@ pub async fn archive_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Resu
 
 // --- stripe + tier config ---------------------------------------------------
 
+// SPEC-11.17.19
 pub async fn stripe_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1169,6 +1244,7 @@ pub async fn stripe_config(
     parse(api.get("/admin/stripe", cookie).await?)
 }
 
+// SPEC-11.17.19
 pub async fn update_stripe_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1180,6 +1256,7 @@ pub async fn update_stripe_config(
 
 // --- stripe products + prices (BUNYIP-416) ----------------------------------
 
+// SPEC-11.17.19
 pub async fn list_stripe_products(
     api: &Api,
     cookie: Option<&str>,
@@ -1187,6 +1264,7 @@ pub async fn list_stripe_products(
     parse(api.get("/admin/stripe/products", cookie).await?)
 }
 
+// SPEC-11.17.19
 pub async fn create_stripe_product(
     api: &Api,
     cookie: Option<&str>,
@@ -1198,6 +1276,7 @@ pub async fn create_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 pub async fn archive_stripe_product(
     api: &Api,
     cookie: Option<&str>,
@@ -1209,6 +1288,7 @@ pub async fn archive_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 /// BUNYIP-511: edit a product's name/description in place (PUT). The body carries
 /// name + description only, never `active` (lifecycle is owned by
 /// archive/unarchive) or `metadata` (so the Stripe app-tag survives the update).
@@ -1224,6 +1304,7 @@ pub async fn update_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 /// BUNYIP-513: restore an archived product (`active = true`). POST, no body.
 pub async fn unarchive_stripe_product(
     api: &Api,
@@ -1240,6 +1321,7 @@ pub async fn unarchive_stripe_product(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 pub async fn list_stripe_prices(
     api: &Api,
     cookie: Option<&str>,
@@ -1247,6 +1329,7 @@ pub async fn list_stripe_prices(
     parse(api.get("/admin/stripe/prices", cookie).await?)
 }
 
+// SPEC-11.17.19
 pub async fn create_stripe_price(
     api: &Api,
     cookie: Option<&str>,
@@ -1256,6 +1339,7 @@ pub async fn create_stripe_price(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 pub async fn archive_stripe_price(
     api: &Api,
     cookie: Option<&str>,
@@ -1267,6 +1351,7 @@ pub async fn archive_stripe_price(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 /// BUNYIP-513: restore an archived price (`active = true`). POST, no body.
 pub async fn unarchive_stripe_price(
     api: &Api,
@@ -1283,6 +1368,7 @@ pub async fn unarchive_stripe_price(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 /// BUNYIP-511: replace a price. Stripe prices are immutable in amount, currency
 /// and interval, so changing what a plan costs is a create-plus-archive that also
 /// repoints bunyip's own references; the API owns that orchestration. POST, body
@@ -1305,6 +1391,7 @@ pub async fn replace_stripe_price(
 
 // --- stripe webhook endpoints (DEV-518) -------------------------------------
 
+// SPEC-11.17.19
 pub async fn list_stripe_webhooks(
     api: &Api,
     cookie: Option<&str>,
@@ -1312,6 +1399,7 @@ pub async fn list_stripe_webhooks(
     parse(api.get("/admin/stripe/webhooks", cookie).await?)
 }
 
+// SPEC-11.17.19
 /// Returns the created endpoint, whose `secret` (the signing secret) is present
 /// exactly once here so the caller can show it for the admin to copy.
 pub async fn create_stripe_webhook(
@@ -1325,6 +1413,7 @@ pub async fn create_stripe_webhook(
     )
 }
 
+// SPEC-11.17.19
 pub async fn delete_stripe_webhook(
     api: &Api,
     cookie: Option<&str>,
@@ -1336,6 +1425,7 @@ pub async fn delete_stripe_webhook(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.19
 /// BUNYIP-532: run the Stripe key permission self-test. Read-only.
 pub async fn check_stripe_permissions(
     api: &Api,
@@ -1344,6 +1434,7 @@ pub async fn check_stripe_permissions(
     parse(api.get("/admin/stripe/permissions", cookie).await?)
 }
 
+// SPEC-11.17.20
 pub async fn email_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1351,6 +1442,7 @@ pub async fn email_config(
     parse(api.get("/admin/email", cookie).await?)
 }
 
+// SPEC-11.17.20
 pub async fn update_email_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1360,6 +1452,7 @@ pub async fn update_email_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 /// BUNYIP-997: the Mirzam integration settings.
 pub async fn mirzam_config(
     api: &Api,
@@ -1368,6 +1461,7 @@ pub async fn mirzam_config(
     parse(api.get("/admin/mirzam", cookie).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-997: replace the Mirzam settings; an empty `api_token` keeps the
 /// stored token.
 pub async fn update_mirzam_config(
@@ -1379,6 +1473,7 @@ pub async fn update_mirzam_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 /// BUNYIP-983: the Mokosh host settings.
 pub async fn mokosh_config(
     api: &Api,
@@ -1387,6 +1482,7 @@ pub async fn mokosh_config(
     parse(api.get("/admin/mokosh", cookie).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-983: replace the Mokosh client id; an empty `google_client_secret`
 /// keeps the stored secret, and a changed id needs `confirm_client_id_change`.
 pub async fn update_mokosh_config(
@@ -1398,6 +1494,7 @@ pub async fn update_mokosh_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 /// BUNYIP-997: check both saved lists against Mirzam. A reached-but-failing
 /// Mirzam is a 200 with `ok: false`; missing settings are a 400 `ApiError`.
 pub async fn check_mirzam_connection(
@@ -1407,6 +1504,7 @@ pub async fn check_mirzam_connection(
     parse(api.post("/admin/mirzam/check", cookie, None).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-580: read the system-config YAML values for the admin settings page.
 pub async fn system_config(
     api: &Api,
@@ -1415,6 +1513,7 @@ pub async fn system_config(
     parse(api.get("/admin/system-config", cookie).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-580: write the edited system-config values back to the YAML file.
 pub async fn update_system_config(
     api: &Api,
@@ -1425,6 +1524,7 @@ pub async fn update_system_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 /// BUNYIP-433: run the SMTP "Test connection" probe against the saved config.
 /// The API returns 200 with `{ ok, stage, message }` for a reached target
 /// (pass or fail); a non-2xx (e.g. 429 rate limit) becomes an `ApiError`.
@@ -1435,6 +1535,7 @@ pub async fn test_email_config(
     parse(api.post("/admin/email/test", cookie, None).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-508: send a real test message through the saved SMTP settings to the
 /// signed-in admin's own address. The API returns 200 with `{ ok, message }`
 /// for an attempted send (pass or fail); a non-2xx (e.g. 429 rate limit)
@@ -1443,6 +1544,7 @@ pub async fn send_test_email(api: &Api, cookie: Option<&str>) -> Result<TestEmai
     parse(api.post("/admin/email/test-send", cookie, None).await?)
 }
 
+// SPEC-11.17.21
 /// BUNYIP-353: POST an uploaded account backup bundle to the restore endpoint
 /// and return the resulting report. `bundle` is the parsed JSON of the file the
 /// admin uploaded.
@@ -1454,10 +1556,12 @@ pub async fn restore_account(
     parse(api.post("/account/restore", cookie, Some(bundle)).await?)
 }
 
+// SPEC-11.17.20
 pub async fn tier_config(api: &Api, cookie: Option<&str>) -> Result<TierConfigResponse, ApiError> {
     parse(api.get("/admin/tier-config", cookie).await?)
 }
 
+// SPEC-11.17.20
 /// BUNYIP-515: what the public `/pricing` resolve produced, and why anything is
 /// missing. Bypasses the pricing cache on the API side, so it answers for the
 /// mapping as it stands now.
@@ -1465,6 +1569,7 @@ pub async fn pricing_status(api: &Api, cookie: Option<&str>) -> Result<PricingSt
     parse(api.get("/admin/pricing/status", cookie).await?)
 }
 
+// SPEC-11.17.20
 pub async fn update_tier_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1474,6 +1579,7 @@ pub async fn update_tier_config(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 /// Combined write of the six fields the admin's "Tiers & Slots" form
 /// owns. Replaces the sequential `update_tier_config` + `update_stripe_config`
 /// pair; either write failing rolls the whole save back on the api side.
@@ -1486,6 +1592,7 @@ pub async fn update_tier_settings(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.20
 pub async fn auto_ban_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1493,6 +1600,7 @@ pub async fn auto_ban_config(
     parse(api.get("/admin/auto-ban-config", cookie).await?)
 }
 
+// SPEC-11.17.20
 pub async fn update_auto_ban_config(
     api: &Api,
     cookie: Option<&str>,
@@ -1506,6 +1614,7 @@ pub async fn update_auto_ban_config(
 
 // --- application docs (BUNYIP-388, admin authoring) -------------------------
 
+// SPEC-11.17.22
 /// Admin: all documentation pages for an app (full rows, ordered).
 pub async fn app_docs(
     api: &Api,
@@ -1518,6 +1627,7 @@ pub async fn app_docs(
     )
 }
 
+// SPEC-11.17.22
 /// Admin: create a documentation page for an app.
 pub async fn create_app_doc(
     api: &Api,
@@ -1538,6 +1648,7 @@ pub async fn create_app_doc(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.22
 /// Admin: update a documentation page.
 pub async fn update_app_doc(
     api: &Api,
@@ -1558,6 +1669,7 @@ pub async fn update_app_doc(
     ok_data(&r).map(|_| ())
 }
 
+// SPEC-11.17.22
 /// Admin: delete a documentation page.
 pub async fn delete_app_doc(api: &Api, cookie: Option<&str>, doc_id: &str) -> Result<(), ApiError> {
     let r = api

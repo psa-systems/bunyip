@@ -7,12 +7,14 @@ import { runSuffix } from './run';
 
 // Today's date as a YYYY-MM-DD string (the date-only wire format the API expects
 // for date fields).
+// SPEC-3.39.3
 export function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 // A run-unique name for any record a spec needs to create and later identify, so
 // teardown's name-based sweep (and this run's owned-record match) can find it.
+// SPEC-3.39.3
 export function tagged(prefix: string): string {
   return `${prefix}-${runSuffix()}`;
 }

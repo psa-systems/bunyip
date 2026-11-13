@@ -29,6 +29,7 @@ impl AccountDeleteDispatchFailureRepository {
     /// Record an exhausted dispatch for `(user_id, app_slug)`. Each exhaustion
     /// is its own row so a later replay attempt that also fails is visible as a
     /// distinct event rather than overwriting the first.
+    // SPEC-7.3.11
     pub async fn record(
         pool: &PgPool,
         user_id: Uuid,

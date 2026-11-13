@@ -9,9 +9,11 @@ use axum::Router;
 use crate::handlers::admin;
 use crate::web::AppState;
 
+// SPEC-11.19.1, SPEC-11.19.9: no auth layer here; each handler authorizes the caller.
 /// Every route the admin panel owns, merged into the app router by `main`.
 pub fn routes() -> Router<AppState> {
     Router::new()
+        // SPEC-11.19.2
         .route("/admin", get(admin::dashboard))
         .route("/admin/status", get(admin::system_status))
         .route("/admin/providers/status", get(admin::provider_status_page))
@@ -52,6 +54,7 @@ pub fn routes() -> Router<AppState> {
             "/admin/rate-limits/whitelist/remove",
             post(admin::rate_limit_whitelist_remove),
         )
+        // SPEC-11.19.3
         .route("/admin/users", get(admin::users))
         .route("/admin/users/:id", get(admin::user_detail))
         .route("/admin/users/:id/role", post(admin::user_role))
@@ -89,6 +92,7 @@ pub fn routes() -> Router<AppState> {
             "/admin/memberships/:user_id/revoke",
             post(admin::membership_revoke),
         )
+        // SPEC-11.19.4: literal tab paths register before the :id route.
         .route("/admin/feedback", get(admin::feedback))
         .route("/admin/feedback/export", get(admin::feedback_export))
         // Tab + archive routes register BEFORE the `:id` detail route so
@@ -121,6 +125,7 @@ pub fn routes() -> Router<AppState> {
             post(admin::feedback_archive_action),
         )
         .route("/admin/feedback/:id/delete", post(admin::feedback_delete))
+        // SPEC-11.19.5
         .route(
             "/admin/applications",
             get(admin::applications).post(admin::application_create),
@@ -198,6 +203,7 @@ pub fn routes() -> Router<AppState> {
             "/admin/users/:user_id/entitlements/revoke",
             post(admin::revoke_user_entitlement_h),
         )
+        // SPEC-11.19.6
         .route(
             "/admin/tier-settings",
             get(admin::tier_settings).post(admin::tier_settings_save),
@@ -220,6 +226,7 @@ pub fn routes() -> Router<AppState> {
             "/admin/branding",
             get(admin::branding).post(admin::branding_save),
         )
+        // SPEC-11.19.7
         .route(
             "/admin/branding/assets/:slot",
             post(admin::branding_asset_upload).layer(
@@ -299,6 +306,7 @@ pub fn routes() -> Router<AppState> {
         // BUNYIP-417: tier -> Stripe price/product mapping moved from the Pricing tiers page.
         // BUNYIP-353: account backup & restore, reached from the Backup add-on
         // tile on /applications.
+        // SPEC-11.19.8: restore upload is capped at 9 MiB.
         .route("/integrations/backup", get(admin::backup_settings))
         .route("/integrations/backup/download", get(admin::backup_download))
         .route(

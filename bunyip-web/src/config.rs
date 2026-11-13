@@ -7,6 +7,7 @@
 // have no environment variable behind them; an unset field OMITS its markup
 // rather than painting every deployment's browser chrome one product's green.
 
+// SPEC-11.3.1, SPEC-11.3.10: no brand or palette fields; those live in the branding record.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Address the server binds to (e.g. `0.0.0.0:4400`).
@@ -75,6 +76,7 @@ pub struct Config {
     pub csp: CspConfig,
 }
 
+// SPEC-11.3.6
 /// BUNYIP-503: the CSP hosts a skin adds, so a deploy with different third-party
 /// integrations extends the allow-list without forking `security.rs`. Mirrors
 /// dunite-core's `CspConfig` shape (the web-edge modules unify on it in B4).
@@ -90,6 +92,7 @@ pub struct CspConfig {
     pub form_action: Vec<String>,
 }
 
+// SPEC-11.3.6
 /// BUNYIP-503: parse a comma-separated CSP host list; blanks are dropped.
 fn parse_csp_hosts(raw: &str) -> Vec<String> {
     raw.split(',')
@@ -99,6 +102,7 @@ fn parse_csp_hosts(raw: &str) -> Vec<String> {
         .collect()
 }
 
+// SPEC-11.3.5: a bad entry is logged and skipped, never fatal.
 /// BUNYIP-311: parse a comma-separated list of CIDR ranges into trusted-proxy
 /// networks. Invalid entries are logged and skipped rather than aborting
 /// startup, so a single typo cannot take the BFF down; an empty or all-invalid
@@ -120,6 +124,7 @@ fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
 }
 
 impl Config {
+    // SPEC-11.3.1, SPEC-11.3.2, SPEC-11.3.3, SPEC-11.3.4: empty env value counts as unset.
     pub fn from_env() -> Self {
         let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
         let api_url = var("BUNYIP_API_URL").unwrap_or_else(|| "http://localhost:4401".into());
@@ -149,6 +154,7 @@ impl Config {
         }
     }
 
+    // SPEC-11.3.4
     /// BUNYIP-329: whether the Community (Let's Chat) feature is configured.
     /// Gates the dashboard Community button so it only renders when an
     /// instance URL is set.
@@ -156,6 +162,7 @@ impl Config {
         !self.community_url.is_empty()
     }
 
+    // SPEC-11.3.4
     /// Apex domain or `localhost` fallback (used for app launch URLs + legal copy).
     pub fn domain_or_localhost(&self) -> String {
         if self.app_domain.is_empty() {
@@ -165,6 +172,7 @@ impl Config {
         }
     }
 
+    // SPEC-11.3.7: X-Forwarded-Proto is honoured only from a trusted proxy peer.
     /// BUNYIP-759: whether the `Secure` attribute belongs on cookies
     /// bunyip-web emits directly (the `bunyip_2fa` challenge cookie and the
     /// defensive auth-cookie clears). String-parsing `api_public_origin` for
@@ -193,6 +201,7 @@ impl Config {
                 .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
     }
 
+    // SPEC-11.3.8: display-only heuristic, never used for cookies.
     /// BUNYIP-759: whether `api_public_origin` LOOKS like an HTTPS origin.
     /// Display-only: it decides the scheme of the Open Graph share-image URL
     /// and the unknown-host redirect link, where a wrong guess is a cosmetic
@@ -204,6 +213,7 @@ impl Config {
         self.api_public_origin.starts_with("https://")
     }
 
+    // SPEC-11.3.9
     /// Absolute URL of the committed share image, for the Open Graph tags when
     /// the branding record carries no uploaded one. `None` when no app domain
     /// is configured: a relative path is not resolvable by every scraper, and
@@ -213,6 +223,7 @@ impl Config {
             .map(|apex| format!("{apex}{}", web_kit::shell::asset(DEFAULT_SHARE_IMAGE_PATH)))
     }
 
+    // SPEC-11.3.8
     /// BUNYIP-686: the main domain's origin (`{scheme}://{app_domain}`), or
     /// `None` when no app domain is configured.
     pub fn apex_url(&self) -> Option<String> {
@@ -228,6 +239,7 @@ impl Config {
     }
 }
 
+// SPEC-11.3.9
 /// The committed share image every deployment falls back to. Product identity
 /// ships with the product: a deployment that uploads nothing still has one.
 pub const DEFAULT_SHARE_IMAGE_PATH: &str = "/assets/bunyip-hero-718.webp";

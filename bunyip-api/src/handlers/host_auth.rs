@@ -27,6 +27,7 @@ use crate::repositories::{RateLimitConfigRepository, RateLimitRepository};
 /// Per route rather than shared, because a burst against one route must not
 /// spend the other's budget: a Mokosh reading its configuration every boot and
 /// one reading a secret every boot are different callers with different volumes.
+// SPEC-10.37.5: per-route budgets so one burst cannot spend the other's
 pub struct HostRouteCaps {
     /// Per-registration throughput, charged after the credential is verified.
     pub read: &'static RateLimitConfig,
@@ -38,6 +39,7 @@ pub struct HostRouteCaps {
 }
 
 /// Whether failed authentications from this address are already at the cap.
+// SPEC-10.37.2: read-only, compared with >=
 async fn at_cap(pool: &PgPool, ip_key: &str, caps: &HostRouteCaps) -> Result<bool, AppError> {
     let config = RateLimitConfigRepository::effective(pool, caps.auth_failures).await?;
     let (count, _) = RateLimitRepository::check(pool, ip_key, &config).await?;
@@ -47,6 +49,7 @@ async fn at_cap(pool: &PgPool, ip_key: &str, caps: &HostRouteCaps) -> Result<boo
 /// Count one failed authentication. A failure to RECORD a failure is logged and
 /// swallowed: the request is already being refused, and turning a counter
 /// problem into a different status code would hide the real answer.
+// SPEC-10.37.4: logged, never changes the refusal
 async fn record_failure(pool: &PgPool, ip_key: Option<&str>, caps: &HostRouteCaps) {
     let Some(ip_key) = ip_key else { return };
     if let Err(e) = RateLimitRepository::check_and_increment(pool, ip_key, caps.auth_failures).await
@@ -70,6 +73,7 @@ async fn record_failure(pool: &PgPool, ip_key: Option<&str>, caps: &HostRouteCap
 /// or disabled registration (401), a wrong secret or a registration without the
 /// machine grant (401 or 403 from `verify_machine_client`), and the route's own
 /// throughput cap (429).
+// SPEC-10.37.1, SPEC-10.37.2, SPEC-10.37.3, SPEC-10.37.5: the order is the security property
 pub async fn authenticate_machine_caller(
     req: &HttpRequest,
     pool: &PgPool,
@@ -152,6 +156,7 @@ pub async fn authenticate_machine_caller(
 /// Checked by each route against its own column, and refused before the key is
 /// looked up at all: an unentitled key answers the same whether or not it
 /// exists, so this route cannot be walked to enumerate what the host holds.
+// SPEC-10.37.6: 403 whether or not the key exists
 pub fn refuse_unentitled(client: &OAuthClient, key: &str, caps: &HostRouteCaps) -> AppError {
     tracing::warn!(
         client_id = %client.client_id,
@@ -167,6 +172,7 @@ pub fn refuse_unentitled(client: &OAuthClient, key: &str, caps: &HostRouteCaps) 
 ///
 /// Echoing the key means a caller reading several can tell the answers apart
 /// without tracking its own requests.
+// SPEC-10.37.9: key echoed with the value
 #[derive(Debug, serde::Serialize)]
 pub struct HostValueResponse {
     pub key: String,

@@ -58,6 +58,7 @@ pub struct RateLimitEntry {
     pub retry_after: u64,
 }
 
+// SPEC-10.17.2, SPEC-10.17.3: IP rows expose the IP, never a user.
 /// Build the entry for a `rate_limits` table row that has already been
 /// confirmed active (its `retry_after` computed) and whose `subject` has been
 /// resolved to `user` where possible. Pure so it is unit-testable without a DB:
@@ -95,6 +96,7 @@ fn build_table_entry(
     }
 }
 
+// SPEC-10.17.1, SPEC-10.17.2, SPEC-10.17.3: resend limiters surfaced as pseudo-actions.
 /// Synthesize an entry for an email-resend limiter (BUNYIP-315). These limiters
 /// live outside the `rate_limits` table, so the user is always known and the
 /// cap/window come from the shared resend constants; `retry_after` is computed
@@ -125,6 +127,7 @@ pub struct ListRateLimitsQuery {
     pub per_page: Option<i32>,
 }
 
+// SPEC-10.17.1, SPEC-10.17.4: unified active-throttle list, paginated in memory.
 /// GET /v1/admin/rate-limits
 ///
 /// List every currently-active throttle across the `rate_limits` table and the
@@ -224,6 +227,7 @@ pub struct ResetRateLimitRequest {
     pub key: String,
 }
 
+// SPEC-10.17.5, SPEC-10.17.8: validated reset, audited.
 /// POST /v1/admin/rate-limits/reset
 ///
 /// Clear one currently-active throttle so the affected user can act again
@@ -277,6 +281,7 @@ pub async fn reset_rate_limit(
     Ok(success_no_data(request_id))
 }
 
+// SPEC-10.17.6, SPEC-10.17.7: pseudo-action vs table-row dispatch; unknown action is a 400.
 /// Clear a single active throttle identified by `(action, key)` and return the
 /// resolved target user `(id, email)` when the key maps to one (BUNYIP-316).
 /// Holds the whole dispatch (pseudo-action vs `rate_limits` table row) so the
@@ -365,6 +370,7 @@ pub struct RateLimitConfigEntry {
     pub updated_by: Option<Uuid>,
 }
 
+// SPEC-10.17.9: override wins over the bootstrap default.
 /// Build the entry for one action from its bootstrap default and the persisted
 /// override, if any. Pure so the precedence is unit-testable without a DB.
 fn build_config_entry(
@@ -383,12 +389,14 @@ fn build_config_entry(
     }
 }
 
+// SPEC-10.17.10: cap and window bounds.
 /// Bounds on an admin-set rate limit. A cap of zero would refuse every request
 /// for the action (including logins), and an unbounded window would keep a
 /// throttle alive effectively forever, so both are rejected up front.
 const MAX_REQUESTS_LIMIT: i32 = 1_000_000;
 const WINDOW_SECONDS_LIMIT: i64 = 604_800; // 7 days
 
+// SPEC-10.17.9: effective config per known action.
 /// GET /v1/admin/rate-limit-configs
 ///
 /// The configured cap/window for every known rate-limit action, marking which
@@ -421,6 +429,7 @@ pub struct UpsertRateLimitConfigRequest {
     pub window_seconds: i64,
 }
 
+// SPEC-10.17.10: also applied by the settings archive import.
 /// Validate an admin-supplied cap/window pair. Pure and unit-tested.
 ///
 /// `pub(crate)` because a settings archive restores the same rows this handler
@@ -440,6 +449,7 @@ pub(crate) fn validate_limits(max_requests: i32, window_seconds: i64) -> Result<
     Ok(())
 }
 
+// SPEC-10.17.10, SPEC-10.17.11: super-admin override, audited.
 /// PUT /v1/admin/rate-limit-configs/{action}
 ///
 /// Create or update the persisted override for `action`, which takes effect at
@@ -483,6 +493,7 @@ pub async fn upsert_rate_limit_config(
     ))
 }
 
+// SPEC-10.17.12: super-admin revert to default, 404 when none.
 /// DELETE /v1/admin/rate-limit-configs/{action}
 ///
 /// Drop the persisted override for `action`, reverting it to the bootstrap
@@ -541,6 +552,7 @@ pub struct HistoryQuery {
     pub limit: Option<i64>,
 }
 
+// SPEC-10.17.13, SPEC-10.17.14: own diagnostics budget, 24h floor, rows kept when unresolved.
 /// GET /v1/admin/rate-limits/history
 ///
 /// Past throttle events in a `[since, now]` window, newest first. Resolves
@@ -663,6 +675,7 @@ pub struct OverviewQuery {
     pub limit: Option<i64>,
 }
 
+// SPEC-10.17.15, SPEC-10.17.16: one budget call and batched lookups for all actions.
 /// GET /v1/admin/rate-limits/overview?window=1h|6h|1d&threshold=<r>&limit=<n>
 ///
 /// BUNYIP-900: the admin page's Traffic and Close-to-the-Limit sections each
@@ -882,6 +895,7 @@ impl From<crate::repositories::RateLimitWhitelistRow> for WhitelistEntry {
     }
 }
 
+// SPEC-10.17.17: whitelist listing.
 /// GET /v1/admin/rate-limits/whitelist
 pub async fn list_rate_limit_whitelist(
     req: HttpRequest,
@@ -894,6 +908,7 @@ pub async fn list_rate_limit_whitelist(
     Ok(success(entries, request_id))
 }
 
+// SPEC-10.17.18, SPEC-10.17.19: idempotent add; audited only on insert.
 /// POST /v1/admin/rate-limits/whitelist
 pub async fn add_rate_limit_whitelist(
     req: HttpRequest,
@@ -938,6 +953,7 @@ pub async fn add_rate_limit_whitelist(
     Ok(success(payload, request_id))
 }
 
+// SPEC-10.17.20: 404 when absent; audit carries kind and value.
 /// DELETE /v1/admin/rate-limits/whitelist/{id}
 pub async fn delete_rate_limit_whitelist(
     req: HttpRequest,

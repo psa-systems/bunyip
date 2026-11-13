@@ -1,3 +1,5 @@
+<!-- SPEC-11.34.1, SPEC-11.34.3: embedded guide; relative links only -->
+
 # Getting started
 
 Here you find, access, and download the apps we publish, like Mokosh. This guide takes you from a new account to an app you can run.

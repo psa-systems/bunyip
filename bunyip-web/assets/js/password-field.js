@@ -15,6 +15,7 @@
 // state is announced. BUNYIP-554: both eye glyphs are pre-rendered inline SVGs
 // and input.css picks one off `aria-pressed`, so nothing is swapped here.
 (function () {
+  // SPEC-11.39.1
   var buttons = document.querySelectorAll('[data-pw-toggle]');
   buttons.forEach(function (btn) {
     if (btn.dataset.pwToggleInit === '1') return;
@@ -39,6 +40,7 @@
 // server-side `password_ok()` remains the backstop: with JS off the form posts
 // exactly as it did before.
 (function () {
+  // SPEC-11.39.2, SPEC-11.39.3: mirrors the server password_ok rule
   var forms = document.querySelectorAll('form[data-pw-guard]');
   forms.forEach(function (form) {
     if (form.dataset.pwGuardInit === '1') return;

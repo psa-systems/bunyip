@@ -21,6 +21,7 @@ use serde::Serialize;
 
 use crate::config::{env_spec, GovernedSecret, SecretsProvider};
 
+// SPEC-8.21.2
 /// One integration's state, mirroring Mokosh's ok / skipped / error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -111,6 +112,7 @@ pub struct IntegrationSignals {
     pub mirzam_last_error: Option<String>,
 }
 
+// SPEC-8.21.12: single-sourced from ENV_INVENTORY
 /// The `feature` text an inventory variable carries: what stops working when it
 /// is absent. Empty for a name the inventory does not carry (the coverage test in
 /// `bunyip-api/tests/env_inventory.rs` keeps that from happening for a real var).
@@ -143,6 +145,7 @@ fn status(
     }
 }
 
+// SPEC-8.21.1: order is the display order
 /// Classify every integration from the gathered [`IntegrationSignals`]. Pure, so
 /// each rule below is unit-tested. The order is the order the status view lists
 /// them in.
@@ -150,6 +153,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
     let provider = sig.secrets_provider.as_str();
     let mut out = Vec::new();
 
+    // SPEC-8.21.3
     // Email (SMTP). The blank-password case is `Failing`, not `Configured`: the
     // relay is reached but never authenticated, which is the exact degradation
     // the 2026-08-24 standup asked to see named rather than hit as a 500.
@@ -185,6 +189,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         )
     });
 
+    // SPEC-8.21.4
     // Stripe billing. The secret key turns the feature on; the webhook secret is
     // the second half, without which webhook verification fails closed.
     out.push(if !sig.stripe_secret_present {
@@ -219,6 +224,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         )
     });
 
+    // SPEC-8.21.5
     // Support inbox (IMAP).
     out.push(if !sig.imap_configured {
         status(
@@ -251,6 +257,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         )
     });
 
+    // SPEC-8.21.6
     // Secrets provider (Infisical). `SECRETS_STORAGE=infisical` makes it the
     // provider of record (the app would not have booted if the client were
     // unbuildable, but it is reported so the operator can see the provider it
@@ -304,6 +311,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         )
     });
 
+    // SPEC-8.21.7
     // Distribution proxy (Forgejo): the upstream for member downloads and the
     // OCI registry.
     out.push(if !sig.forgejo_base_set {
@@ -332,6 +340,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         )
     });
 
+    // SPEC-8.21.8
     // OCI registry endpoint.
     out.push(if !sig.oci_enabled {
         status(
@@ -383,6 +392,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         "MAILER_WEBHOOK_SECRET",
     ));
 
+    // SPEC-8.21.10
     // Update checker: unlike the binary integrations above, a configured
     // checker can still be `Failing` (the last poll against the upstream
     // release feed did not succeed), so it gets its own three-state rule.
@@ -438,6 +448,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
         "MOKOSH_BACKUP_API_URL",
     ));
 
+    // SPEC-8.21.11: precedence is the check order
     // Mirzam newsletter lists (BUNYIP-997): an admin-page switch plus the
     // governed MIRZAM_API_TOKEN. Switched on with a setting or the token
     // missing is the broken half-configured state.
@@ -497,6 +508,7 @@ pub fn integration_statuses(sig: &IntegrationSignals) -> Vec<IntegrationStatus> 
     out
 }
 
+// SPEC-8.21.9
 /// A single-variable integration: configured when the signal is set,
 /// unconfigured otherwise. There is no half-configured state, so no
 /// `Failing`.

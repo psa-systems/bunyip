@@ -50,6 +50,7 @@ struct Options {
     enable_2fa: bool,
 }
 
+// SPEC-9.19.1
 fn parse_args() -> anyhow::Result<Options> {
     let mut opts = Options {
         cleanup: false,
@@ -97,10 +98,12 @@ async fn main() -> anyhow::Result<()> {
     // ENVIRONMENT (defaulting to "production" when unset).
     let config = Config::from_env().context("failed to load configuration")?;
 
+    // SPEC-9.19.2: guards run before any database connection
     enforce_guards(&config)?;
 
     // Parse + validate the committed template up front (this is also the whole
     // of the dry-run's work).
+    // SPEC-9.19.3
     let file = seed::parse(E2E_TEMPLATE)
         .map_err(|e| anyhow::anyhow!("e2e.json template is invalid: {e}"))?;
 
@@ -120,6 +123,7 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // SPEC-9.19.4
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .acquire_timeout(Duration::from_secs(5))
@@ -152,6 +156,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+// SPEC-9.19.5
 /// Enroll a PRESET base32 TOTP secret (from `BUNYIP_E2E_TOTP_SECRET`) on every
 /// seeded E2E account and enable 2FA, so a re-seed keeps a STABLE TOTP secret
 /// that the shared Forgejo `E2E_*_TOTP_SECRET` already matches (BUNYIP-359) - no
@@ -193,6 +198,7 @@ async fn enroll_2fa(pool: &sqlx::PgPool, config: &Config) -> anyhow::Result<()> 
     Ok(())
 }
 
+// SPEC-9.19.2
 /// Refuse to run against anything that could be production. Both checks live
 /// here so a single missing guard cannot let the tool through.
 ///

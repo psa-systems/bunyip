@@ -11,12 +11,14 @@ use uuid::Uuid;
 
 use crate::models::Application;
 
+// SPEC-8.39.6
 /// Delivery attempts for an irreversible account-delete dispatch (BUNYIP-211):
 /// the first attempt plus two retries. An account delete cannot be replayed by
 /// re-deleting the user, so the dispatch tries harder than the fire-and-forget
 /// single-shot used for the maintenance / active toggles.
 const ACCOUNT_DELETE_MAX_ATTEMPTS: u32 = 3;
 
+// SPEC-8.39.1
 pub struct WebhookService {
     sender: WebhookSender,
 }
@@ -28,6 +30,7 @@ impl WebhookService {
         }
     }
 
+    // SPEC-8.39.3
     /// Notify a child app that its maintenance mode has changed.
     pub async fn notify_maintenance_change(&self, app: &Application) {
         let Some(url) = webhook_url(app) else { return };
@@ -41,6 +44,7 @@ impl WebhookService {
         self.sender.send(url, &payload).await;
     }
 
+    // SPEC-8.39.4
     /// Notify a child app that its active status has changed.
     pub async fn notify_active_change(&self, app: &Application) {
         let Some(url) = webhook_url(app) else { return };
@@ -53,6 +57,7 @@ impl WebhookService {
         self.sender.send(url, &payload).await;
     }
 
+    // SPEC-8.39.5
     /// Notify a child app that a bunyip account was deleted (BUNYIP-211).
     /// Fire-and-forget, mirroring the other notifiers. The delete handler uses
     /// [`Self::dispatch_account_deleted`] instead, which retries and surfaces
@@ -65,6 +70,7 @@ impl WebhookService {
             .await;
     }
 
+    // SPEC-8.39.5, SPEC-8.39.6
     /// Deliver the `account_deleted` webhook to one app with bounded retries
     /// (BUNYIP-211). Returns `Ok(())` on the first 2xx response - or when the
     /// app has no `webhook_url`, since there is nothing to notify - or
@@ -87,11 +93,13 @@ impl WebhookService {
     }
 }
 
+// SPEC-8.39.2
 /// The app's webhook URL if it is set and non-empty; `None` is a no-op.
 fn webhook_url(app: &Application) -> Option<&str> {
     app.webhook_url.as_deref().filter(|u| !u.is_empty())
 }
 
+// SPEC-8.39.5
 /// Build the `account_deleted` webhook payload (BUNYIP-211). Shared by the
 /// fire-and-forget notifier and the retrying dispatch so the wire shape - and
 /// therefore the HMAC the receiver verifies - cannot drift between the two.

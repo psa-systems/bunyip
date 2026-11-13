@@ -20,6 +20,7 @@ use crate::services::TotpService;
 /// `RwLock::read()` errs only on poisoning (a writer panicked while holding the
 /// lock). The data is structurally intact, so this read path recovers through
 /// `PoisonError::into_inner` and logs, mirroring the webhook handler.
+// SPEC-10.20.1, SPEC-10.20.2: live read; poison is recovered and logged
 pub(crate) fn live_free_price_id(tier_config: &std::sync::RwLock<TierConfig>) -> Option<String> {
     match tier_config.read() {
         Ok(guard) => guard.free_price_id.clone(),
@@ -50,6 +51,7 @@ fn should_log_rate_limit_trip(count: i32, max_requests: i32) -> bool {
     count == max_requests + 1
 }
 
+// SPEC-10.20.3, SPEC-10.20.4, SPEC-10.20.5: shared limiter; logs the first trip per window
 pub(crate) async fn check_rate_limit(
     pool: &PgPool,
     key: &str,
@@ -93,6 +95,7 @@ fn totp_reprompt_required(has_verified_totp: bool) -> bool {
     has_verified_totp
 }
 
+// SPEC-10.20.6, SPEC-10.20.7, SPEC-10.20.8: fresh-code gate for sensitive changes
 pub(crate) async fn require_totp_if_enabled(
     pool: &PgPool,
     totp_service: &Arc<TotpService>,

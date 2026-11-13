@@ -35,6 +35,7 @@ pub use dunite_oidc_op::{
     OpSession, RotatedRefreshDeadlines,
 };
 
+// SPEC-5.24.4, SPEC-5.23.3
 /// BUNYIP-947 F16: `now == deadline` is expired, matching
 /// `check_op_session_alive`'s convention (BUNYIP-852) so a refresh-token
 /// rotation and the op-session alive check it calls a few lines later never
@@ -47,6 +48,7 @@ fn refresh_token_expired(
     now >= idle_exp || now >= abs_exp
 }
 
+// SPEC-5.24.4, SPEC-5.21.3
 /// BUNYIP-947 F16: same equality convention as [`refresh_token_expired`] and
 /// `check_op_session_alive`, applied to an authorization code's single
 /// deadline.
@@ -56,6 +58,7 @@ fn auth_code_expired(now: DateTime<Utc>, expires_at: DateTime<Utc>) -> bool {
 
 // ── Access token claims (RFC 9068) ────────────────────────────────────────────
 
+// SPEC-5.25.2, SPEC-5.25.4
 /// Claims for an RFC 9068 JWT access token (`typ: at+jwt`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AtClaims {
@@ -105,6 +108,7 @@ pub struct AtClaims {
 }
 
 impl AtClaims {
+    // SPEC-5.25.2, SPEC-5.25.3
     /// Assemble the RFC 9068 access-token claim set. Pure (no signing, keys, or
     /// DB) so the claim mapping - notably `bunyip_role` from the user's role
     /// (BUNYIP-66) and the per-client tenant claim (BUNYIP-63) - is
@@ -175,6 +179,7 @@ impl AtClaims {
     }
 }
 
+// SPEC-5.26.2
 // ── ID token claims ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -223,6 +228,7 @@ pub struct IdTokenClaims {
 }
 
 impl IdTokenClaims {
+    // SPEC-5.26.2, SPEC-5.26.3
     /// Assemble the ID-token claim set. Pure (no signing, keys, or DB) so the
     /// claim mapping - notably `bunyip_role` from the user's role and the
     /// per-client tenant claim (BUNYIP-63) - is unit-testable; `mint_id_token`
@@ -329,6 +335,7 @@ pub struct LogoutTokenClaims {
     pub sid: String,
 }
 
+// SPEC-5.31.3
 /// BUNYIP-864: the signing body of `mint_logout_token`, lifted so a test can
 /// verify a minted token against the JWKS the provider publishes without
 /// instantiating a full `OidcProvider` (which needs a `PgPool`).
@@ -372,6 +379,7 @@ pub struct OidcProvider {
     pub pool: PgPool,
 }
 
+// SPEC-5.34.1
 /// Load an active OAuth client registration by its UUID `client_id`.
 ///
 /// A free function over the pool rather than a method, because the registration
@@ -414,17 +422,20 @@ impl OidcProvider {
         Self { config, keys, pool }
     }
 
+    // SPEC-5.3.3
     /// Whether the OIDC feature is enabled.
     pub fn enabled(&self) -> bool {
         self.config.enabled()
     }
 
+    // SPEC-5.3.3
     pub fn issuer(&self) -> &str {
         self.config.issuer.as_deref().unwrap_or_default()
     }
 
     // ── Op-session ────────────────────────────────────────────────────────────
 
+    // SPEC-5.24.1
     /// Create a new IdP session for a user (after successful authentication).
     ///
     /// BUNYIP-636: both deadlines are set from `remember`. `expires_at` is the
@@ -497,6 +508,7 @@ impl OidcProvider {
         Ok(row)
     }
 
+    // SPEC-5.24.3
     /// BUNYIP-255: revoke a single op_session by its opaque sid. Best-
     /// effort: a missing / already-revoked / expired row is treated as
     /// success so the login flow does not 401 on a no-op. Used at every
@@ -525,6 +537,7 @@ impl OidcProvider {
         Ok(result.rows_affected() > 0)
     }
 
+    // SPEC-5.24.2: SQL twin of the liveness predicate
     /// Load an active op-session by its opaque sid value.
     ///
     /// BUNYIP-636: the WHERE clause is the SQL twin of [`OpSession::is_alive`]:
@@ -563,6 +576,7 @@ impl OidcProvider {
 
     // ── Authorization code ────────────────────────────────────────────────────
 
+    // SPEC-5.16.2
     /// Issue an authorization code. Returns the raw opaque code (never stored).
     /// `selected_tenant_id` is BUNYIP-62: when the client has a non-null
     /// `tenant_claim_name`, this is the tenant the user chose (auto-selected
@@ -634,6 +648,7 @@ impl OidcProvider {
     ) -> Result<AuthCodeRow, AppError> {
         let code_hash = sha256_bytes(raw_code.as_bytes());
 
+        // SPEC-5.21.1: row lock plus SERIALIZABLE stops double-spend
         // BUNYIP-199: redemption must be atomic so two concurrent token
         // requests bearing the same code cannot both succeed (double-spend /
         // code-replay race). Load the row under a row-level lock inside a
@@ -684,6 +699,7 @@ impl OidcProvider {
             "unknown authorization code".into(),
         ))?;
 
+        // SPEC-5.21.2
         // Already consumed - the lost race. Revoke the token family if tokens
         // were already issued from this code, mirroring the refresh-token
         // reuse-detection behaviour, then return invalid_grant.
@@ -707,6 +723,7 @@ impl OidcProvider {
             ));
         }
 
+        // SPEC-5.21.3
         // Expiry
         if auth_code_expired(Utc::now(), row.expires_at) {
             return Err(AppError::OidcInvalidGrant(
@@ -745,6 +762,7 @@ impl OidcProvider {
             ));
         }
 
+        // SPEC-5.21.4
         // Mark consumed under the held lock. Guard on `consumed_at IS NULL` as
         // defence-in-depth: if a concurrent transaction slipped through, the
         // zero-rows-affected result is treated as a lost race. Runtime query to
@@ -772,6 +790,7 @@ impl OidcProvider {
 
     // ── Access token ──────────────────────────────────────────────────────────
 
+    // SPEC-5.25.1
     /// Mint a signed RFC 9068 JWT access token. `selected_tenant_id` is
     /// the tenant the user picked at /authorize (BUNYIP-62), carried
     /// forward on the auth-code row and through refresh-token
@@ -821,6 +840,7 @@ impl OidcProvider {
 
     // ── ID token ──────────────────────────────────────────────────────────────
 
+    // SPEC-5.26.1
     /// Mint an OIDC ID token.
     ///
     /// `at_hash` is computed from the bound access token.
@@ -868,6 +888,7 @@ impl OidcProvider {
 
     // ── Refresh token ─────────────────────────────────────────────────────────
 
+    // SPEC-5.20.4
     /// Issue the first refresh token in a new family (called after code exchange).
     /// BUNYIP-63: `selected_tenant_id` is carried on every row in the family
     /// so the rotated at+jwt always emits the original tenant claim.
@@ -932,6 +953,7 @@ impl OidcProvider {
         Ok((raw, token_id))
     }
 
+    // SPEC-5.23.1
     /// Rotate a refresh token - returns the new (raw token, token_id).
     ///
     /// Runs in a SERIALIZABLE transaction.  If the old token has already been
@@ -996,6 +1018,7 @@ impl OidcProvider {
         .map_err(|e| AppError::internal(format!("DB error loading refresh token: {e}")))?
         .ok_or(AppError::OidcInvalidGrant("unknown refresh token".into()))?;
 
+        // SPEC-5.23.2
         // Replay detection: already used → revoke whole family.
         if old.used_at.is_some() || old.revoked_at.is_some() {
             sqlx::query!(
@@ -1042,6 +1065,7 @@ impl OidcProvider {
             ));
         }
 
+        // SPEC-5.23.3
         // client_id binding
         if old.client_id != client_id {
             return Err(AppError::OidcInvalidGrant("client_id mismatch".into()));
@@ -1092,6 +1116,7 @@ impl OidcProvider {
         )
         .map_err(|e| AppError::OidcInvalidGrant(e.to_string()))?;
 
+        // SPEC-5.23.4
         // Scope narrowing only.
         let mut effective_scope: Vec<String> = match requested_scope {
             Some(req) if !req.is_empty() => {
@@ -1135,6 +1160,7 @@ impl OidcProvider {
             ));
         }
 
+        // SPEC-5.23.5
         // Mark old token used
         sqlx::query!(
             "UPDATE refresh_tokens_v2 SET used_at = NOW() WHERE id = $1",
@@ -1213,6 +1239,7 @@ impl OidcProvider {
         .await
         .map_err(|e| AppError::internal(format!("Failed to insert new refresh token: {e}")))?;
 
+        // SPEC-5.23.6
         // BUNYIP-636 PR 2: slide the OP session's `last_active_at` and
         // `idle_expires_at` forward by the SAME idle window the row was
         // created with (`idle_ttl_seconds`), capped at the absolute
@@ -1241,6 +1268,7 @@ impl OidcProvider {
             AppError::internal(format!("Failed to commit rotation transaction: {e}"))
         })?;
 
+        // SPEC-5.23.7
         Ok(RotatedTokens {
             raw_refresh: raw_new,
             token_id: new_token_id,
@@ -1257,6 +1285,7 @@ impl OidcProvider {
 
     // ── Logout token ──────────────────────────────────────────────────────────
 
+    // SPEC-5.31.3
     /// Mint an OIDC Back-Channel Logout token for a specific (user, session, client).
     pub fn mint_logout_token(
         &self,
@@ -1269,6 +1298,7 @@ impl OidcProvider {
 
     // ── Back-channel logout ───────────────────────────────────────────────────
 
+    // SPEC-5.31.1
     /// Revoke all active op-sessions for a user, cascade-revoke their refresh
     /// token families, and return `(client_id, backchannel_logout_uri, sid)`
     /// for every client that registered a back-channel logout URI.
@@ -1332,6 +1362,7 @@ impl OidcProvider {
 
     // ── Lifecycle events ──────────────────────────────────────────────────────
 
+    // SPEC-5.32.1
     /// Mint a signed lifecycle-event JWT for a specific (user, event_type, client).
     pub fn mint_lifecycle_token(
         &self,
@@ -1369,6 +1400,7 @@ impl OidcProvider {
             .map_err(|e| AppError::internal(format!("Failed to mint lifecycle token: {e}")))
     }
 
+    // SPEC-5.32.2
     /// Query all clients with a `lifecycle_event_uri` and return
     /// `(client_id, lifecycle_event_uri)` pairs.
     pub async fn lifecycle_event_targets(&self) -> Result<Vec<(Uuid, String)>, AppError> {
@@ -1391,6 +1423,7 @@ impl OidcProvider {
 
     // ── Entitlement check ─────────────────────────────────────────────────────
 
+    // SPEC-5.33.1
     /// Returns true if the user has an active entitlement to the given client.
     pub async fn has_entitlement(&self, user_id: Uuid, client_id: Uuid) -> Result<bool, AppError> {
         let row = sqlx::query_scalar!(
@@ -1408,6 +1441,7 @@ impl OidcProvider {
         Ok(row.unwrap_or(0) > 0)
     }
 
+    // SPEC-5.33.2: never revives a revoked row
     /// Grant entitlement for a user to a client (used during JIT provisioning or admin grant).
     ///
     /// BUNYIP-261: refuse to revive a revoked row. The previous
@@ -1442,6 +1476,7 @@ impl OidcProvider {
         Ok(())
     }
 
+    // SPEC-5.33.4
     /// BUNYIP-140: load the granted_scopes set for an (user, client) pair.
     /// Returns an empty Vec if no row exists yet OR the row is revoked. The
     /// authorize handler computes `requested - granted` and renders the
@@ -1469,6 +1504,7 @@ impl OidcProvider {
         Ok(row.unwrap_or_default())
     }
 
+    // SPEC-5.33.3: never revives a revoked row
     /// BUNYIP-140: persist the consent grant. If the row exists, the new
     /// scopes are unioned into the existing `granted_scopes` set; if not,
     /// a new row is inserted with the supplied scopes. Idempotent for any
@@ -1516,6 +1552,7 @@ impl OidcProvider {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    // SPEC-5.20.4
     #[allow(clippy::too_many_arguments)]
     async fn insert_refresh_token(
         &self,
@@ -1588,6 +1625,7 @@ pub struct OAuthClient {
     pub backchannel_logout_uri: Option<String>,
     pub lifecycle_event_uri: Option<String>,
     pub allowed_scopes: Vec<String>,
+    // SPEC-5.34.2
     /// BUNYIP-983: host-secret keys this registration may read at
     /// `GET /v1/host/secrets/{KEY}`. Empty for every registration that does
     /// not name one, which is the default-deny the route depends on.
@@ -1766,6 +1804,7 @@ pub(crate) fn sha256_bytes(input: &[u8]) -> Vec<u8> {
 // ── at+jwt verification (BUNYIP-55) ──────────────────────────────────────────
 
 impl OidcProvider {
+    // SPEC-5.27.2
     /// BUNYIP-252: Resource-Server flavour of [`verify_at_jwt_claims`] that
     /// pins `aud` to the bunyip-API audience (`OidcConfig::rs_audience`).
     ///
@@ -1812,6 +1851,7 @@ impl OidcProvider {
         Ok(data.claims)
     }
 
+    // SPEC-5.27.1
     /// Verify an `at+jwt` access token's signature, type, issuer, and
     /// expiry, then return its full RFC 9068 claim set.
     ///
@@ -1875,6 +1915,7 @@ impl OidcProvider {
 }
 
 impl OidcProvider {
+    // SPEC-5.27.4
     /// BUNYIP-260: verify a self-issued id_token used as a logout hint
     /// (per OIDC RP-Initiated Logout 1.0 §3) and return the `client_id`
     /// the token was issued to. Unlike at+jwt verification, `exp` is NOT
@@ -1922,6 +1963,7 @@ impl
         bunyip_domain::models::User,
     > for OidcProvider
 {
+    // SPEC-5.27.3
     async fn verify_and_resolve(
         &self,
         token: &str,

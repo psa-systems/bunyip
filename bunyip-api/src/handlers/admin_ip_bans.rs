@@ -23,6 +23,7 @@ use crate::repositories::AuditLogRepository;
 use crate::responses::{get_request_id, success, success_no_data};
 use sqlx::PgPool;
 
+// SPEC-10.13.1: list goes through the service, whose map is the source of truth.
 /// GET /v1/admin/ip-bans
 ///
 /// Lists every currently-active IP auto-ban (IP, reason, strikes, banned_at,
@@ -47,6 +48,7 @@ pub struct CreateIpBanRequest {
     pub duration_secs: Option<i64>,
 }
 
+// SPEC-10.13.2: default and bounds of a manual ban.
 /// Default manual-ban duration: 24 hours, long enough to be useful without
 /// stranding a mistyped address forever (it is liftable at any time anyway).
 const DEFAULT_BAN_SECONDS: i64 = 86_400;
@@ -57,6 +59,7 @@ const MAX_BAN_SECONDS: i64 = 31_536_000;
 /// `ip_bans.reason` is VARCHAR(255).
 const MAX_REASON_LEN: usize = 255;
 
+// SPEC-10.13.2: all rejections happen before any state is touched.
 /// Validate a manual-ban request into the `(ip, reason, duration)` the service
 /// takes. Pure and unit-tested: an unparseable address, an empty reason, an
 /// over-long reason and an out-of-range duration are all rejected before any
@@ -91,6 +94,7 @@ fn validate_ban_request(
     Ok((ip, reason.to_string(), duration))
 }
 
+// SPEC-10.13.2, SPEC-10.13.3, SPEC-10.13.4: super-admin manual ban, audited.
 /// POST /v1/admin/ip-bans
 ///
 /// Ban an IP by hand (BUNYIP-413), the counterpart to the existing lift. Goes
@@ -126,6 +130,7 @@ pub async fn create_ip_ban(
     ))
 }
 
+// SPEC-10.13.5: lift via the service; 404 when not banned; audited.
 /// DELETE /v1/admin/ip-bans/{ip}
 ///
 /// Lifts the auto-ban for `{ip}` via [`AutoBanService::unban`], effective on the

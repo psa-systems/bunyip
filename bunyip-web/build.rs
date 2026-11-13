@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
+// SPEC-14.5.1, SPEC-14.5.3, SPEC-14.6.1: build metadata and asset version
 fn main() {
     let commit = resolve("GIT_COMMIT", &["git", "rev-parse", "--short", "HEAD"]);
     let tag = resolve(
@@ -13,6 +14,7 @@ fn main() {
     println!("cargo:rustc-env=GIT_TAG={tag}");
     println!("cargo:rustc-env=BUILD_DATE={build_date}");
 
+    // SPEC-14.6.1, SPEC-14.6.2: unknown commit falls back to the timestamp, loudly
     // BUNYIP-554: the `?v=` every /assets reference carries, so the immutable
     // one-year Cache-Control on that directory is invalidated by a deploy. The
     // commit is the identity of the asset bytes; when git is unavailable
@@ -31,6 +33,7 @@ fn main() {
     };
     println!("cargo:rustc-env=ASSET_VERSION={version}");
 
+    // SPEC-14.7.1: rerun only on these inputs
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=GIT_COMMIT");
     println!("cargo:rerun-if-env-changed=GIT_TAG");
@@ -38,6 +41,7 @@ fn main() {
     emit_git_rerun_triggers();
 }
 
+// SPEC-14.7.2, SPEC-14.7.3: emit only paths that exist
 // Rerun the script when the checked-out revision moves, and never otherwise. The
 // hardcoded `../.git/HEAD` resolved from a plain clone but named an absent path in
 // a linked worktree or a submodule (where `.git` is a file) and in any context
@@ -77,6 +81,7 @@ fn emit_git_rerun_triggers() {
     }
 }
 
+// SPEC-14.5.1, SPEC-14.5.2: env value first, then the command, then unknown
 fn resolve(env_var: &str, cmd: &[&str]) -> String {
     if let Ok(value) = std::env::var(env_var) {
         // `unknown` is the Dockerfile's ARG default, i.e. "the caller passed

@@ -10,6 +10,7 @@ use actix_web::web;
 
 use crate::errors::AppError;
 
+// SPEC-9.14.6, SPEC-9.14.7: detail goes to the log, never to the client
 /// Log the real extractor error and return a generic 400 in the `AppError`
 /// envelope. `kind` tags the log line; `client_msg` is the only text the caller
 /// sees.
@@ -22,6 +23,7 @@ fn reject(
     AppError::bad_request(client_msg).into()
 }
 
+// SPEC-9.14.6, SPEC-9.14.8
 /// JSON body config: keeps the 32 KB limit, generic error on parse failure.
 pub fn json_config() -> web::JsonConfig {
     web::JsonConfig::default()
@@ -29,16 +31,19 @@ pub fn json_config() -> web::JsonConfig {
         .error_handler(|err, _| reject("json", err, "The request body was malformed or invalid."))
 }
 
+// SPEC-9.14.6
 /// Path parameter config: generic error on parse failure.
 pub fn path_config() -> web::PathConfig {
     web::PathConfig::default().error_handler(|err, _| reject("path", err, "Invalid request."))
 }
 
+// SPEC-9.14.6
 /// Query string config: generic error on parse failure.
 pub fn query_config() -> web::QueryConfig {
     web::QueryConfig::default().error_handler(|err, _| reject("query", err, "Invalid request."))
 }
 
+// SPEC-9.14.6
 /// Urlencoded form config: generic error on parse failure.
 pub fn form_config() -> web::FormConfig {
     web::FormConfig::default()

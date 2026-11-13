@@ -25,6 +25,7 @@
 
 use bunyip_domain::config::Config;
 
+// SPEC-9.13.4
 /// A configuration value this route can serve, by the key a caller asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostConfig {
@@ -33,6 +34,7 @@ pub enum HostConfig {
     MokoshAbuseContactEmail,
 }
 
+// SPEC-9.13.4
 /// Every servable key, which is also what `machine-client register
 /// --config-key` validates an operator's spelling against.
 pub const HOST_CONFIG_KEYS: &[&str] = &[HostConfig::MokoshAbuseContactEmail.key()];
@@ -45,6 +47,7 @@ impl HostConfig {
         }
     }
 
+    // SPEC-9.13.4
     /// The variant for a key, or `None` for a key this build cannot serve.
     pub fn parse(key: &str) -> Option<Self> {
         match key {
@@ -53,6 +56,7 @@ impl HostConfig {
         }
     }
 
+    // SPEC-9.13.5
     /// The value, or `None` when this deployment has not set it.
     ///
     /// Synchronous and allocation-light on purpose: every value here comes from

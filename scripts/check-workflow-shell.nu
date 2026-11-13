@@ -21,6 +21,7 @@
 const NU_SHELL = "nu {0}"
 
 # Problems found in one workflow file; an empty list means the file is compliant.
+# SPEC-3.17.1
 def check-workflow [path: string]: nothing -> list<string> {
     let doc = (do --ignore-errors { open --raw $path | from yaml })
     if $doc == null {
@@ -32,6 +33,7 @@ def check-workflow [path: string]: nothing -> list<string> {
         return [$"($path): declares no jobs"]
     }
 
+    # SPEC-3.17.2: a reusable-workflow caller cannot carry defaults
     $jobs | transpose name job | each {|entry|
         # A reusable-workflow caller is a pure `uses:` job: it runs no step of its
         # own, and Forgejo's schema rejects the whole workflow if `defaults` (or
@@ -64,6 +66,7 @@ def check-workflow [path: string]: nothing -> list<string> {
 
 # Prove the gate rejects what it claims to reject. Runs in CI next to the real
 # check, so a gate that silently stopped detecting anything fails the build.
+# SPEC-3.17.3
 def self-test []: nothing -> nothing {
     let dir = (mktemp --directory --tmpdir)
 
