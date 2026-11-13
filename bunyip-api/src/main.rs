@@ -1537,7 +1537,12 @@ async fn main() -> anyhow::Result<()> {
             .app_data(web::Data::new(update_checker.clone()))
             .app_data(web::Data::new(ip_enrich.clone()))
             // BUNYIP-925: shared MX-record resolver for the feedback spam gate.
-            .app_data(web::Data::from(Arc::clone(&mx_resolver)))
+            // BUNYIP-1078: `Data::from(Arc<T>)` yields `Data<T>` (here
+            // `Data<dyn MxResolver>`), not `Data<Arc<T>>`; the handler extracts
+            // `Data<Arc<dyn MxResolver>>`, a different type, so this lookup has
+            // always missed and every /v1/feedback submission 500ed. `Data::new`
+            // wraps the `Arc<dyn MxResolver>` value itself, matching the handler.
+            .app_data(web::Data::new(Arc::clone(&mx_resolver)))
             // Configure routes
             .configure(routes::configure)
     })

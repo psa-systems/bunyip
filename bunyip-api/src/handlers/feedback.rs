@@ -559,35 +559,15 @@ pub async fn submit_feedback(
         .unwrap_or_default()
         .to_string();
     let honeypot_flagged = !honeypot.is_empty();
-    // BUNYIP-925: MX-lookup for signal 4. Only runs when an email was
-    // submitted and an `@domain` is extractable; `Unknown` otherwise so
-    // the classifier short-circuits that signal.
-    let sender_domain_mx = if let Some(domain) = email.as_deref().and_then(mx_check::domain_of) {
-        mx_resolver.lookup(&domain).await
-    } else {
-        MxLookupOutcome::Unknown
-    };
-    // BUNYIP-934: composite classifier. Runs even when the honeypot
-    // already flagged, so the admin UI gets a reason either way, but
-    // never un-flags a honeypot hit (short-circuits on OR). The
-    // registrable word comes from the deployment's base URL; if no base
-    // URL is set (dev standalone) the mimicry signal cannot fire.
-    let classifier_reason =
-        feedback_classifier::classify_feedback_spam(&feedback_classifier::SpamClassifierInput {
-            sender_email: email.as_deref(),
-            message: &message,
-            tags: &tags,
-            // BUNYIP-474 enrichment is per-request upstream; the submit
-            // path does not have the ASN cheaply here yet. Pass `None`
-            // until that wiring lands (follow-up); the other signals
-            // still fire.
-            ip_asn_name: None,
-            recipient_domain_registrable_word: deployment_registrable_word(&config.email.base_url)
-                .as_deref(),
-            recipient_domain_apex: deployment_apex_host(&config.email.base_url).as_deref(),
-            sender_domain_mx,
-        });
-    let is_spam = honeypot_flagged || classifier_reason.is_some();
+    // BUNYIP-1078: the MX lookup (signal 4) is a live DNS round-trip on a
+    // cold cache entry (up to `MX_LOOKUP_TIMEOUT`), so it and the rest of
+    // the composite classifier that depends on it now run in a background
+    // task AFTER the response is built (see below), instead of gating this
+    // `.await` on the request path. The only signal known synchronously is
+    // the honeypot, so the row is inserted with that provisional verdict;
+    // the background task reconciles `is_spam` and the spam-reason row
+    // once the classifier resolves.
+    let is_spam = honeypot_flagged;
 
     if let Some(name) = &name {
         validate_length("name", name, 100)?;
@@ -641,14 +621,6 @@ pub async fn submit_feedback(
         FeedbackRepository::save_attachments(&pool, feedback.id, attachment_parts).await?;
     }
 
-    // BUNYIP-934: when the composite classifier flagged, record the reason
-    // so the admin UI can show WHY. Honeypot-only hits do not get a reason
-    // row (the honeypot IS the reason, and the admin UI knows that).
-    if let Some(reason) = &classifier_reason {
-        crate::repositories::FeedbackSpamReasonsRepository::insert(&pool, feedback.id, reason)
-            .await?;
-    }
-
     // BUNYIP-411: mirror the request metadata into the audit log so feedback
     // spam is traceable there too. `actor_ip_address` (INET) carries the
     // resolved external client IP; the User-Agent rides in the metadata JSON
@@ -668,54 +640,118 @@ pub async fn submit_feedback(
     )
     .await?;
 
-    // BUNYIP-270: only ping admins for submissions that actually land in
-    // the Active triage queue. Honeypot-flagged spam (is_spam = TRUE) is
-    // filtered out of the Active tab by the list query
-    // (`WHERE is_spam = FALSE ...`), so notifying/emailing on it produced
-    // the reported symptom: admins received a "new feedback" email but
-    // opened `/admin/feedback` to an empty Active queue (the row was only
-    // reachable under the Spam tab). Suppressing the admin notification +
-    // email for spam ties "admin was emailed" to "row is in Active". The
-    // row is still stored and audit-logged above, and remains visible in
-    // the Spam tab for review.
-    if should_notify_admins_of_feedback(feedback.is_spam) {
-        NotificationRepository::create(
-            &pool,
-            CreateAdminNotification {
-                notification_type: NotificationType::NewFeedback,
-                title: "New feedback submitted".to_string(),
-                message: format!(
-                    "Feedback #{} is ready for review in the admin panel.",
-                    feedback.id
-                ),
-                metadata: Some(serde_json::json!({
-                    "feedback_id": feedback.id,
-                    "path": format!("{}/admin/feedback", config.email.base_url),
-                    "status": feedback.status,
-                })),
-                user_id: None,
+    // BUNYIP-1078: the MX lookup + the rest of the composite classifier run
+    // here, in the background, AFTER the response below is built, so a cold
+    // sender domain never makes the submitter wait on DNS. The row was
+    // inserted above with the provisional `is_spam = honeypot_flagged`
+    // verdict; this task reconciles it against the final classification,
+    // writes the spam-reason row, and (BUNYIP-270/806) only now decides
+    // whether to notify admins, matching the final (not provisional)
+    // outcome.
+    let pool_bg = pool.get_ref().clone();
+    let mx_resolver_bg = mx_resolver.get_ref().clone();
+    let email_svc_bg = email_service.get_ref().clone();
+    let base_url = config.email.base_url.clone();
+    let recipient_domain_registrable_word = deployment_registrable_word(&base_url);
+    let recipient_domain_apex = deployment_apex_host(&base_url);
+    let feedback_id = feedback.id;
+    let feedback_email = feedback.email.clone();
+    let feedback_message = feedback.message.clone();
+    let feedback_tags = feedback.tags.clone();
+    let feedback_status = feedback.status.clone();
+    tokio::spawn(async move {
+        let sender_domain_mx =
+            if let Some(domain) = feedback_email.as_deref().and_then(mx_check::domain_of) {
+                mx_resolver_bg.lookup(&domain).await
+            } else {
+                MxLookupOutcome::Unknown
+            };
+        let classifier_reason = feedback_classifier::classify_feedback_spam(
+            &feedback_classifier::SpamClassifierInput {
+                sender_email: feedback_email.as_deref(),
+                message: &feedback_message,
+                tags: &feedback_tags,
+                // BUNYIP-474 enrichment is per-request upstream; the submit
+                // path does not have the ASN cheaply here yet. Pass `None`
+                // until that wiring lands (follow-up); the other signals
+                // still fire.
+                ip_asn_name: None,
+                recipient_domain_registrable_word: recipient_domain_registrable_word.as_deref(),
+                recipient_domain_apex: recipient_domain_apex.as_deref(),
+                sender_domain_mx,
             },
-        )
-        .await?;
-
-        let email_svc = email_service.get_ref().clone();
-        let feedback_id = feedback.id;
-        let admin_url = format!(
-            "{}/admin/feedback?id={}",
-            config.email.base_url, feedback_id
         );
-        let admin_emails = UserRepository::find_admin_emails(&pool)
+        let final_is_spam = is_spam || classifier_reason.is_some();
+
+        if final_is_spam != is_spam {
+            if let Err(e) =
+                FeedbackRepository::set_is_spam(&pool_bg, feedback_id, final_is_spam).await
+            {
+                tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to update feedback is_spam after background classification");
+            }
+        }
+
+        // BUNYIP-934: when the composite classifier flagged, record the
+        // reason so the admin UI can show WHY. Honeypot-only hits do not
+        // get a reason row (the honeypot IS the reason, and the admin UI
+        // knows that).
+        if let Some(reason) = &classifier_reason {
+            if let Err(e) = crate::repositories::FeedbackSpamReasonsRepository::insert(
+                &pool_bg,
+                feedback_id,
+                reason,
+            )
             .await
-            .unwrap_or_default();
-        tokio::spawn(async move {
-            if let Err(e) = email_svc
+            {
+                tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to record feedback spam reason");
+            }
+        }
+
+        // BUNYIP-270: only ping admins for submissions that actually land in
+        // the Active triage queue. Honeypot-flagged spam (is_spam = TRUE) is
+        // filtered out of the Active tab by the list query
+        // (`WHERE is_spam = FALSE ...`), so notifying/emailing on it
+        // produced the reported symptom: admins received a "new feedback"
+        // email but opened `/admin/feedback` to an empty Active queue (the
+        // row was only reachable under the Spam tab). Suppressing the admin
+        // notification + email for spam ties "admin was emailed" to "row is
+        // in Active". The row is still stored and audit-logged above, and
+        // remains visible in the Spam tab for review.
+        if should_notify_admins_of_feedback(final_is_spam) {
+            if let Err(e) = NotificationRepository::create(
+                &pool_bg,
+                CreateAdminNotification {
+                    notification_type: NotificationType::NewFeedback,
+                    title: "New feedback submitted".to_string(),
+                    message: format!(
+                        "Feedback #{feedback_id} is ready for review in the admin panel."
+                    ),
+                    metadata: Some(serde_json::json!({
+                        "feedback_id": feedback_id,
+                        "path": format!("{base_url}/admin/feedback"),
+                        "status": feedback_status,
+                    })),
+                    user_id: None,
+                },
+            )
+            .await
+            {
+                tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to create admin feedback notification");
+                return;
+            }
+
+            let admin_url = format!("{base_url}/admin/feedback?id={feedback_id}");
+            let admin_emails = UserRepository::find_admin_emails(&pool_bg)
+                .await
+                .unwrap_or_default();
+            if let Err(e) = email_svc_bg
                 .send_admin_feedback_notification(&admin_url, &admin_emails)
                 .await
             {
                 tracing::error!(error = %e, feedback_id = %feedback_id, "Failed to send feedback notification email");
             }
-        });
-    }
+        }
+    });
 
     Ok(created(
         FeedbackSubmissionResponse {
