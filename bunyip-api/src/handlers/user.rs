@@ -1002,16 +1002,30 @@ pub async fn delete_account(
 
     // Cancel active Stripe subscription if one exists
     if let Some(customer_id) = &db_user.stripe_customer_id {
-        if let Ok(Some(sub)) = stripe_service.get_customer_subscription(customer_id).await {
-            if sub.status == "active" || sub.status == "past_due" {
-                if let Err(e) = stripe_service.cancel_subscription(&sub.id, false).await {
-                    tracing::error!(
-                        error = %e,
-                        user_id = %user.0.sub,
-                        subscription_id = %sub.id,
-                        "Failed to cancel Stripe subscription during account deletion"
-                    );
+        // BUNYIP-1052: the Stripe lookup error used to be swallowed by an
+        // `if let Ok(Some(sub)) = ...`, so an API outage left the
+        // subscription active after the account was deleted with no log.
+        // Log the error at error so an operator can reconcile.
+        match stripe_service.get_customer_subscription(customer_id).await {
+            Ok(Some(sub)) => {
+                if sub.status == "active" || sub.status == "past_due" {
+                    if let Err(e) = stripe_service.cancel_subscription(&sub.id, false).await {
+                        tracing::error!(
+                            error = %e,
+                            user_id = %user.0.sub,
+                            subscription_id = %sub.id,
+                            "Failed to cancel Stripe subscription during account deletion"
+                        );
+                    }
                 }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    user_id = %user.0.sub,
+                    "Failed to look up Stripe subscription during account deletion; it may still be active"
+                );
             }
         }
     }

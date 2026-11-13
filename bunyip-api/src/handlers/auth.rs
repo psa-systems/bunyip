@@ -701,15 +701,16 @@ pub async fn verify_magic_link(
     match result {
         crate::services::MagicLinkResult::TwoFactorRequired {
             challenge_token,
-            is_new_user,
+            is_new_user: _,
         } => {
-            // Still send welcome email for new users
-            if is_new_user {
-                let email_svc = email_service.get_ref().clone();
-                // We don't have the email easily here, but new users with 2FA is rare
-                // (they'd need to have set up 2FA via magic link account creation then somehow enabled it)
-                let _ = email_svc; // no-op for this edge case
-            }
+            // BUNYIP-1052: this branch used to claim "still send welcome
+            // email for new users" and then run `let _ = email_svc` as a
+            // no-op, so the email was never sent. The path is reachable
+            // only when a user set up 2FA via magic-link account creation
+            // and immediately exercised it, which the welcome email on
+            // the Success branch below already covered on the first-ever
+            // magic-link sign-in. The dead branch is removed rather than
+            // wired up to send twice.
             Ok(success(
                 serde_json::json!({ "requires_2fa": true, "challenge_token": challenge_token }),
                 request_id,

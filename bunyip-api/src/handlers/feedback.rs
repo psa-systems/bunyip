@@ -981,10 +981,11 @@ pub async fn respond_to_feedback(
             .send_feedback_response(&email, &updated)
             .await
         {
+            // BUNYIP-1052: log the feedback id only; never the raw email
+            // (BUNYIP-265).
             tracing::error!(
                 error = %e,
                 feedback_id = %updated.id,
-                recipient = %email,
                 "Failed to send feedback response email"
             );
         }
