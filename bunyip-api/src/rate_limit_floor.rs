@@ -50,7 +50,7 @@ const EXEMPT_PATHS: &[&str] = &[
     // BUNYIP-518: the public pricing payload. It is unauthenticated, read-only,
     // and already TTL-cached server-side (`PricingCache`), so it drives no Stripe
     // traffic and needs no floor. `bunyip-web::public_ctx` fetches it on EVERY
-    // public page render (for the nav/footer links), so under the 20/60s-per-IP
+    // public page render (for the nav/footer links), so under the 60/60s-per-IP
     // floor a few page loads from one browser exhausted that visitor's bucket;
     // the 429 was swallowed into an unpublished payload, which 404'd `/pricing`
     // and hid its links with the switch on and every tier resolving.
@@ -171,9 +171,26 @@ where
             // SPEC-9.15.4, SPEC-9.15.5
             match RateLimitRepository::check_and_increment(&pool, &key, config).await {
                 Ok((_count, true)) => {
-                    let retry_after = RateLimitRepository::get_retry_after(&pool, &key, config)
-                        .await
-                        .unwrap_or(config.window_seconds.max(0) as u64);
+                    // BUNYIP-1052: a failed read of the retry window used to
+                    // vanish under `unwrap_or`, so a Retry-After served
+                    // the full fallback window with no record of the
+                    // database failure. Log the cause before falling back.
+                    let retry_after = match RateLimitRepository::get_retry_after(
+                        &pool, &key, config,
+                    )
+                    .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                action = config.action,
+                                key_kind = ?config.key_kind,
+                                "rate_limit_floor: get_retry_after failed; falling back to the full window",
+                            );
+                            config.window_seconds.max(0) as u64
+                        }
+                    };
                     tracing::warn!(
                         action = config.action,
                         path = %path,
