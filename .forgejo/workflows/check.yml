@@ -629,3 +629,8 @@ jobs:
           # returns the one test fixture and nothing else.
           # SPEC-3.6.3
           kingfisher_skip_regex: '(^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$|MC4CAQAwBQYDK2VwBCIEIJ5gHv/Vi3V0Lk0k3jHN10sqRZ68P8fkNuLnF\+sNtVKR)'
+          # BUNYIP-1078: two Postgres URIs in bunyip-api/tests/feedback_mx_latency.rs
+          # (postgres:postgres@localhost and test:test@localhost) are test
+          # fixture connection strings for the disposable Postgres container the
+          # test boots; neither is a live credential.
+          noseyparker_findings_exclude: "b0359ba411d4476b2e5cc2093295cbc3f49dc37a,97407726c72d7b21d2c50a0a67ed288c0adce767"
