@@ -995,7 +995,12 @@ pub async fn delete_account(
             meta: crate::responses::ResponseMeta::new(request_id),
         });
         for cookie in AuthCookies::clear(secure, cookie_domain) {
-            response.add_cookie(&cookie).ok();
+            // BUNYIP-1052: a failure to emit a clearing cookie leaves
+            // the deleted account's browser signed in; log it so
+            // operators see the failure instead of silent half-logout.
+            if let Err(e) = response.add_cookie(&cookie) {
+                tracing::warn!(error = %e, name = %cookie.name(), "delete_account: could not emit clearing cookie");
+            }
         }
         return Ok(response);
     }
@@ -1082,7 +1087,11 @@ pub async fn delete_account(
     });
 
     for cookie in AuthCookies::clear(secure, cookie_domain) {
-        response.add_cookie(&cookie).ok();
+        // BUNYIP-1052: see the sibling call above; the same silent
+        // half-logout risk applies on the success path.
+        if let Err(e) = response.add_cookie(&cookie) {
+            tracing::warn!(error = %e, name = %cookie.name(), "delete_account: could not emit clearing cookie");
+        }
     }
 
     Ok(response)

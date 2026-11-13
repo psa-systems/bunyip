@@ -1123,7 +1123,12 @@ pub async fn logout(
     });
 
     for cookie in AuthCookies::clear(secure, cookie_domain) {
-        response.add_cookie(&cookie).ok();
+        // BUNYIP-1052: a failure to emit a clearing cookie leaves the
+        // browser signed in; log it so operators see the failure instead
+        // of a silent half-logout.
+        if let Err(e) = response.add_cookie(&cookie) {
+            tracing::warn!(error = %e, name = %cookie.name(), "logout: could not emit clearing cookie");
+        }
     }
 
     Ok(response)
@@ -1247,7 +1252,12 @@ pub async fn logout_all(
     });
 
     for cookie in AuthCookies::clear(secure, cookie_domain) {
-        response.add_cookie(&cookie).ok();
+        // BUNYIP-1052: a failure to emit a clearing cookie leaves the
+        // browser signed in; log it so operators see the failure instead
+        // of a silent half-logout.
+        if let Err(e) = response.add_cookie(&cookie) {
+            tracing::warn!(error = %e, name = %cookie.name(), "logout_all: could not emit clearing cookie");
+        }
     }
 
     Ok(response)
