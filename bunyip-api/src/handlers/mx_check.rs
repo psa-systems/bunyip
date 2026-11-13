@@ -80,9 +80,18 @@ pub struct HickoryMxResolver {
 impl HickoryMxResolver {
     // SPEC-10.35.9: system resolver config first
     pub fn new() -> Self {
+        // BUNYIP-1052: a `read_system_conf` failure now reaches the operator
+        // log at warn before the fallback, so a malformed resolv.conf is not
+        // silent.
         let (config, opts) = match hickory_resolver::system_conf::read_system_conf() {
             Ok(parts) => parts,
-            Err(_) => (ResolverConfig::udp_and_tcp(&GOOGLE), Default::default()),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "mx_check: read_system_conf failed; falling back to the Google public resolver"
+                );
+                (ResolverConfig::udp_and_tcp(&GOOGLE), Default::default())
+            }
         };
         let inner = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
             .with_options(opts)
@@ -105,6 +114,14 @@ impl HickoryMxResolver {
     }
 
     fn cache_put(&self, domain: String, outcome: MxLookupOutcome) {
+        // BUNYIP-1052: an `Unknown` outcome is a resolver error / timeout
+        // (fail open); caching it for the full `MX_CACHE_TTL` would pin a
+        // transient DNS outage for an hour. Skip the cache entirely so the
+        // next lookup re-tries. The sweep still runs on the write path for
+        // HasMx/NoMx, which is the common case.
+        if matches!(outcome, MxLookupOutcome::Unknown) {
+            return;
+        }
         let mut guard = self.cache.write();
         // BUNYIP-1078: this is the only write path, so sweeping expired
         // entries here (amortized into the write lock already taken on
@@ -140,8 +157,29 @@ impl MxResolver for HickoryMxResolver {
                         MxLookupOutcome::NoMx
                     }
                 }
-                Ok(Err(e)) => resolver_error_to_outcome(&e),
-                Err(_) => MxLookupOutcome::Unknown,
+                Ok(Err(e)) => {
+                    let out = resolver_error_to_outcome(&e);
+                    // BUNYIP-1052: a resolver failure that maps to Unknown
+                    // (fail-open) now surfaces in the log with the domain so
+                    // a DNS outage is not invisible; NoMx is normal flow and
+                    // stays quiet.
+                    if matches!(out, MxLookupOutcome::Unknown) {
+                        tracing::warn!(
+                            domain = %domain,
+                            error = %e,
+                            "mx_check: resolver error, failing open"
+                        );
+                    }
+                    out
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        domain = %domain,
+                        timeout_secs = MX_LOOKUP_TIMEOUT.as_secs(),
+                        "mx_check: resolver timeout, failing open"
+                    );
+                    MxLookupOutcome::Unknown
+                }
             };
         self.cache_put(domain.to_string(), outcome);
         outcome
@@ -241,6 +279,30 @@ mod tests {
             "a write must not evict entries still inside the TTL"
         );
         assert!(guard.contains_key("new.example"));
+    }
+
+    /// BUNYIP-1052: an `Unknown` outcome (resolver error / timeout) must not
+    /// be cached, so a transient DNS outage does not stick for `MX_CACHE_TTL`.
+    #[test]
+    fn cache_put_skips_unknown_outcomes() {
+        let resolver = HickoryMxResolver::new();
+        resolver.cache_put("outage.example".to_string(), MxLookupOutcome::Unknown);
+        assert!(
+            !resolver.cache.read().contains_key("outage.example"),
+            "Unknown must not be cached; next lookup should re-try"
+        );
+    }
+
+    /// BUNYIP-1052: `HasMx` and `NoMx` still land in the cache so a spam
+    /// burst from one domain costs one lookup.
+    #[test]
+    fn cache_put_still_caches_resolved_outcomes() {
+        let resolver = HickoryMxResolver::new();
+        resolver.cache_put("good.example".to_string(), MxLookupOutcome::HasMx);
+        resolver.cache_put("bad.example".to_string(), MxLookupOutcome::NoMx);
+        let guard = resolver.cache.read();
+        assert!(guard.contains_key("good.example"));
+        assert!(guard.contains_key("bad.example"));
     }
 
     #[test]
