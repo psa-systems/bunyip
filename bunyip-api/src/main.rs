@@ -1054,8 +1054,17 @@ async fn main() -> anyhow::Result<()> {
                 match provider.load_client(mokosh_client_id).await? {
                     Some(client) => {
                         info!("Mokosh backup adapter enabled (BUNYIP-356)");
+                        // BUNYIP-1052: the previous `reqwest::Client::new()`
+                        // had no timeout, so a hung mokosh-apps endpoint
+                        // tied up the request slot indefinitely. Match the
+                        // 5-second bound the back-channel client already
+                        // uses (SPEC-9.7.17).
+                        let mokosh_http = reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(5))
+                            .build()
+                            .expect("mokosh backup client builds with default roots");
                         Arc::new(MokoshHttpBackupAdapter::new(
-                            reqwest::Client::new(),
+                            mokosh_http,
                             url,
                             provider.clone(),
                             client,
