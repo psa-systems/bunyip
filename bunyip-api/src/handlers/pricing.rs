@@ -502,7 +502,8 @@ fn snapshot(tier_config: &web::Data<Arc<RwLock<TierConfig>>>) -> TierConfig {
         .clone()
 }
 
-/// `GET /v1/pricing` - public, unauthenticated, under the rate-limit floor.
+/// `GET /v1/pricing` - public, unauthenticated, exempt from the rate-limit
+/// floor (listed in `rate_limit_floor::EXEMPT_PATHS`).
 // SPEC-10.30.1, SPEC-10.30.8: public body carries no reasons
 pub async fn public_pricing(
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
