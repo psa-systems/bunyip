@@ -517,12 +517,23 @@ async fn download_asset_core(
                 },
             );
 
+            // BUNYIP-1052: asset_name reaches a quoted header value, so a
+            // name containing `"`, `\` or a control character could break
+            // the Content-Disposition line and, with CR/LF, inject a new
+            // header. Strip control chars and escape the quote characters,
+            // matching the feedback get_attachment surface.
+            let safe_name: String = asset_name
+                .chars()
+                .filter(|c| !c.is_ascii_control())
+                .collect::<String>()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
             let resp = HttpResponse::Ok()
                 .insert_header((header::CONTENT_TYPE, row.content_type.clone()))
                 .insert_header((header::CONTENT_LENGTH, row.size_bytes.to_string()))
                 .insert_header((
                     header::CONTENT_DISPOSITION,
-                    format!("attachment; filename=\"{}\"", asset_name),
+                    format!("attachment; filename=\"{}\"", safe_name),
                 ))
                 .streaming(stream);
             // BUNYIP-559 F12: exempt from the `Compress` middleware. Encoding
