@@ -500,10 +500,12 @@ pub async fn change_password(
 
     // Send password changed notification email (in background, don't wait)
     let email = user.0.email.clone();
+    // BUNYIP-1052: log the user id only; never the raw email (BUNYIP-265).
+    let user_id = user.0.sub;
     let email_svc = email_service.get_ref().clone();
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_password_changed(&email).await {
-            tracing::error!(error = %e, email = %email, "Failed to send password changed email");
+            tracing::error!(error = %e, user_id = %user_id, "Failed to send password changed email");
         }
     });
 
@@ -681,10 +683,12 @@ pub async fn request_email_change(
         Some(token) => {
             // Verified user: send verification email to new address
             let new_email = body.new_email.clone();
+            // BUNYIP-1052: log the user id only; never the raw email (BUNYIP-265).
+            let user_id = user.0.sub;
             let email_svc = email_service.get_ref().clone();
             tokio::spawn(async move {
                 if let Err(e) = email_svc.send_email_change_verify(&new_email, &token).await {
-                    tracing::error!(error = %e, email = %new_email, "Failed to send email change verification");
+                    tracing::error!(error = %e, user_id = %user_id, "Failed to send email change verification");
                 }
             });
 
@@ -726,7 +730,11 @@ pub async fn confirm_email_change(
             .send_email_change_notification(&old_email, &new_email)
             .await
         {
-            tracing::error!(error = %e, email = %old_email, "Failed to send email change notification");
+            // BUNYIP-1052: no user id available on the token-gated path
+            // (auth_service returns addresses only); drop the raw email
+            // (BUNYIP-265) and rely on the request id and the surrounding
+            // audit entry to attribute the failure.
+            tracing::error!(error = %e, "Failed to send email change notification");
         }
     });
 
@@ -754,10 +762,12 @@ pub async fn request_email_verification(
 
     // Send verification email (fire and forget)
     let email = user.0.email.clone();
+    // BUNYIP-1052: log the user id only; never the raw email (BUNYIP-265).
+    let user_id = user.0.sub;
     let email_svc = email_service.get_ref().clone();
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_email_verify(&email, &token).await {
-            tracing::error!(error = %e, email = %email, "Failed to send email verification");
+            tracing::error!(error = %e, user_id = %user_id, "Failed to send email verification");
         }
     });
 
@@ -781,16 +791,18 @@ pub async fn confirm_email_verification(
     let request_id = get_request_id(&req);
     let ip_address = extract_client_ip(&req);
 
-    let (user_id, email, tier) = auth_service
+    let (user_id, _email, tier) = auth_service
         .confirm_email_verification(body.token.clone(), ip_address)
         .await?;
 
+    // BUNYIP-1052: email is no longer read here (BUNYIP-265); the service's
+    // audit entry still records it. Log the user id only.
     match &tier {
         Some(t) => {
-            tracing::info!(email = %email, membership_tier = %t.as_str(), "Email verified, initial tier granted")
+            tracing::info!(user_id = %user_id, membership_tier = %t.as_str(), "Email verified, initial tier granted")
         }
         None => {
-            tracing::info!(email = %email, "Email verified; tier grant pending name save (BUNYIP-221)")
+            tracing::info!(user_id = %user_id, "Email verified; tier grant pending name save (BUNYIP-221)")
         }
     }
 
@@ -981,9 +993,9 @@ pub async fn delete_account(
         TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user.0.sub).await?;
         crate::handlers::auth::revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
+        // BUNYIP-1052: user_email dropped; log the user id only (BUNYIP-265).
         tracing::info!(
             user_id = %user.0.sub,
-            user_email = %user.0.email,
             "Hard-purged e2e account (non-production)"
         );
 
@@ -1039,9 +1051,9 @@ pub async fn delete_account(
     )
     .await?;
 
+    // BUNYIP-1052: user_email dropped; log the user id only (BUNYIP-265).
     tracing::info!(
         user_id = %user.0.sub,
-        user_email = %user.0.email,
         "User deleted their own account"
     );
 
