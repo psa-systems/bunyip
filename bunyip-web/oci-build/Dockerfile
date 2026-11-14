@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.29
 #
 # Production image for bunyip-web: build the release binary + minified CSS, then
 # run the Axum SSR server. This ships a running process (not static files), so
@@ -98,7 +98,7 @@ RUN --mount=type=cache,id=bunyip-web-cargo-registry,target=/usr/local/cargo/regi
 
 # ---- Stage 2: run -----------------------------------------------------------
 # SPEC-14.34.4: digest pinned runtime base
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 ARG GIT_COMMIT=unknown
 ARG GIT_TAG=unknown

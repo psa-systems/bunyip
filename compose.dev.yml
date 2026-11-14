@@ -18,7 +18,7 @@ services:
   # startup (sqlx::migrate!).
   postgres:
     # Postgres 18, matching compose.yml + the deployed template (BUNYIP-350).
-    image: postgres:18.2-alpine3.23
+    image: postgres:18.7-alpine3.23
     container_name: dev-bunyip-postgres-${USER}
     restart: unless-stopped
     environment:
