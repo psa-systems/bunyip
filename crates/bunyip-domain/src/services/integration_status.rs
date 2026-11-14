@@ -114,19 +114,22 @@ pub struct IntegrationSignals {
 
 // SPEC-8.21.12: single-sourced from ENV_INVENTORY
 /// The `feature` text an inventory variable carries: what stops working when it
-/// is absent. Empty for a name the inventory does not carry (the coverage test in
-/// `bunyip-api/tests/env_inventory.rs` keeps that from happening for a real var).
+/// is absent. BUNYIP-1048: a name the inventory does not carry used to silently
+/// produce an empty detail string; it is now a loud panic naming the var, since
+/// the coverage test in `bunyip-api/tests/env_inventory.rs` is specifically the
+/// gate that keeps a real variable from reaching here unknown.
 fn feature_of(var: &str) -> String {
     env_spec(var)
         .map(|s| s.feature.to_string())
-        .unwrap_or_default()
+        .unwrap_or_else(|| panic!("feature_of: `{var}` is not in ENV_INVENTORY; every integration-status variable must be inventoried"))
 }
 
 /// The `remedy` text an inventory variable carries: how the operator supplies it.
+/// BUNYIP-1048: same loud-fail as `feature_of` for the same reason.
 fn remedy_of(var: &str) -> String {
     env_spec(var)
         .map(|s| s.remedy.to_string())
-        .unwrap_or_default()
+        .unwrap_or_else(|| panic!("remedy_of: `{var}` is not in ENV_INVENTORY; every integration-status variable must be inventoried"))
 }
 
 fn status(
