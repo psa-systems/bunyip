@@ -199,13 +199,20 @@ pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpRe
         "token_endpoint_auth_methods_supported": [
             "client_secret_basic", "none"
         ],
+        // BUNYIP-1043: discovery scopes and claims advertise what the
+        // authorize / id_token / userinfo paths actually honour. Earlier
+        // lists omitted `profile`, `phone`, `given_name`, `family_name`,
+        // `phone_number` and `sid`, which those paths already support.
         "scopes_supported": [
-            "openid", "email", "offline_access",
+            "openid", "email", "profile", "phone", "offline_access",
             "dmarc:read", "dmarc:write"
         ],
         "claims_supported": [
-            "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp",
-            "email", "email_verified", "membership_status", "has_member_access",
+            "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp", "sid",
+            "email", "email_verified",
+            "given_name", "family_name",
+            "phone_number",
+            "membership_status", "has_member_access",
             "bunyip_role"
         ],
         "code_challenge_methods_supported": ["S256"],
@@ -1573,16 +1580,36 @@ fn extract_client_credentials(
     form_client_id: Option<&str>,
     form_client_secret: Option<&str>,
 ) -> Result<(String, Option<String>), AppError> {
-    // Try HTTP Basic auth first
+    // Try HTTP Basic auth first.
+    //
+    // BUNYIP-1043: an undecodable client_id or client_secret used to collapse
+    // to an empty string via `urlencoding::decode(...).unwrap_or_default()`,
+    // so a malformed Basic header silently authenticated as "empty id with
+    // empty secret" and then fell through to `authenticate_client` which
+    // mapped it to invalid_client with no cause. Fail at decode naming which
+    // half (id or secret) was malformed; machine_client::basic_credentials
+    // takes the same shape (None for the whole header).
     if let Some(auth_header) = req.headers().get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(encoded) = auth_str.strip_prefix("Basic ") {
                 if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
                     if let Ok(cred_str) = String::from_utf8(decoded) {
                         if let Some((id, secret)) = cred_str.split_once(':') {
+                            let id_decoded = urlencoding::decode(id).map_err(|e| {
+                                tracing::warn!(error = %e, "extract_client_credentials: client_id in Basic header is not valid percent-encoding");
+                                AppError::OidcInvalidClient(
+                                    "client_id in Authorization header is not valid percent-encoding".into(),
+                                )
+                            })?;
+                            let secret_decoded = urlencoding::decode(secret).map_err(|e| {
+                                tracing::warn!(error = %e, "extract_client_credentials: client_secret in Basic header is not valid percent-encoding");
+                                AppError::OidcInvalidClient(
+                                    "client_secret in Authorization header is not valid percent-encoding".into(),
+                                )
+                            })?;
                             return Ok((
-                                urlencoding::decode(id).unwrap_or_default().into_owned(),
-                                Some(urlencoding::decode(secret).unwrap_or_default().into_owned()),
+                                id_decoded.into_owned(),
+                                Some(secret_decoded.into_owned()),
                             ));
                         }
                     }
