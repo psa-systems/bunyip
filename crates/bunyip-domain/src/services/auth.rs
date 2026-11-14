@@ -2519,8 +2519,13 @@ impl AuthService {
                 Err(AppError::conflict("User is already an admin"))
             }
             Some(user) => {
-                // Existing non-admin user - upgrade to admin
-                InviteRepository::mark_accepted(&self.pool, invite.id).await?;
+                // Existing non-admin user - upgrade to admin.
+                // BUNYIP-1046: mark_accepted is now a guarded single-use
+                // claim, so a racing second accept sees `false` and is
+                // refused rather than double-upgrading the user.
+                if !InviteRepository::mark_accepted(&self.pool, invite.id).await? {
+                    return Err(AppError::InvalidCredentials);
+                }
                 let updated_user =
                     UserRepository::update_role(&self.pool, user.id, "admin").await?;
                 if UserRepository::set_email_verified(&self.pool, user.id).await? {
@@ -2609,8 +2614,11 @@ impl AuthService {
                     self.notify_mirzam(AccountChange::Verified { user_id: user.id });
                 }
 
-                // Mark invite accepted
-                InviteRepository::mark_accepted(&self.pool, invite.id).await?;
+                // Mark invite accepted.
+                // BUNYIP-1046: guarded single-use claim; see sibling arm.
+                if !InviteRepository::mark_accepted(&self.pool, invite.id).await? {
+                    return Err(AppError::InvalidCredentials);
+                }
 
                 // Create auth tokens
                 let tokens = self
