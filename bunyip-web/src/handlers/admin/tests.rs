@@ -2093,7 +2093,7 @@ mod stripe_admin_tests {
             early_adopter_visible: None, // unchecked -> hidden
             standard_visible: Some("true".into()),
         };
-        let body = super::catalog_save_body(&form);
+        let body = super::catalog_save_body(&form).expect("short price ids pass the length check");
         assert_eq!(body["free_price_id"], serde_json::json!("price_free"));
         assert_eq!(
             body["early_adopter_price_id"],
