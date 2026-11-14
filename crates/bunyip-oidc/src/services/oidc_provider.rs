@@ -716,8 +716,26 @@ impl OidcProvider {
             .bind(row.op_session_id)
             .execute(&mut *tx)
             .await
-            .ok(); // best-effort; don't mask the primary invalid_grant
-            tx.commit().await.ok();
+            .map_err(|e| {
+                // BUNYIP-1043: previously `.ok()` dropped this; the primary
+                // error (invalid_grant) still takes priority, but the
+                // family-revocation failure now surfaces at warn so a
+                // partial-replay leaves a trace.
+                tracing::warn!(
+                    op_session_id = %row.op_session_id,
+                    error = %e,
+                    "consume_authorization_code: reuse-detection family revocation failed; invalid_grant still returned"
+                );
+                e
+            })
+            .ok();
+            if let Err(e) = tx.commit().await {
+                tracing::warn!(
+                    op_session_id = %row.op_session_id,
+                    error = %e,
+                    "consume_authorization_code: reuse-detection commit failed"
+                );
+            }
             return Err(AppError::OidcInvalidGrant(
                 "authorization code already used".into(),
             ));
@@ -1021,14 +1039,32 @@ impl OidcProvider {
         // SPEC-5.23.2
         // Replay detection: already used → revoke whole family.
         if old.used_at.is_some() || old.revoked_at.is_some() {
-            sqlx::query!(
+            if let Err(e) = sqlx::query!(
                 "UPDATE refresh_token_families SET revoked_at = NOW(), revoke_reason = 'reuse_detected' WHERE id = $1",
                 old.family_id,
             )
             .execute(&mut *tx)
             .await
-            .ok(); // best-effort; don't mask the primary error
-            tx.commit().await.ok();
+            {
+                // BUNYIP-1043: a reuse-detection family revocation failure
+                // used to be swallowed by `.ok()`, so a replayed token left
+                // the family live with only `invalid_grant` as the trace.
+                // Warn with the family id; the primary invalid_grant
+                // return stays, matching the "don't mask the primary error"
+                // intent of the original code.
+                tracing::warn!(
+                    family_id = %old.family_id,
+                    error = %e,
+                    "rotate_refresh_token: reuse-detection family revocation failed; invalid_grant still returned"
+                );
+            }
+            if let Err(e) = tx.commit().await {
+                tracing::warn!(
+                    family_id = %old.family_id,
+                    error = %e,
+                    "rotate_refresh_token: reuse-detection commit failed"
+                );
+            }
 
             // BUNYIP-88: emit a Critical audit-log row for the replay so
             // the security event is queryable through /admin/audit-logs
@@ -1672,18 +1708,17 @@ pub struct OAuthClient {
     pub token_endpoint_auth_method: String,
 }
 
-/// Active IdP session row.
-///
-/// BUNYIP-636: `expires_at` is the ABSOLUTE deadline set once at creation,
-/// `idle_expires_at` is the SLIDING deadline every liveness check reads.
-/// A session is alive when it is not revoked AND both deadlines are in the
-/// future; the predicate for that lives in [`op_session_is_alive`] so no
-/// second copy of it can drift.
 /// Authorization code row (consumed view). `sqlx::FromRow` so
 /// `consume_authorization_code` can pull every column with a runtime
 /// query without re-registering the struct in the workspace `.sqlx/`
 /// cache every time the table grows (BUNYIP-62 added
 /// `selected_tenant_id`; future per-RP fields land the same way).
+///
+/// BUNYIP-1043: an earlier comment block here described an `OpSession`
+/// struct that was never defined in this file (the type and its
+/// `op_session_is_alive` predicate moved into dunite-oidc-op); removed so
+/// the doc describes the item it precedes rather than a sibling that
+/// isn't here.
 #[derive(sqlx::FromRow)]
 pub struct AuthCodeRow {
     pub code_hash: Vec<u8>,
@@ -1841,6 +1876,11 @@ impl OidcProvider {
         validation.set_issuer(&[self.issuer()]);
         validation.set_audience(&[self.config.rs_audience.as_str()]);
         validation.validate_exp = true;
+        // BUNYIP-1043: sibling `verify_at_jwt_claims` sets `validate_nbf`
+        // (BUNYIP-263 defense in depth); this RS verifier now does the
+        // same so a future-dated `nbf` is rejected on both verification
+        // paths.
+        validation.validate_nbf = true;
         validation.leeway = 30;
 
         let data =
