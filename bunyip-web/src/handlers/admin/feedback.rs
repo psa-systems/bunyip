@@ -488,18 +488,31 @@ pub async fn feedback_status(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-1055: match the four UI-submitted values explicitly; reject
+    // anything else with a redirect + error toast so a tampered value no
+    // longer silently re-opens the row.
     let status = match f.status.as_str() {
+        "new" => FeedbackStatus::New,
         "reviewed" => FeedbackStatus::Reviewed,
         "responded" => FeedbackStatus::Responded,
         "closed" => FeedbackStatus::Closed,
-        _ => FeedbackStatus::New,
+        _ => {
+            return redirect_cookies(
+                &format!(
+                    "{}?toast_err=Unknown%20status%20value",
+                    from_tab_path(f.from.as_deref())
+                ),
+                &c.set_cookies,
+            );
+        }
     };
     let toast = match status {
         FeedbackStatus::Closed => "Closed",
         FeedbackStatus::Reviewed => "Marked reviewed",
         FeedbackStatus::New => "Re-opened",
         FeedbackStatus::Responded => "Marked responded",
-        // Unreachable: the parse above maps anything unrecognised to `New`.
+        // Unreachable: the parse above rejects anything outside the four
+        // UI-known values.
         FeedbackStatus::Unknown => "Updated",
     };
     let target =
@@ -682,8 +695,8 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
 // SPEC-12.10.1
 /// GET /admin/feedback/:id
 ///
-/// Detail subpage for a single feedback submission. Shows the unmasked
-/// email (callers already pass `admin_guard`), full message, captured
+/// Detail subpage for a single feedback submission. BUNYIP-94 renders the
+/// address masked (not unmasked), full message, captured
 /// `page_path`, current status, and either the existing admin response
 /// or an inline form to send one.
 pub async fn feedback_detail(
@@ -921,7 +934,10 @@ pub async fn feedback_respond(
         // API - but render like the other two paths rather than a silent
         // redirect, so the empty state is not special-cased.
         Some("Response cannot be empty".to_string())
-    } else if response.len() > RESPONSE_MAX {
+    } else if response.chars().count() > RESPONSE_MAX {
+        // BUNYIP-1055: previously `response.len()` (bytes) while the message
+        // says characters. Count characters so the enforced bound matches
+        // the copy.
         Some(format!(
             "Response must be {RESPONSE_MAX} characters or fewer"
         ))
