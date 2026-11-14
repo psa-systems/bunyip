@@ -305,7 +305,11 @@ pub fn badge(variant: &str, text: &str) -> Markup {
         _ => "border-transparent bg-primary text-primary-foreground",
     };
     html! {
-        span class={ "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors " (v) } { (text) }
+        // BUNYIP-1079: `data-badge` lets input.css give the `success` tint a
+        // Safari-15.6 fallback (teal-500 resolves through a var chain to a hex,
+        // so no static alpha is possible and the color-mix fallback paints it
+        // solid; input.css renders it as an outline there instead).
+        span data-badge=(variant) class={ "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors " (v) } { (text) }
     }
 }
 
@@ -322,17 +326,18 @@ pub fn toggle_switch(on: bool, label: &str) -> Markup {
     } else {
         "bg-muted-foreground/40"
     };
-    let knob = if on {
-        "translate-x-[22px]"
-    } else {
-        "translate-x-0.5"
-    };
     html! {
+        // BUNYIP-1079: `data-switch` + `data-switch-knob` are the hooks the knob
+        // position hangs off in input.css. The knob is positioned by an explicit,
+        // @property-free transform there, NOT Tailwind v4's `translate-x` utility
+        // (which is backed by an `@property` registration Safari < 16.4 ignores,
+        // leaving the knob stuck); `transition-transform` keeps the glide.
         button type="submit" role="switch"
           aria-checked=(if on { "true" } else { "false" })
           aria-label=(label)
+          data-switch
           class={ "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 " (track) } {
-            span class={ "inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform " (knob) } {}
+            span data-switch-knob class="inline-block h-5 w-5 rounded-full bg-white shadow transition-transform" {}
         }
     }
 }
@@ -351,10 +356,13 @@ pub fn toggle_switch_field(id: &str, name: &str, checked: bool, label: &str) -> 
         span class="relative inline-flex h-6 w-11 shrink-0 items-center" {
             input type="checkbox" id=(id) name=(name) value="true" checked[checked]
                 role="switch" aria-label=(label) class="peer sr-only";
-            label for=(id)
+            label for=(id) data-switch-track
                 class="absolute inset-0 cursor-pointer rounded-full bg-muted-foreground/40 transition-colors peer-checked:bg-primary peer-focus-visible:outline-none peer-focus-visible:ring-2 peer-focus-visible:ring-ring peer-focus-visible:ring-offset-2" {}
-            span aria-hidden="true"
-                class="pointer-events-none absolute left-0.5 top-0.5 inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform peer-checked:translate-x-[22px]" {}
+            // BUNYIP-1079: knob position comes from input.css (`.peer:checked ~
+            // [data-switch-knob]`), not Tailwind's @property-backed translate-x,
+            // so it moves in Safari < 16.4. Off keeps `left-0.5`; transition stays.
+            span aria-hidden="true" data-switch-knob
+                class="pointer-events-none absolute left-0.5 top-0.5 inline-block h-5 w-5 rounded-full bg-white shadow transition-transform" {}
         }
     }
 }
@@ -475,9 +483,19 @@ mod tests {
         let on = toggle_switch(true, "Toggle active").into_string();
         assert!(on.contains(r#"aria-checked="true""#));
         assert!(on.contains("bg-primary"), "on state colors the track");
+        // BUNYIP-1079: the knob is positioned from input.css off these hooks, not
+        // Tailwind's @property-backed translate-x utility, so assert the hooks.
         assert!(
-            on.contains("translate-x-[22px]"),
-            "on slides the knob right"
+            on.contains("data-switch"),
+            "the track carries the switch hook"
+        );
+        assert!(
+            on.contains("data-switch-knob"),
+            "the knob carries its position hook"
+        );
+        assert!(
+            !on.contains("translate-x-"),
+            "no @property-backed translate utility on the knob"
         );
         assert!(on.contains(r#"role="switch""#) && on.contains(r#"aria-label="Toggle active""#));
         assert!(
@@ -491,7 +509,10 @@ mod tests {
             !off.contains("bg-primary"),
             "off state is not primary-colored"
         );
-        assert!(off.contains("translate-x-0.5"), "off keeps the knob left");
+        assert!(
+            off.contains(r#"aria-checked="false""#) && off.contains("data-switch-knob"),
+            "off renders the knob hook; input.css keeps it left"
+        );
     }
 
     /// BUNYIP-819 F15: the in-form variant is a real checkbox (submits with
@@ -512,7 +533,13 @@ mod tests {
         assert!(on.contains(r#"name="orgs_enabled""#));
         assert!(on.contains("checked"));
         assert!(on.contains("peer-checked:bg-primary"));
-        assert!(on.contains("peer-checked:translate-x-[22px]"));
+        // BUNYIP-1079: knob position is CSS-driven (`.peer:checked ~
+        // [data-switch-knob]`), not Tailwind's @property-backed translate-x.
+        assert!(on.contains("data-switch-knob"));
+        assert!(
+            !on.contains("translate-x-"),
+            "no @property-backed translate utility on the knob"
+        );
 
         let off = toggle_switch_field(
             "orgs_enabled",
@@ -529,6 +556,18 @@ mod tests {
             .expect("the input tag closes")
             .0;
         assert!(!input.contains("checked"), "unchecked when off: {input}");
+    }
+
+    // BUNYIP-1079: the Safari-15.6 success-badge fallback in input.css hangs off
+    // this variant hook, so the badge must emit it.
+    #[test]
+    fn badge_carries_its_variant_hook() {
+        assert!(super::badge("success", "Active")
+            .into_string()
+            .contains(r#"data-badge="success""#));
+        assert!(super::badge("warning", "Maintenance")
+            .into_string()
+            .contains(r#"data-badge="warning""#));
     }
 
     /// BUNYIP-404: the reorder arrows must resolve to a real glyph, not the
