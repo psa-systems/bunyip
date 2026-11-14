@@ -39,7 +39,11 @@ function deriveApiBase(hubUrl: string): string | null {
     const u = new URL(hubUrl);
     if (u.hostname.startsWith('api.')) return null;
     return `${u.protocol}//api.${u.hostname}`;
-  } catch {
+  } catch (err) {
+    // BUNYIP-1041: an unparsable E2E_BASE_URL silently became null and then
+    // `apiBaseURL` fell through to the hub host; surface the parse failure
+    // so the operator sees the malformed input they typed.
+    console.warn(`[env] deriveApiBase: E2E_BASE_URL=${JSON.stringify(hubUrl)} is not a valid URL: ${String(err)}`);
     return null;
   }
 }
@@ -66,7 +70,12 @@ const apiBaseURL = stripTrailingSlash(optional('E2E_API_BASE_URL') ?? opBaseURL)
 function isProductionApex(hubUrl: string): boolean {
   try {
     return new URL(hubUrl).hostname === 'psa.systems';
-  } catch {
+  } catch (err) {
+    // BUNYIP-1041: an unparsable E2E_BASE_URL silently became `not production`
+    // and billing write specs would then run. Warn with the offending value
+    // so the mismatch is visible; still returns false (billing specs still
+    // skip for safety when we cannot tell).
+    console.warn(`[env] isProductionApex: E2E_BASE_URL=${JSON.stringify(hubUrl)} is not a valid URL: ${String(err)}`);
     return false;
   }
 }

@@ -216,9 +216,14 @@ export async function waitForLink(
           const match = linkRe.exec(bodyText(email));
           if (match) {
             // Best-effort cleanup so the shared mailbox does not accumulate.
+            // BUNYIP-1041: a failed destroy used to be swallowed by
+            // `.catch(() => {})`; log at warn so a mailbox that stops
+            // draining is not invisible.
             await jmapCall(ctx, apiUrl, [
               ['Email/set', { accountId, destroy: [email.id] }, 'd'],
-            ]).catch(() => {});
+            ]).catch((err) => {
+              console.warn(`[mail-sink] JMAP destroy of ${email.id} failed: ${String(err)}`);
+            });
             return match[0];
           }
         }
