@@ -462,11 +462,32 @@ fn write_key_file(path: &Path, value: &str) -> std::io::Result<()> {
 // SPEC-7.1.114: true or 1 only
 /// A boolean setting: any value but `true` / `1` is false, which is what the
 /// YAML layer's env parser did and what every existing deployment resolves.
+///
+/// BUNYIP-1044: previously accepted only `true`/`1` for true and silently
+/// treated every other value (including `yes`, `on`, `false`, `0`, a typo)
+/// as false. These power security toggles (`LOGIN_APPROVAL_ENABLED`,
+/// `SIGNUP_BOT_GUARD_ENABLED`), so a `yes` would silently disable the guard
+/// the operator thought they'd enabled. Now warns at parse time for any
+/// value outside the closed set `{true, 1, false, 0}` (case-insensitive),
+/// naming the key; result stays false so the `fn` signature does not
+/// change.
 fn flag(stack: &ConfigStack, key: &str) -> bool {
-    stack.get(key).is_some_and(|raw| {
-        let raw = raw.trim();
-        raw.eq_ignore_ascii_case("true") || raw == "1"
-    })
+    let Some(raw) = stack.get(key) else {
+        return false;
+    };
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("true") || trimmed == "1" {
+        return true;
+    }
+    if trimmed.eq_ignore_ascii_case("false") || trimmed == "0" || trimmed.is_empty() {
+        return false;
+    }
+    tracing::warn!(
+        key,
+        raw = %trimmed,
+        "config flag `{key}` has an unrecognised boolean value; expected true/1/false/0. Treating as false."
+    );
+    false
 }
 
 // SPEC-7.1.114: comma or whitespace separated
