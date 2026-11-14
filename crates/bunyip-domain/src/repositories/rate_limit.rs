@@ -47,8 +47,14 @@ impl RateLimitRepository {
         threshold_ratio: f64,
         limit: i64,
     ) -> Result<Vec<RateLimit>, AppError> {
+        // BUNYIP-1046: an action with no preset used to return an empty
+        // vector, indistinguishable from "no rows near the limit". Fail
+        // loudly naming the unknown action so an admin page misconfigured
+        // to query a non-existent action surfaces the bug.
         let Some(cfg) = RateLimitConfig::by_action(action) else {
-            return Ok(Vec::new());
+            return Err(AppError::internal(format!(
+                "list_approaching: unknown rate-limit action `{action}`; expected one defined in RateLimitConfig"
+            )));
         };
         let effective = RateLimitConfigRepository::effective(pool, &cfg).await?;
         let ratio = threshold_ratio.clamp(0.1, 1.0);

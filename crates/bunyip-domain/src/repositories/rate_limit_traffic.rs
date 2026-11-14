@@ -150,8 +150,23 @@ impl RateLimitTrafficRepository {
 /// `duration_trunc` is the chrono-native way to do this and matches a SQL
 /// `date_trunc('minute', ...)` approach without the extra round trip.
 fn truncate_bucket(now: DateTime<Utc>) -> DateTime<Utc> {
-    now.duration_trunc(Duration::seconds(BUCKET_WIDTH_SECS))
-        .unwrap_or(now)
+    // BUNYIP-1046: the bucket key must always fall on the 15-minute grid,
+    // because callers key rows on it. A `duration_trunc` failure used to
+    // degrade to the raw `now`, so every bucket for that call would miss
+    // the grid with no attribution. Log the failure at warn before
+    // falling back; the fallback itself stays so the write path still
+    // completes rather than tripping the whole admin-traffic sample.
+    match now.duration_trunc(Duration::seconds(BUCKET_WIDTH_SECS)) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!(
+                now = %now,
+                error = %e,
+                "truncate_bucket: duration_trunc failed; falling back to the raw timestamp"
+            );
+            now
+        }
+    }
 }
 
 fn sha256(key: &str) -> [u8; 32] {
