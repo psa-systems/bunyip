@@ -112,10 +112,16 @@ impl InfisicalClient {
         {
             return None;
         }
-        let http = reqwest::Client::builder()
-            .timeout(HTTP_TIMEOUT)
-            .build()
-            .ok()?;
+        // BUNYIP-1047: an http client build failure is not "not configured"
+        // (callers read `None` as missing settings), so log the cause at warn
+        // so operators can tell the two apart.
+        let http = match reqwest::Client::builder().timeout(HTTP_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "infisical: reqwest client build failed; treating as unconfigured");
+                return None;
+            }
+        };
         let secret_path = if settings.secret_path.is_empty() {
             "/".to_string()
         } else {
@@ -138,7 +144,7 @@ impl InfisicalClient {
     }
 
     /// The base secret-read URL (query params added separately). Uses the
-    /// long-stable v3 "raw" endpoint, confirmed on infisical.a8n.systems
+    /// long-stable v3 "raw" endpoint, confirmed on the deployed instance
     /// (unauthenticated it returns 401, so the route exists; a fetch 404 means the
     /// key is not at the queried project/env/path). A v4 form
     /// (`GET {address}/api/v4/secrets/{name}?projectId=...`) exists for
@@ -257,7 +263,12 @@ impl InfisicalClient {
             // The status IS the reported failure; an unreadable body only costs
             // the extra detail line, so it degrades to empty rather than
             // masking the error with a different one.
-            let text = updated.text().await.unwrap_or_default();
+            // BUNYIP-1047: still log the body-read failure at warn so an
+            // operator can tell "status without body" from "body not shown".
+            let text = updated.text().await.unwrap_or_else(|e| {
+                tracing::warn!(error = %e, secret = %name, status, "infisical: unreadable PUT error body");
+                String::new()
+            });
             return Err(InfisicalError::Status {
                 secret: name.to_string(),
                 status,
@@ -277,7 +288,11 @@ impl InfisicalClient {
             return Ok(());
         }
         let status = created.status().as_u16();
-        let text = created.text().await.unwrap_or_default();
+        // BUNYIP-1047: log body-read failure (see sibling site above).
+        let text = created.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, secret = %name, status, "infisical: unreadable POST error body");
+            String::new()
+        });
         Err(InfisicalError::Status {
             secret: name.to_string(),
             status,
@@ -306,7 +321,11 @@ impl InfisicalClient {
             return Ok(());
         }
         let status = resp.status().as_u16();
-        let text = resp.text().await.unwrap_or_default();
+        // BUNYIP-1047: log body-read failure (see sibling site above).
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, secret = %name, status, "infisical: unreadable DELETE error body");
+            String::new()
+        });
         Err(InfisicalError::Status {
             secret: name.to_string(),
             status,
