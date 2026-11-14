@@ -324,9 +324,17 @@ fn membership_status(user: &User, pricing: &PricingResponse) -> Markup {
 
 // SPEC-12.54.20: date format
 fn fmt_ts(ts: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-        .map(|d| d.format("%B %-d, %Y").to_string())
-        .unwrap_or_default()
+    // BUNYIP-1057: an unparseable timestamp used to render as an empty
+    // string with no trace; a visible `"—"` plus a warn log surfaces the
+    // bad value so neither the operator nor the viewer sees a silent
+    // missing date.
+    match chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0) {
+        Some(d) => d.format("%B %-d, %Y").to_string(),
+        None => {
+            tracing::warn!(ts, "fmt_ts: invalid unix timestamp; rendering placeholder");
+            "unknown date".to_string()
+        }
+    }
 }
 // SPEC-12.54.20: date format
 fn fmt_date_iso(iso: &str) -> String {
@@ -2323,14 +2331,20 @@ pub async fn settings_delete(
 
 // SPEC-12.57.4: QR for the authenticator setup
 fn qr_svg(uri: &str) -> String {
-    qrcode::QrCode::new(uri.as_bytes())
-        .map(|code| {
-            code.render::<qrcode::render::svg::Color>()
-                .min_dimensions(200, 200)
-                .quiet_zone(false)
-                .build()
-        })
-        .unwrap_or_default()
+    // BUNYIP-1057: a QR encode failure used to render as an empty string
+    // with no trace, so the setup card showed a blank panel. Log the
+    // cause; the caller still handles the empty string gracefully.
+    match qrcode::QrCode::new(uri.as_bytes()) {
+        Ok(code) => code
+            .render::<qrcode::render::svg::Color>()
+            .min_dimensions(200, 200)
+            .quiet_zone(false)
+            .build(),
+        Err(e) => {
+            tracing::warn!(error = ?e, "qr_svg: encode failed; rendering an empty panel");
+            String::new()
+        }
+    }
 }
 
 // SPEC-12.57.6: shared by enrollment and regeneration
@@ -2693,13 +2707,23 @@ pub async fn twofa_setup_confirm_post(
                     "/settings/2fa/setup/confirm",
                     "Verify & Enable",
                 ),
-                Err(_) => html! {
-                    div class="mx-auto max-w-lg space-y-6" {
-                        h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) }
-                        (error_box(&err_msg))
-                        a href="/settings/2fa/setup" class=(button_class("default", "default", "")) { "Start again" }
+                Err(e2) => {
+                    // BUNYIP-1057: the resume_2fa_setup failure used to be
+                    // dropped by `Err(_)`. Log the cause so a chronic
+                    // backend issue shows up alongside the original
+                    // setup failure.
+                    tracing::warn!(
+                        error = ?e2,
+                        "2fa_setup_confirm: resume_2fa_setup failed after the confirm error",
+                    );
+                    html! {
+                        div class="mx-auto max-w-lg space-y-6" {
+                            h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) }
+                            (error_box(&err_msg))
+                            a href="/settings/2fa/setup" class=(button_class("default", "default", "")) { "Start again" }
+                        }
                     }
-                },
+                }
             }
         }
     };
