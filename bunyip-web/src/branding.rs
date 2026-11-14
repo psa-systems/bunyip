@@ -283,7 +283,11 @@ pub async fn fetch_asset(api: &Api, kind: &str) -> Result<reqwest::Response, Api
 /// `../` in it would otherwise walk out of `/v1/branding/assets/` and address
 /// another endpoint entirely, so the parameter is matched against this fixed
 /// list before any request is made. It mirrors `is_servable_asset_kind` in
-/// bunyip-domain; bunyip-web is a standalone binary and shares no crate with it.
+/// bunyip-domain. BUNYIP-1053: bunyip-web does depend on bunyip-domain (see
+/// Cargo.toml) and re-exports some of its types via api/types.rs; the "no
+/// shared crate" phrasing the previous comment used was wrong. The two
+/// enumerations are kept in sync by hand: the list here must be a subset of
+/// (or equal to) the upstream check.
 pub const BRAND_ASSET_KINDS: &[&str] = &[
     "mark",
     "mascot",
