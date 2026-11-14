@@ -40,7 +40,7 @@ false`) and login is spent sparingly:
 | `preflight` | `tests/preflight.setup.ts` | none | aggregates every missing required env var into one error |
 | `setup` | `tests/global.setup.ts` | logs in ONCE | drives the hub login (TOTP-aware), captures the bearer + OP cookies + full browser storageState, and drives the OIDC consent Allow so granted scopes exist. Persists to `.auth/`. Depends on `preflight` |
 | `auth-ui` | `tests/auth/*.spec.ts` | ANONYMOUS | browser `page`, no stored session; each runnable spec does its own `loginViaHub`. Its logout assertion runs in a fresh context, so it never invalidates the shared session. The ONLY project that spends the login rate limit, so login-bearing flows are combined and the rest are `test.fixme`. Depends on `preflight` |
-| `account-ui` | `tests/{account,billing}/*.spec.ts` | ALREADY AUTHENTICATED | browser `page` loaded with the storageState `setup` saved. Do NOT call `loginViaHub` here. Use `page.request` for API calls (it carries the session cookies). Depends on `setup` |
+| `account-ui` | `tests/{account,billing,memberships}/*.spec.ts` | ALREADY AUTHENTICATED | browser `page` loaded with the storageState `setup` saved. Do NOT call `loginViaHub` here. Use `page.request` for API calls (it carries the session cookies). Depends on `setup` |
 | `api` | `tests/oidc/*.spec.ts` | request context | the `test`/`oidcTest` fixtures from `lib/fixtures.ts` (bearer, or replayed OP cookies). No browser. Uses the OP host. Depends on `setup` |
 
 **storageState reuse + the 5/min rationale.** `setup` logs in once and saves the
