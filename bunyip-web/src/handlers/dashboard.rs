@@ -325,9 +325,9 @@ fn membership_status(user: &User, pricing: &PricingResponse) -> Markup {
 // SPEC-12.54.20: date format
 fn fmt_ts(ts: i64) -> String {
     // BUNYIP-1057: an unparseable timestamp used to render as an empty
-    // string with no trace; a visible `"—"` plus a warn log surfaces the
-    // bad value so neither the operator nor the viewer sees a silent
-    // missing date.
+    // string with no trace; a visible `"unknown date"` plus a warn log
+    // surfaces the bad value so neither the operator nor the viewer
+    // sees a silent missing date.
     match chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0) {
         Some(d) => d.format("%B %-d, %Y").to_string(),
         None => {

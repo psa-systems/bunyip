@@ -267,7 +267,7 @@ mod tests {
             (Instant::now(), MxLookupOutcome::NoMx),
         );
 
-        resolver.cache_put("new.example".to_string(), MxLookupOutcome::Unknown);
+        resolver.cache_put("new.example".to_string(), MxLookupOutcome::HasMx);
 
         let guard = resolver.cache.read();
         assert!(
