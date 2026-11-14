@@ -531,10 +531,21 @@ impl AuthService {
             Some(hash) => match TokenRepository::find_login_device(&self.pool, user.id, hash).await
             {
                 Ok(Some(_)) => false, // already a known device
-                Ok(None) => TokenRepository::count_login_devices(&self.pool, user.id)
-                    .await
-                    .map(|n| n > 0)
-                    .unwrap_or(false),
+                Ok(None) => match TokenRepository::count_login_devices(&self.pool, user.id).await {
+                    Ok(n) => n > 0,
+                    Err(e) => {
+                        // BUNYIP-1047: previously `.unwrap_or(false)` silently
+                        // ate the DB error, so the new-device signal did not
+                        // flag. Log at warn (sibling Err arm on
+                        // `find_login_device` already does).
+                        tracing::warn!(
+                            user_id = %user.id,
+                            error = %e,
+                            "Login device count failed; not flagging on device"
+                        );
+                        false
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(user_id = %user.id, error = %e, "Login device lookup failed; not flagging on device");
                     false
@@ -1429,21 +1440,30 @@ impl AuthService {
         )
         .await?;
 
-        // Log the request (don't reveal if email exists)
-        tracing::info!(email = %email, "Magic link requested");
+        // BUNYIP-1047 / BUNYIP-265: sibling auth paths log user id only.
+        // Look up once, log user_id when known, and omit the raw email in both
+        // the structured log line and the audit metadata for the unknown-email
+        // branch.
+        let known_user = UserRepository::find_by_email(&self.pool, &email)
+            .await
+            .ok()
+            .flatten();
+
+        match &known_user {
+            Some(user) => tracing::info!(user_id = %user.id, "Magic link requested"),
+            None => tracing::info!("Magic link requested for an unknown email"),
+        }
 
         // Audit log
-        let audit_log =
-            if let Ok(Some(user)) = UserRepository::find_by_email(&self.pool, &email).await {
-                CreateAuditLog::new(AuditAction::MagicLinkRequested)
-                    .with_actor(user.id, &user.email, &user.role)
-                    .with_ip(ip)
-                    .with_metadata(serde_json::json!({ "email_known": true }))
-            } else {
-                CreateAuditLog::new(AuditAction::MagicLinkRequested)
-                    .with_ip(ip)
-                    .with_metadata(serde_json::json!({ "email_known": false, "email": email }))
-            };
+        let audit_log = match &known_user {
+            Some(user) => CreateAuditLog::new(AuditAction::MagicLinkRequested)
+                .with_actor(user.id, &user.email, &user.role)
+                .with_ip(ip)
+                .with_metadata(serde_json::json!({ "email_known": true })),
+            None => CreateAuditLog::new(AuditAction::MagicLinkRequested)
+                .with_ip(ip)
+                .with_metadata(serde_json::json!({ "email_known": false })),
+        };
         // Non-critical - don't fail the request if audit logging fails
         if let Err(e) = AuditLogRepository::create(&self.pool, audit_log).await {
             tracing::error!(error = %e, "Failed to create audit log for magic link request");
@@ -1743,9 +1763,21 @@ impl AuthService {
         // surface at exactly one per user, eliminates the "three reset
         // emails in my inbox, which one works?" confusion, and matches
         // the common UX where the latest link is the only working one.
-        let cleared = TokenRepository::revoke_pending_password_reset_tokens(&self.pool, user.id)
-            .await
-            .unwrap_or(0);
+        // BUNYIP-1047: `.unwrap_or(0)` used to swallow a DB error here with no
+        // trace, leaving prior reset tokens live (the ones we claim to
+        // invalidate) while the new one was still issued. Log the failure at
+        // warn so an operator can see when the invariant does not hold.
+        let cleared = match TokenRepository::revoke_pending_password_reset_tokens(&self.pool, user.id).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    user_id = %user.id,
+                    error = %e,
+                    "password reset: revoke_pending_password_reset_tokens failed; prior tokens may still be live"
+                );
+                0
+            }
+        };
         if cleared > 0 {
             tracing::info!(
                 user_id = %user.id,
@@ -2672,16 +2704,14 @@ impl AuthService {
     /// Helper to create auth tokens.
     ///
     /// `refresh_expires_at` carries an existing session's absolute deadline
-    /// across a refresh rotation. On a fresh login it is `None` and the
-    /// deadline is computed from the role's absolute TTL. On refresh the caller
-    /// passes the rotated-out token's `expires_at`: for admins the deadline is
-    /// the STRICTER of that existing value and a fresh admin TTL, so the
-    /// 12-hour ceiling is not reset every refresh (a true absolute cap) and a
-    /// deadline that was somehow issued under a looser policy (e.g. a 30-day
-    /// subscriber window that escaped role-change revocation) can only ever be
-    /// tightened, never extended, once the account is an admin. For subscribers
-    /// the deadline is recomputed (rolling 30-day window, the historical
-    /// behavior) so subscriber sessions are unchanged (BUNYIP-137).
+    /// across a refresh rotation. When the caller passes `Some`, that absolute
+    /// deadline is used verbatim (BUNYIP-381: the deadline is chosen at login
+    /// from `remember` via `refresh_absolute_ttl` and does not drift across
+    /// rotation). A mint with no carried deadline (magic-link completion, 2FA
+    /// or approval completion, invite acceptance) defaults to the 1-day
+    /// non-remember cap. Role no longer branches the choice; the historical
+    /// 12-hour admin ceiling and rolling 30-day subscriber window from the
+    /// first BUNYIP-137 iteration no longer apply here.
     // SPEC-8.7.2
     async fn create_tokens(
         &self,
