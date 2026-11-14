@@ -280,12 +280,28 @@ pub async fn register(
 /// empty token (harmless while the bot guard is off; when on, the user just
 /// reloads for a fresh one).
 pub async fn register_challenge(api: &Api) -> Option<String> {
-    let r = api.get("/auth/register-challenge", None).await.ok()?;
-    ok_data(&r)
-        .ok()?
-        .get("token")
-        .and_then(|t| t.as_str())
-        .map(str::to_string)
+    // BUNYIP-1053: fetch failures and body-shape failures used to be dropped
+    // silently by `.ok()?`. Best-effort stays (the register form still
+    // embeds an empty token and the bot guard, when on, nudges a reload),
+    // but a warn log names the cause so a persistent fetch failure is not
+    // invisible.
+    let r = match api.get("/auth/register-challenge", None).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(status = e.status, "register_challenge: upstream fetch failed; form will embed an empty token");
+            return None;
+        }
+    };
+    match ok_data(&r) {
+        Ok(data) => data
+            .get("token")
+            .and_then(|t| t.as_str())
+            .map(str::to_string),
+        Err(e) => {
+            tracing::warn!(status = e.status, "register_challenge: upstream body shape unexpected; form will embed an empty token");
+            None
+        }
+    }
 }
 
 // SPEC-11.15.11
