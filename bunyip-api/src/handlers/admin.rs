@@ -1589,11 +1589,25 @@ pub async fn list_seed_templates(
     req: HttpRequest,
     _admin: AdminUser,
 ) -> Result<HttpResponse, AppError> {
+    // A malformed embedded template is skipped rather than 500-ing the list
+    // (a test asserts every one parses, so this never drops one in practice).
+    // BUNYIP-1052: the previous `filter_map(.ok())` swallowed the parse
+    // error entirely, so a bad template would silently vanish. Log at
+    // error with the template name before the skip; the list stays
+    // partial so a broken template does not take the picker offline.
     let templates: Vec<SeedTemplateInfo> = crate::seed::SEED_TEMPLATES
         .iter()
-        // A malformed embedded template is skipped rather than 500-ing the list
-        // (a test asserts every one parses, so this never drops one in practice).
-        .filter_map(|t| crate::seed::parse(t.json).ok().map(|f| (t, f)))
+        .filter_map(|t| match crate::seed::parse(t.json) {
+            Ok(f) => Some((t, f)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    template = %t.name,
+                    "list_seed_templates: embedded template failed to parse; skipped"
+                );
+                None
+            }
+        })
         .map(|(t, f)| SeedTemplateInfo {
             name: t.name,
             description: t.description,
