@@ -18,13 +18,19 @@ pub fn format_stripe_amount(unit_amount: Option<i64>, currency: &str) -> String 
     match unit_amount {
         None => "--".to_string(),
         Some(cents) => {
-            let whole = cents / 100;
-            let frac = (cents % 100).abs();
+            // BUNYIP-1053: compute magnitude and sign separately so values
+            // whose absolute magnitude is <100 (e.g. -5) keep their sign;
+            // the previous `cents / 100` was 0 for -5 and the formatter
+            // emitted "$0.05" instead of "-$0.05".
+            let sign = if cents < 0 { "-" } else { "" };
+            let magnitude = cents.unsigned_abs();
+            let whole = magnitude / 100;
+            let frac = magnitude % 100;
             match currency.to_ascii_lowercase().as_str() {
-                "usd" => format!("${whole}.{frac:02}"),
-                "eur" => format!("€{whole}.{frac:02}"),
-                "gbp" => format!("£{whole}.{frac:02}"),
-                _ => format!("{whole}.{frac:02} {}", currency.to_uppercase()),
+                "usd" => format!("{sign}${whole}.{frac:02}"),
+                "eur" => format!("{sign}€{whole}.{frac:02}"),
+                "gbp" => format!("{sign}£{whole}.{frac:02}"),
+                _ => format!("{sign}{whole}.{frac:02} {}", currency.to_uppercase()),
             }
         }
     }
