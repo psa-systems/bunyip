@@ -366,7 +366,11 @@ pub async fn ip_unban(
             "/admin/ip-bans?toast_ok=Ban%20lifted%20for%20{}",
             urlenc(&f.ip)
         ),
-        Err(_) => "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(error = ?e, ip = %f.ip, "unban_ip failed");
+            "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string()
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
