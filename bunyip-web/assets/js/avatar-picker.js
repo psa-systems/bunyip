@@ -54,7 +54,7 @@ if(removeBtn)syncRemove(removeBtn.getAttribute('data-has-avatar')==='1');
 if(changeBtn&&input)changeBtn.addEventListener('click',function(){input.click();});
 // SPEC-11.39.11, SPEC-11.39.12
 function handleFile(file){setErr('');if(!file)return;
-if(file.size>maxBytes){setErr('That image is '+fmtSize(file.size)+'. The limit is 2 MB.');return;}
+if(file.size>maxBytes){setErr('That image is '+fmtSize(file.size)+'. The limit is '+fmtSize(maxBytes)+'.');return;}
 var slice=file.slice(0,16);var read=slice.arrayBuffer?slice.arrayBuffer():new Response(slice).arrayBuffer();
 Promise.resolve(read).then(function(buf){var mime=sniff(buf);
 if(!mime||!ALLOWED[mime]){setErr('That file is not a PNG, JPEG, WebP, or GIF image.');return;}

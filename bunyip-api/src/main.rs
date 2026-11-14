@@ -87,7 +87,14 @@ async fn main() -> anyhow::Result<()> {
     // Load a local .env if present (dev convenience; no-op in containers that
     // inject real environment). Must run before Config::from_env().
     // SPEC-9.3.1: local .env loaded before any config read
-    let _ = dotenvy::dotenv();
+    // BUNYIP-1052: a missing `.env` is the normal production case and stays
+    // silent; a parse error is a real operator mistake and now reaches stderr
+    // (tracing is not initialized yet, hence eprintln).
+    if let Err(e) = dotenvy::dotenv() {
+        if !e.not_found() {
+            eprintln!(".env load failed: {e}");
+        }
+    }
 
     // Initialize tracing/logging BEFORE the config loads (BUNYIP-537), so a
     // configuration failure is reported as operator-facing log lines instead of
@@ -637,8 +644,22 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let email_enabled = email_config.enabled;
+    // BUNYIP-1052: in production, a failed EmailService::new used to fall
+    // through to new_dev() and ship a silent-mail server; the sibling
+    // `email_config.enabled` check above is already fatal on disabled
+    // email, so a construction failure must be fatal for the same reason.
+    // Dev / staging keep the new_dev() fallback so a local box without a
+    // real SMTP still boots.
+    let is_prod = config.is_production();
     // SPEC-9.7.1: suppression list guards every send path
     let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
+        if is_prod {
+            fatal_config_error(
+                "SMTP_HOST",
+                &format!("EmailService could not be constructed in a production deployment: {e}"),
+                "Review the SMTP credentials on the admin Email page or in the api environment.",
+            );
+        }
         tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
         EmailService::new_dev()
     }));
@@ -1054,8 +1075,17 @@ async fn main() -> anyhow::Result<()> {
                 match provider.load_client(mokosh_client_id).await? {
                     Some(client) => {
                         info!("Mokosh backup adapter enabled (BUNYIP-356)");
+                        // BUNYIP-1052: the previous `reqwest::Client::new()`
+                        // had no timeout, so a hung mokosh-apps endpoint
+                        // tied up the request slot indefinitely. Match the
+                        // 5-second bound the back-channel client already
+                        // uses (SPEC-9.7.17).
+                        let mokosh_http = reqwest::Client::builder()
+                            .timeout(std::time::Duration::from_secs(5))
+                            .build()
+                            .expect("mokosh backup client builds with default roots");
                         Arc::new(MokoshHttpBackupAdapter::new(
-                            reqwest::Client::new(),
+                            mokosh_http,
                             url,
                             provider.clone(),
                             client,

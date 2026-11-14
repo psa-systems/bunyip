@@ -933,12 +933,17 @@ fn stripe_permission_results(r: &Result<StripePermissionReport, ApiError>) -> Ma
         .iter()
         .filter(|c| c.when == "checkout")
         .collect();
-    let any_missing = tested.iter().any(|c| c.status == "missing");
+    // BUNYIP-1056: the banner used to flip to "all present" when every
+    // tested check was anything other than the string "missing", so a
+    // `key_rejected` or an `unknown` ("Could not verify") still rendered
+    // success. Count anything not explicitly "ok" as non-passing so the
+    // success box only appears when the key is actually verified.
+    let any_not_ok = tested.iter().any(|c| c.status != "ok");
 
     html! {
         div class="space-y-5" {
-            @if any_missing {
-                (error_box("A permission below is missing. Add Write access for it to the restricted key in the Stripe dashboard, paste the key into Secret key above, and save."))
+            @if any_not_ok {
+                (error_box("A permission below is missing or could not be verified. Add Write access for it to the restricted key in the Stripe dashboard, paste the key into Secret key above, and save."))
             } @else {
                 (success_box("The tested permissions are all present on the saved key."))
             }
@@ -1200,7 +1205,9 @@ pub async fn stripe_product_edit(
         }
     };
     let description = f.description.trim();
-    if description.len() > 500 {
+    // BUNYIP-1056: previously `description.len()` (bytes) while the message
+    // says "characters". Count characters so the bound matches the copy.
+    if description.chars().count() > 500 {
         return redirect_cookies(
             &format!(
                 "/admin/stripe?toast_err={}",
@@ -1574,7 +1581,9 @@ pub struct StripeCatalogForm {
 /// (distinct from omitting the field, which keeps it). This is what makes
 /// "(none)" actually unmap a tier instead of silently keeping the old price. The
 /// publish switch is authoritative (absent checkbox = off), so it is always sent.
-pub(super) fn catalog_save_body(f: &StripeCatalogForm) -> serde_json::Value {
+pub(super) fn catalog_save_body(
+    f: &StripeCatalogForm,
+) -> Result<serde_json::Value, (&'static str, String)> {
     let mut body = serde_json::Map::new();
     for (k, v) in [
         ("free_price_id", &f.free_price_id),
@@ -1582,10 +1591,14 @@ pub(super) fn catalog_save_body(f: &StripeCatalogForm) -> serde_json::Value {
         ("standard_price_id", &f.standard_price_id),
     ] {
         let t = v.trim();
-        // Over-long junk is dropped (kept, not set); "" and valid ids pass.
-        if t.len() <= 255 {
-            body.insert(k.into(), json!(t));
+        // BUNYIP-1056: an id longer than 255 bytes used to be silently
+        // dropped from the body, so a typo left the stored mapping
+        // unchanged with no indication the save did nothing. Reject
+        // with the field name and a clear message.
+        if t.len() > 255 {
+            return Err((k, "price id must be 255 characters or fewer".to_string()));
         }
+        body.insert(k.into(), json!(t));
     }
     body.insert("pricing_enabled".into(), json!(f.pricing_enabled.is_some()));
     // BUNYIP-527: per-tier visibility, always sent (absent checkbox = hidden).
@@ -1601,7 +1614,7 @@ pub(super) fn catalog_save_body(f: &StripeCatalogForm) -> serde_json::Value {
         "standard_visible".into(),
         json!(f.standard_visible.is_some()),
     );
-    serde_json::Value::Object(body)
+    Ok(serde_json::Value::Object(body))
 }
 
 // SPEC-12.33.2: catalog save
@@ -1617,20 +1630,31 @@ pub async fn stripe_catalog_save(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let target =
-        match admin_api::update_tier_config(&st.api, c.forward.as_deref(), catalog_save_body(&f))
-            .await
-        {
-            Ok(()) => "/admin/tier-settings?toast_ok=Catalog%20mapping%20saved".to_string(),
-            // BUNYIP-616: carry the submitted values on the failure redirect so the
-            // re-rendered form shows what the admin submitted, not the stored row,
-            // and the only thing left to change is the value that was rejected.
-            Err(e) => format!(
+    // BUNYIP-1056: client-side validation (over-long price id) now rejects
+    // at this layer with the submitted values preserved; the upstream
+    // save is only called when every field is within the length bound.
+    let body = match catalog_save_body(&f) {
+        Ok(b) => b,
+        Err((_field, msg)) => {
+            let target = format!(
                 "/admin/tier-settings?toast_err={}&{}",
-                urlenc(&e.user_message_with_reference()),
+                urlenc(&msg),
                 catalog_form_query(&f),
-            ),
-        };
+            );
+            return redirect_cookies(&target, &c.set_cookies);
+        }
+    };
+    let target = match admin_api::update_tier_config(&st.api, c.forward.as_deref(), body).await {
+        Ok(()) => "/admin/tier-settings?toast_ok=Catalog%20mapping%20saved".to_string(),
+        // BUNYIP-616: carry the submitted values on the failure redirect so the
+        // re-rendered form shows what the admin submitted, not the stored row,
+        // and the only thing left to change is the value that was rejected.
+        Err(e) => format!(
+            "/admin/tier-settings?toast_err={}&{}",
+            urlenc(&e.user_message_with_reference()),
+            catalog_form_query(&f),
+        ),
+    };
     redirect_cookies(&target, &c.set_cookies)
 }
 
@@ -1710,7 +1734,10 @@ pub async fn stripe_save(
         body["cancel_url"] = json!(cancel_url);
     }
     match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
-        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Ok(()) => redirect_cookies(
+            "/admin/stripe?toast_ok=Stripe%20settings%20saved",
+            &c.set_cookies,
+        ),
         // BUNYIP-516: the api's request id rides along so a save that still
         // reports a generic line can be found in the api log.
         Err(e) => render_error(&e.user_message_with_reference()),

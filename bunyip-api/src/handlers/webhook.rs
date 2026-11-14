@@ -422,21 +422,41 @@ async fn handle_checkout_completed(
 
     tracing::info!(user_id = %user_id, "Checkout completed, membership activated");
 
-    // Send welcome email and audit log
-    if let Ok(Some(user)) = UserRepository::find_by_id(pool, user_id).await {
-        if let Err(e) = email.send_welcome(&user.email, amount).await {
-            tracing::error!(error = %e, user_id = %user_id, "Failed to send welcome email");
-        }
+    // Send welcome email and audit log.
+    // BUNYIP-1052: the previous `if let Ok(Some(user)) = ...` collapsed
+    // three distinct cases (DB error, absent user, present user) into
+    // "silently skip". A lookup error now logs; an absent user also logs
+    // since reaching checkout without the row the handler owns is
+    // inconsistent.
+    match UserRepository::find_by_id(pool, user_id).await {
+        Ok(Some(user)) => {
+            if let Err(e) = email.send_welcome(&user.email, amount).await {
+                tracing::error!(error = %e, user_id = %user_id, "Failed to send welcome email");
+            }
 
-        let audit_log = CreateAuditLog::new(AuditAction::MembershipCreated)
-            .with_actor(user.id, &user.email, &user.role)
-            .with_resource("user", user.id)
-            .with_metadata(serde_json::json!({
-                "source": "stripe_checkout",
-                "amount": amount,
-            }));
-        if let Err(e) = AuditLogRepository::create(pool, audit_log).await {
-            tracing::error!(error = %e, user_id = %user_id, "Failed to create audit log for checkout");
+            let audit_log = CreateAuditLog::new(AuditAction::MembershipCreated)
+                .with_actor(user.id, &user.email, &user.role)
+                .with_resource("user", user.id)
+                .with_metadata(serde_json::json!({
+                    "source": "stripe_checkout",
+                    "amount": amount,
+                }));
+            if let Err(e) = AuditLogRepository::create(pool, audit_log).await {
+                tracing::error!(error = %e, user_id = %user_id, "Failed to create audit log for checkout");
+            }
+        }
+        Ok(None) => {
+            tracing::warn!(
+                user_id = %user_id,
+                "Checkout completed but user row is missing; welcome email and audit log skipped"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                user_id = %user_id,
+                "Failed to load user after checkout; welcome email and audit log skipped"
+            );
         }
     }
 
@@ -475,17 +495,18 @@ async fn handle_subscription_created(
         .await?
         .ok_or(AppError::not_found("User"))?;
 
-    let price_id = subscription["items"]["data"][0]["price"]["id"]
-        .as_str()
-        .unwrap_or("unknown");
-
-    let product_id = subscription["items"]["data"][0]["price"]["product"]
-        .as_str()
-        .unwrap_or("unknown");
-
-    let amount = subscription["items"]["data"][0]["price"]["unit_amount"]
+    // BUNYIP-1052: parse the three optional fields as Option so a missing
+    // value is written to the audit row as JSON null instead of a
+    // fabricated literal (`"unknown"` / `300`). `resolve_tier_for_product`
+    // still gets a string via `unwrap_or`, which is a sentinel that
+    // matches no tier.
+    let price_id_opt = subscription["items"]["data"][0]["price"]["id"].as_str();
+    let product_id_opt = subscription["items"]["data"][0]["price"]["product"].as_str();
+    let amount_opt: Option<i32> = subscription["items"]["data"][0]["price"]["unit_amount"]
         .as_i64()
-        .unwrap_or(300) as i32;
+        .map(|v| v as i32);
+
+    let product_id = product_id_opt.unwrap_or("unknown");
 
     let user_status = membership_status_for(status);
     let grants_access = user_status.has_access();
@@ -517,14 +538,16 @@ async fn handle_subscription_created(
         "Subscription created"
     );
 
+    // BUNYIP-1052: missing fields serialize as JSON null, not as a
+    // fabricated "unknown"/300.
     let audit_log = CreateAuditLog::new(AuditAction::MembershipCreated)
         .with_actor(user.id, &user.email, &user.role)
         .with_resource("user", user.id)
         .with_metadata(serde_json::json!({
             "stripe_subscription_id": stripe_subscription_id,
-            "stripe_price_id": price_id,
-            "stripe_product_id": product_id,
-            "amount": amount,
+            "stripe_price_id": price_id_opt,
+            "stripe_product_id": product_id_opt,
+            "amount": amount_opt,
             "resolved_tier": resolved_tier.as_ref().map(|t| t.as_str()),
         }));
     if let Err(e) = AuditLogRepository::create(pool, audit_log).await {
@@ -559,13 +582,11 @@ async fn handle_subscription_updated(
         .as_bool()
         .unwrap_or(false);
 
-    let price_id = subscription["items"]["data"][0]["price"]["id"]
-        .as_str()
-        .unwrap_or("unknown");
-
-    let product_id = subscription["items"]["data"][0]["price"]["product"]
-        .as_str()
-        .unwrap_or("unknown");
+    // BUNYIP-1052: same Option extraction as handle_subscription_created,
+    // so the audit row records a missing price/product as JSON null.
+    let price_id_opt = subscription["items"]["data"][0]["price"]["id"].as_str();
+    let product_id_opt = subscription["items"]["data"][0]["price"]["product"].as_str();
+    let product_id = product_id_opt.unwrap_or("unknown");
 
     // Find user by customer ID
     if let Some(user) = UserRepository::find_by_stripe_customer_id(pool, customer_id).await? {
@@ -607,6 +628,7 @@ async fn handle_subscription_updated(
         // `status == "active"` check (see `subscription_updated_audit_action`).
         let action = subscription_updated_audit_action(cancel_at_period_end, grants_access);
 
+        // BUNYIP-1052: missing fields serialize as JSON null.
         let audit_log = CreateAuditLog::new(action)
             .with_actor(user.id, &user.email, &user.role)
             .with_resource("user", user.id)
@@ -614,8 +636,8 @@ async fn handle_subscription_updated(
                 "stripe_subscription_id": stripe_subscription_id,
                 "status": status,
                 "cancel_at_period_end": cancel_at_period_end,
-                "stripe_price_id": price_id,
-                "stripe_product_id": product_id,
+                "stripe_price_id": price_id_opt,
+                "stripe_product_id": product_id_opt,
                 "resolved_tier": resolved_tier.as_ref().map(|t| t.as_str()),
             }));
         if let Err(e) = AuditLogRepository::create(pool, audit_log).await {

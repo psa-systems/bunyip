@@ -82,7 +82,14 @@ pub fn humanize_retry_after(secs: u64) -> String {
     } else if secs < 60 {
         "in about a minute".to_string()
     } else {
-        format!("in about {} minutes", secs.div_ceil(60))
+        // BUNYIP-1053: 60..119 seconds used to render "in about 1 minutes".
+        // Singularize the one-minute bucket; everything else stays plural.
+        let minutes = secs.div_ceil(60);
+        if minutes == 1 {
+            "in about a minute".to_string()
+        } else {
+            format!("in about {minutes} minutes")
+        }
     }
 }
 
@@ -408,10 +415,6 @@ fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 }
 
 // SPEC-11.13.5
-/// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
-/// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
-/// the HTTP-date form is not produced by the API, so only the delta-seconds
-/// form is honoured here.
 /// BUNYIP-516: bunyip-api's `X-Request-Id` for this response. The dunite
 /// request-id middleware sets it from the same `RequestId` the api's own log
 /// lines record, so quoting this value locates the failure in the api log. The
@@ -427,6 +430,10 @@ fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<Strin
 }
 
 // SPEC-11.13.5
+/// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
+/// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
+/// the HTTP-date form is not produced by the API, so only the delta-seconds
+/// form is honoured here.
 fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
@@ -588,8 +595,10 @@ mod tests {
 
     #[test]
     fn humanize_sixty_seconds_crosses_into_minutes() {
-        // 60s is the first value past the "a minute" boundary; ceil(60/60) = 1.
-        assert_eq!(humanize_retry_after(60), "in about 1 minutes");
+        // BUNYIP-1053: 60s bucket renders as singular "a minute", not the
+        // ungrammatical "1 minutes" the previous `format!("in about {n} minutes")`
+        // produced. ceil(60/60) = 1, so the one-minute branch fires.
+        assert_eq!(humanize_retry_after(60), "in about a minute");
     }
 
     #[test]

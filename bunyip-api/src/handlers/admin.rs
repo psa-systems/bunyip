@@ -134,7 +134,7 @@ pub async fn list_users(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let status_filter = query
         .status
         .as_ref()
@@ -791,7 +791,7 @@ pub async fn list_memberships(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     // BUNYIP-995: compute the offset in i64 and saturate, mirroring
     // BUNYIP-946 F14, so a page value large enough to overflow an i32
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
@@ -1432,7 +1432,7 @@ pub async fn list_audit_logs(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(50).min(100);
+    let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
 
     // BUNYIP-936: severity is validated against the enum before touching
     // the repository, so a stored row with an unknown value never masks a
@@ -1589,11 +1589,25 @@ pub async fn list_seed_templates(
     req: HttpRequest,
     _admin: AdminUser,
 ) -> Result<HttpResponse, AppError> {
+    // A malformed embedded template is skipped rather than 500-ing the list
+    // (a test asserts every one parses, so this never drops one in practice).
+    // BUNYIP-1052: the previous `filter_map(.ok())` swallowed the parse
+    // error entirely, so a bad template would silently vanish. Log at
+    // error with the template name before the skip; the list stays
+    // partial so a broken template does not take the picker offline.
     let templates: Vec<SeedTemplateInfo> = crate::seed::SEED_TEMPLATES
         .iter()
-        // A malformed embedded template is skipped rather than 500-ing the list
-        // (a test asserts every one parses, so this never drops one in practice).
-        .filter_map(|t| crate::seed::parse(t.json).ok().map(|f| (t, f)))
+        .filter_map(|t| match crate::seed::parse(t.json) {
+            Ok(f) => Some((t, f)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    template = %t.name,
+                    "list_seed_templates: embedded template failed to parse; skipped"
+                );
+                None
+            }
+        })
         .map(|(t, f)| SeedTemplateInfo {
             name: t.name,
             description: t.description,
@@ -1884,7 +1898,7 @@ pub async fn list_notifications(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-946 F17: honour page/per_page on the unread branch too. The
     // previous shape fetched every unread row, truncated to the first
@@ -2118,7 +2132,7 @@ pub async fn list_admin_invites(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-939: validate `status` against the closed set so an unknown
     // value is a per-field 400 rather than silently returning the full
@@ -3067,6 +3081,17 @@ pub async fn update_email_config(
     use crate::repositories::EmailConfigRepository;
 
     let request_id = get_request_id(&req);
+
+    // BUNYIP-1052: refuse a production attempt to disable email BEFORE the
+    // repository write, not after; the previous order let the disabled
+    // row land on disk even when the request was about to be rejected.
+    // (The post-write check still runs so a stack-resolved flip is caught
+    // too.) Narrow pre-check: only an explicit `enabled: false` in the
+    // body triggers the refusal here, mirroring the semantics of
+    // `refuse_disabled_email_in_production`.
+    if let Some(false) = body.enabled {
+        refuse_disabled_email_in_production(config.is_production(), false)?;
+    }
 
     // Validate the enumerated / bounded fields when provided.
     if let Some(tls) = body.smtp_tls.as_deref().filter(|s| !s.is_empty()) {

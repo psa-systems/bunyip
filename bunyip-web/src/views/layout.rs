@@ -54,18 +54,14 @@ fn document_title(page_title: &str, branding: &Branding) -> String {
 }
 
 // SPEC-11.22.8: committed image is a fallback, never an override
-/// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
-/// is empty, so an unbranded deployment emits none of them rather than
-/// advertising a placeholder. There is deliberately no `og:url`: `document()`
-/// has no request context, and a wrong canonical URL is worse than none.
-///
-/// `twitter:card` is `summary_large_image` only when an image URL is set;
-/// without one the large-image card renders as a blank rectangle.
 /// The image the sharing card carries. The record's uploaded image wins;
 /// without one the committed product image stands in, so a deployment that has
 /// branded nothing still shares as a card with a picture rather than as a bare
 /// link. `None` only when neither exists, which is what keeps the tags omitted
 /// rather than pointing at nothing.
+///
+/// BUNYIP-1054: this doc used to be fused under `social_meta`'s block; moved
+/// to its real item.
 fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
     if branding.og_image_url.is_empty() {
         fallback.map(str::to_string)
@@ -76,6 +72,13 @@ fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
 
 // SPEC-11.22.2, SPEC-11.22.3, SPEC-11.22.4, SPEC-11.22.5, SPEC-11.22.6, SPEC-11.22.7, SPEC-11.22.9:
 // every tag omitted when its source is empty
+/// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
+/// is empty, so an unbranded deployment emits none of them rather than
+/// advertising a placeholder. There is deliberately no `og:url`: `document()`
+/// has no request context, and a wrong canonical URL is worse than none.
+///
+/// `twitter:card` is `summary_large_image` only when an image URL is set;
+/// without one the large-image card renders as a blank rectangle.
 fn social_meta(page_title: &str, branding: &Branding) -> Markup {
     let share_image = share_image(branding, default_share_image());
     let has_any = !branding.brand_name.is_empty()

@@ -133,8 +133,22 @@ impl AppState {
 // SPEC-11.2.9, SPEC-11.2.10, SPEC-2.3.3: relays each Set-Cookie to the browser as its own header.
 fn attach_cookies(resp: &mut Response, cookies: &[String]) {
     for c in cookies {
-        if let Ok(v) = HeaderValue::from_str(c) {
-            resp.headers_mut().append(SET_COOKIE, v);
+        match HeaderValue::from_str(c) {
+            Ok(v) => {
+                resp.headers_mut().append(SET_COOKIE, v);
+            }
+            // BUNYIP-1052/1053: a Set-Cookie that fails HeaderValue
+            // validation used to vanish silently, so an invalid cookie
+            // left no trace. Log the cookie's name (first segment up to
+            // `=`) at warn; the value is deliberately not logged.
+            Err(e) => {
+                let name = c.split('=').next().unwrap_or("").trim();
+                tracing::warn!(
+                    error = %e,
+                    cookie_name = %name,
+                    "attach_cookies: dropped a Set-Cookie with an invalid header value",
+                );
+            }
         }
     }
 }
@@ -176,10 +190,22 @@ pub fn status_cookies(status: StatusCode, cookies: &[String]) -> Response {
 /// 303 redirect (so a POST -> GET after form submit).
 pub fn redirect(path: &str) -> Response {
     let mut resp = StatusCode::SEE_OTHER.into_response();
-    resp.headers_mut().insert(
-        LOCATION,
-        HeaderValue::from_str(path).unwrap_or(HeaderValue::from_static("/")),
-    );
+    let value = match HeaderValue::from_str(path) {
+        Ok(v) => v,
+        // BUNYIP-1053: a path that fails HeaderValue validation used to
+        // fall back to `/` silently, so an invalid target left no trace.
+        // Log the attempted path at warn; the response still redirects
+        // to `/` so the browser is not left on a broken redirect.
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path,
+                "redirect: path is not a valid Location header; falling back to `/`",
+            );
+            HeaderValue::from_static("/")
+        }
+    };
+    resp.headers_mut().insert(LOCATION, value);
     resp
 }
 

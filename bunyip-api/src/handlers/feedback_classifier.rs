@@ -6,24 +6,27 @@
 //! signals are pure functions of the submitted row, so the classifier
 //! itself holds no state and no DB round-trip.
 //!
-//! The four signals, originally BUNYIP-932/934 (first three) and BUNYIP-925
-//! (fourth):
+//! The four signals, in the order `classify_feedback_spam` runs them
+//! (originally BUNYIP-932/934 added the first, third and fourth; BUNYIP-925
+//! inserted the second):
 //!
 //! 1. **Sender-domain mimicry.** The sender's email domain contains the
 //!    recipient's registrable word AND differs (e.g. `search-psa.systems`
 //!    vs `psa.systems`). Catches the illustrating case from 2026-10-15.
-//! 2. **URL + >=3 tags.** The submission names a URL in the body AND sets
-//!    three or more tags. SEO fan-out submissions set every tag because
-//!    they do not know which category applies.
-//! 3. **Hosting-range IP.** The source IP's resolved ASN name matches a
-//!    short list of hosting providers (Interserver, OVH, Linode,
-//!    DigitalOcean, AWS, Hetzner). A hosting IP alone does not block
-//!    (CGNAT edge cases exist) but adds to the score.
-//! 4. **Sender domain has no MX records.** The submitter's email domain is
+//! 2. **Sender domain has no MX records.** The submitter's email domain is
 //!    NXDOMAIN or holds no MX records at all. A real inbound mail server
 //!    rejects any address on such a domain; marketing floods use them to
 //!    avoid bounce handling. A resolver error or timeout leaves the row
 //!    un-flagged by this signal so a DNS outage never drops real feedback.
+//! 3. **URL + >=3 tags.** The submission names a URL in the body AND sets
+//!    three or more tags. SEO fan-out submissions set every tag because
+//!    they do not know which category applies.
+//! 4. **Hosting-range IP.** The source IP's resolved ASN name matches a
+//!    substring of a hosting provider's ASN name. `HOSTING_ASN_PATTERNS`
+//!    below has the full list (Interserver, OVH, Linode, DigitalOcean,
+//!    Amazon / AWS, Hetzner, Google Cloud, Microsoft Azure, Oracle Cloud,
+//!    Vultr, Contabo; 12 entries total). A hosting IP alone does not block
+//!    (CGNAT edge cases exist) but adds to the score.
 //!
 //! The classifier short-circuits on the FIRST firing signal and does not
 //! enumerate every match: a submission that trips all four is still one

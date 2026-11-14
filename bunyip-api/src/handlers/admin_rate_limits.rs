@@ -158,6 +158,15 @@ pub async fn list_rate_limits(
                 None => cfg,
             }
         }) else {
+            // BUNYIP-1052: a row whose action has no preset used to drop
+            // out silently. Log at warn so an unexpected action in
+            // rate_limits is visible instead of just missing from the
+            // list.
+            tracing::warn!(
+                action = %row.action,
+                key = %row.key,
+                "admin_rate_limits: active-throttle row has no preset for its action; skipped"
+            );
             continue;
         };
         let Some(retry_after) = row.active_retry_after(&cfg, now) else {
@@ -242,7 +251,7 @@ pub struct ResetRateLimitRequest {
 ///
 /// AdminUser-guarded. Records an [`AuditAction::AdminRateLimitReset`] carrying
 /// the acting admin, the reset action + key, and the resolved target user where
-/// the key maps to one. Returns 204.
+/// the key maps to one. Returns a 200 with the success envelope (no data).
 pub async fn reset_rate_limit(
     req: HttpRequest,
     admin: AdminUser,
@@ -667,7 +676,8 @@ pub struct OverviewQuery {
     /// `1h`, `6h`, or `1d`. Default `1h`.
     #[serde(default)]
     pub window: Option<String>,
-    /// Default 0.7, clamped to [0.1, 1.0].
+    /// Default 0.7. An out-of-range value in `[0.1, 1.0]` is rejected with
+    /// a 400; the clamp downstream is a belt-and-braces guard.
     #[serde(default)]
     pub threshold: Option<f64>,
     /// Default 5, clamped to [1, 100].

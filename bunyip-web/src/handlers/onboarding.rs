@@ -74,8 +74,14 @@ pub async fn onboarding_get(
     if !needs_onboarding(&st, &user).await {
         let mut cookies = c.set_cookies.clone();
         if let Some(cookie) = c.forward.as_deref() {
-            if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
-                cookies.extend(rotated);
+            // BUNYIP-1057: refresh failure is non-fatal here but used to
+            // vanish silently; log it so a chronic refresh outage shows up.
+            match auth_api::refresh(&st.api, Some(cookie)).await {
+                Ok(rotated) => cookies.extend(rotated),
+                Err(e) => tracing::warn!(
+                    error = ?e,
+                    "onboarding: post-visit refresh failed; keeping original cookies",
+                ),
             }
         }
         return redirect_cookies("/dashboard", &cookies);
@@ -155,8 +161,14 @@ pub async fn onboarding_post(
         Ok(()) => {
             let mut cookies = c.set_cookies.clone();
             if let Some(cookie) = c.forward.as_deref() {
-                if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
-                    cookies.extend(rotated);
+                // BUNYIP-1057: same refresh-is-non-fatal case; log the
+                // failure instead of dropping it silently.
+                match auth_api::refresh(&st.api, Some(cookie)).await {
+                    Ok(rotated) => cookies.extend(rotated),
+                    Err(e) => tracing::warn!(
+                        error = ?e,
+                        "onboarding: post-save refresh failed; keeping original cookies",
+                    ),
                 }
             }
             redirect_cookies("/onboarding", &cookies)
