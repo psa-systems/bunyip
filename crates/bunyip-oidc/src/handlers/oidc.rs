@@ -1353,13 +1353,26 @@ pub async fn revoke(
         .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))?;
     authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
-    // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
+    // BUNYIP-1043: RFC 7009 §2.1 requires 200 "whether or not the token
+    // was successfully revoked", but §2.2.1 explicitly allows 503 (and
+    // `error = temporarily_unavailable`) when the AS cannot perform the
+    // revocation. Previously the write failure answered 200, which the
+    // client reads as success while the token stayed live. Now a real
+    // revocation-side error (DB write, etc.) answers 503; §2.2's "token
+    // not found" path still falls through to 200 because `do_revoke`
+    // returns Ok(()) in that case.
     if let Err(e) = do_revoke(provider, client.client_id, &form.token).await {
         tracing::warn!(
             error = %e,
             client_id = %client.client_id,
-            "revoke: token revocation failed; still returning 200 per RFC 7009 §2.2"
+            "revoke: token revocation failed; answering 503 per RFC 7009 §2.2.1"
         );
+        return Ok(HttpResponse::ServiceUnavailable()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(serde_json::json!({
+                "error": "temporarily_unavailable",
+                "error_description": "token revocation failed; please retry",
+            })));
     }
     Ok(HttpResponse::Ok().finish())
 }
@@ -1547,7 +1560,15 @@ pub async fn logout(
             }
             Ok(_) => {} // no clients with backchannel URIs
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to revoke sessions for backchannel logout");
+                // BUNYIP-1043: previously logged and still redirected with
+                // cleared cookies, so the user was told they are signed out
+                // while the OP session and refresh families stayed live on
+                // the server. Surface the failure as a 500 so the UI stays
+                // honest (CSRF / state are already checked upstream).
+                tracing::error!(error = %e, user_id = %user_id, "logout: revoke_sessions_for_backchannel failed; refusing to clear cookies");
+                return Err(AppError::internal(format!(
+                    "Failed to revoke sessions on logout: {e}"
+                )));
             }
         }
     }
