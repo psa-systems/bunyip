@@ -84,7 +84,13 @@
   // SPEC-11.37.1, SPEC-11.37.2, SPEC-11.37.4, SPEC-11.37.5, SPEC-11.37.6: error toasts never auto-dismiss
   window.bunyipToast = function (msg, kind) {
     var root = document.getElementById('bunyip-toast-root');
-    if (!root) return;
+    if (!root) {
+      // BUNYIP-1054: a missing root used to swallow the message silently,
+      // so an error toast could vanish without a trace. Log it so the
+      // text at least reaches the browser console.
+      console.warn('bunyipToast: #bunyip-toast-root missing, lost message:', msg, kind);
+      return;
+    }
     while (root.children.length >= 5) root.removeChild(root.firstChild);
     var palette = TOAST_PALETTE[kind || 'info'] || TOAST_PALETTE.info;
     var pill = document.createElement('div');
@@ -249,17 +255,31 @@
           if (window.bunyipToast) window.bunyipToast('Copied to clipboard', 'success');
           unlockSavedGate(btn);
         },
-        function () {
+        function (err) {
+          // BUNYIP-1054: the Clipboard API rejection used to surface only
+          // as a toast; log the cause so the actual error is inspectable.
+          console.warn('copy: Clipboard API rejected', err);
           restore('Copy failed', 1500);
           if (window.bunyipToast) window.bunyipToast('Copy failed', 'error');
         }
       );
     } else {
-      window.getSelection().selectAllChildren(btn.previousElementSibling);
-      restore('Press Ctrl+C', 3000);
-      // The user is going to Ctrl+C what we just selected; count it as saved
-      // for the gate below (BUNYIP-801).
-      unlockSavedGate(btn);
+      // BUNYIP-1054: without a Clipboard API, the fallback used to call
+      // `selectAllChildren(btn.previousElementSibling)` even if that
+      // sibling was null, which throws inside the click handler. Guard
+      // the null case and show a visible fallback.
+      var sel = btn.previousElementSibling;
+      if (!sel) {
+        console.warn('copy: no previousElementSibling to select');
+        if (window.bunyipToast) window.bunyipToast('Copy failed', 'error');
+        restore('Copy failed', 1500);
+      } else {
+        window.getSelection().selectAllChildren(sel);
+        restore('Press Ctrl+C', 3000);
+        // The user is going to Ctrl+C what we just selected; count it as
+        // saved for the gate below (BUNYIP-801).
+        unlockSavedGate(btn);
+      }
     }
   });
 
@@ -290,6 +310,9 @@
       if (window.bunyipToast) window.bunyipToast('File downloaded', 'success');
       unlockSavedGate(btn);
     } catch (err) {
+      // BUNYIP-1054: the download failure used to surface only as a toast;
+      // log the cause so the actual error is inspectable.
+      console.warn('download-as-file: build failed', err);
       if (window.bunyipToast) window.bunyipToast('Download failed', 'error');
     }
   });
