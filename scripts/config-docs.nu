@@ -75,12 +75,20 @@ def parse-inventory [text: string] {
         error make { msg: $"($INVENTORY_FILE): parsed 0 EnvVarSpec declarations; the inventory shape changed" }
     }
     $rows | each {|r|
+        # BUNYIP-1041: the regex above admits exactly the four classes the
+        # match arms list, so the `_ => "defaulted"` catch-all was dead code
+        # that would silently reclassify any future class as `defaulted`.
+        # Match is now exhaustive; an unexpected value fails loudly naming
+        # the variable and the unrecognised class so a new EnvVarSpec variant
+        # cannot sneak into the docs as the wrong class.
         let cls = match $r.fn {
             "required" => "required",
             "required_in_production" => "required_in_production",
             "gating" => "gating",
             "defaulted" => "defaulted",
-            _ => "defaulted",
+            other => (
+                error make { msg: $"config-docs: unknown EnvVarSpec class `($other)` for ($r.name); extend the regex and this match together" }
+            ),
         }
         { name: $r.name, class: $cls }
     }

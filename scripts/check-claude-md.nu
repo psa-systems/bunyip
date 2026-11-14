@@ -155,7 +155,12 @@ def check [root: string]: nothing -> list<string> {
     }
 
     for row in (unfenced-lines $text) {
-        let n = ($row.line | str length)
+        # BUNYIP-1041: `str length` counts bytes, not grapheme characters,
+        # so a line with multi-byte glyphs was rejected early on byte count
+        # while the cap, the error text and the spec all say CHARACTERS.
+        let n = ($row.line | str length --grapheme-clusters)
+        # 0.112.2 note: `--grapheme-clusters` counts user-visible characters,
+        # matching the length a human editor shows for the line.
         if $n > $MAX_LINE_CHARS {
             $problems = ($problems | append $"CLAUDE.md:($row.index): ($n) characters exceeds the ($MAX_LINE_CHARS)-character line cap")
         }
