@@ -22,7 +22,13 @@
     btn.dataset.pwToggleInit = '1';
     var targetId = btn.getAttribute('data-pw-toggle');
     var input = document.getElementById(targetId);
-    if (!input) return;
+    if (!input) {
+      // BUNYIP-1054: a data-pw-toggle whose target id does not exist used
+      // to skip silently, so a typo on the id produced a dead toggle with
+      // no console trace.
+      console.warn('password-field: data-pw-toggle target id not found', targetId);
+      return;
+    }
     btn.addEventListener('click', function () {
       var revealed = input.type === 'text';
       input.type = revealed ? 'password' : 'text';
