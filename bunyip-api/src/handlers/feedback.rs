@@ -741,9 +741,21 @@ pub async fn submit_feedback(
             }
 
             let admin_url = format!("{base_url}/admin/feedback?id={feedback_id}");
-            let admin_emails = UserRepository::find_admin_emails(&pool_bg)
-                .await
-                .unwrap_or_default();
+            // BUNYIP-1052: a database failure here used to vanish into an
+            // empty recipient list, so the admin-notification email went
+            // to nobody with no trace. Log the cause before falling back
+            // to the empty list so the operator sees the degraded state.
+            let admin_emails = match UserRepository::find_admin_emails(&pool_bg).await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        feedback_id = %feedback_id,
+                        "Failed to load admin recipients for feedback notification",
+                    );
+                    Vec::new()
+                }
+            };
             if let Err(e) = email_svc_bg
                 .send_admin_feedback_notification(&admin_url, &admin_emails)
                 .await
