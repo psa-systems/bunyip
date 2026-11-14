@@ -158,6 +158,15 @@ pub async fn list_rate_limits(
                 None => cfg,
             }
         }) else {
+            // BUNYIP-1052: a row whose action has no preset used to drop
+            // out silently. Log at warn so an unexpected action in
+            // rate_limits is visible instead of just missing from the
+            // list.
+            tracing::warn!(
+                action = %row.action,
+                key = %row.key,
+                "admin_rate_limits: active-throttle row has no preset for its action; skipped"
+            );
             continue;
         };
         let Some(retry_after) = row.active_retry_after(&cfg, now) else {

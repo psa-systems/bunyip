@@ -134,7 +134,7 @@ pub async fn list_users(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let status_filter = query
         .status
         .as_ref()
@@ -791,7 +791,7 @@ pub async fn list_memberships(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     // BUNYIP-995: compute the offset in i64 and saturate, mirroring
     // BUNYIP-946 F14, so a page value large enough to overflow an i32
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
@@ -1432,7 +1432,7 @@ pub async fn list_audit_logs(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(50).min(100);
+    let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
 
     // BUNYIP-936: severity is validated against the enum before touching
     // the repository, so a stored row with an unknown value never masks a
@@ -1884,7 +1884,7 @@ pub async fn list_notifications(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-946 F17: honour page/per_page on the unread branch too. The
     // previous shape fetched every unread row, truncated to the first
@@ -2118,7 +2118,7 @@ pub async fn list_admin_invites(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-939: validate `status` against the closed set so an unknown
     // value is a per-field 400 rather than silently returning the full
