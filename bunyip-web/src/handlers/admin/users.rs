@@ -801,8 +801,19 @@ pub async fn user_role(
     // Only the known roles are accepted; reject anything else (the UI uses a
     // dropdown, so an arbitrary role string can only come from a crafted
     // request) before forwarding it to the API (BUNYIP-114).
+    // BUNYIP-1056: a role outside the dropdown's two values used to redirect
+    // to /admin/users with no indication the request was rejected. Log
+    // the attempt and surface it as a toast so the operator sees it.
     if !matches!(f.role.as_str(), "admin" | "subscriber") {
-        return redirect_cookies("/admin/users", &c.set_cookies);
+        tracing::warn!(
+            user_id = %id,
+            role = %f.role,
+            "admin update user role: rejected unknown role"
+        );
+        return redirect_cookies(
+            "/admin/users?toast_err=Unknown%20role%20value",
+            &c.set_cookies,
+        );
     }
     let target =
         match admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await {
@@ -1136,7 +1147,6 @@ pub async fn user_set_tier(
 }
 
 // SPEC-12.35.8: actions card, each prompt names the user
-/// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
 /// BUNYIP-430: the per-user "Actions" card. Every state-changing control here
 /// routes through the one shared confirmation dialog - the `data-confirm`
 /// attribute, handled once in `assets/js/app.js`, which prompts on submit and
@@ -1144,6 +1154,9 @@ pub async fn user_set_tier(
 /// and the specific user (by email), so an admin who opened the wrong row is
 /// told who they are about to affect before anything happens. Extracted from
 /// `user_detail` so the confirmations are unit-testable.
+///
+/// BUNYIP-1056: the `GET /admin/users/{id}` doc line previously sat here;
+/// moved to `user_detail` below (the actual route handler).
 pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
     let who = target.email.as_str();
     html! {
@@ -1230,6 +1243,8 @@ pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
 }
 
 // SPEC-12.35.1, SPEC-12.35.5, SPEC-12.35.6, SPEC-12.35.7: user detail page
+/// GET /admin/users/{id} - single-user detail page with all admin actions in
+/// one place.
 pub async fn user_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
