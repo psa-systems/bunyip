@@ -38,8 +38,10 @@ web-kit = { path = "../crates/web-kit" }
 # out of parity with the real one.
 bunyip-domain = { path = "../crates/bunyip-domain" }
 
-# BUNYIP-385: render the embedded top-level docs (src/docs/*.md) to HTML for the
-# public /docs pages. `html` feature only (no CLI / default features).
+# BUNYIP-385: render the embedded docs (bunyip-web/src/skin/docs/*.md) to HTML
+# for the public /docs pages. `html` feature only (no CLI / default features).
+# BUNYIP-1058: the previous comment named `src/docs/*.md`; the files live at
+# `src/skin/docs/*.md`.
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # SPEC-14.4.3: rustls only; gzip so the api can compress
@@ -96,4 +98,6 @@ dead_code = "allow"
 [lints.clippy]
 too_many_arguments = "allow"
 
-# Release/dev profiles are defined once at the workspace root (../Cargo.toml).
+# BUNYIP-1058: the workspace defines no [profile.*] tables at the root, so
+# cargo uses its built-in defaults for `dev` and `release`. (This comment
+# used to claim the workspace defined them.)
