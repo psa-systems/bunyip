@@ -849,7 +849,13 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
             Ok(Some(f)) => f,
             Ok(None) => break,
             // SPEC-11.33.10
-            Err(e) => return Err(format!("Could not read form: {e}")),
+            // BUNYIP-1054: log the multer error at warn so the cause
+            // reaches the operator; surface a fixed message that does
+            // not leak library text to the visitor.
+            Err(e) => {
+                tracing::warn!(error = %e, "feedback form: multipart next_field failed");
+                return Err("Could not read the submitted form.".to_string());
+            }
         };
         let field_name = field.name().map(str::to_string).unwrap_or_default();
         let file_name = field.file_name().map(str::to_string);
@@ -857,7 +863,16 @@ async fn read_feedback_multipart(multipart: &mut Multipart) -> Result<FeedbackIn
         let bytes = match field.bytes().await {
             Ok(b) => b,
             // SPEC-11.33.10
-            Err(e) => return Err(format!("Could not read field: {e}")),
+            // BUNYIP-1054: same pattern; log the real cause, show a
+            // fixed message.
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    field = %field_name,
+                    "feedback form: multipart field body read failed",
+                );
+                return Err("Could not read a form field.".to_string());
+            }
         };
         if let Some(filename) = file_name {
             // File field. The browser sends a zero-length part for
@@ -947,12 +962,14 @@ pub async fn feedback_post(
             } else {
                 Some(input.page_path.clone())
             };
-            // BUNYIP-115: web-edge validation. Bound each field to its DB
-            // VARCHAR cap (feedback.name VARCHAR(100), subject VARCHAR(200),
-            // email VARCHAR(255), message TEXT/64k cap below) and shape-check
-            // email. Over-length input used to hit the API and surface as a
-            // raw 500 when Postgres rejected the over-length value; malformed
-            // email round-tripped without complaint.
+            // BUNYIP-115: web-edge validation. Bound each field to the limits
+            // the HTML form carries (feedback.name max 100, subject max 200,
+            // email max 254, message capped at MESSAGE_MAX below) and
+            // shape-check email. Over-length input used to hit the API and
+            // surface as a raw 500 when Postgres rejected the over-length
+            // value; malformed email round-tripped without complaint.
+            // BUNYIP-1054: the previous comment misstated the limits as
+            // DB VARCHARs (255 / 64k) when the form uses 254 / 16000.
             use crate::handlers::validate;
             const MESSAGE_MAX: usize = 16_000;
             // SPEC-11.33.11, SPEC-11.33.12: first failing field only
@@ -979,7 +996,10 @@ pub async fn feedback_post(
             if err.is_none() {
                 if input.message.trim().is_empty() {
                     err = Some(("message", "Please enter a message.".to_string()));
-                } else if input.message.len() > MESSAGE_MAX {
+                } else if input.message.chars().count() > MESSAGE_MAX {
+                    // BUNYIP-1054: previously `.len()` (bytes); the error
+                    // says "characters" and the `maxlength` attribute on
+                    // the textarea is character-based too.
                     err = Some((
                         "message",
                         format!("Message must be {MESSAGE_MAX} characters or fewer"),
