@@ -3068,6 +3068,17 @@ pub async fn update_email_config(
 
     let request_id = get_request_id(&req);
 
+    // BUNYIP-1052: refuse a production attempt to disable email BEFORE the
+    // repository write, not after; the previous order let the disabled
+    // row land on disk even when the request was about to be rejected.
+    // (The post-write check still runs so a stack-resolved flip is caught
+    // too.) Narrow pre-check: only an explicit `enabled: false` in the
+    // body triggers the refusal here, mirroring the semantics of
+    // `refuse_disabled_email_in_production`.
+    if let Some(false) = body.enabled {
+        refuse_disabled_email_in_production(config.is_production(), false)?;
+    }
+
     // Validate the enumerated / bounded fields when provided.
     if let Some(tls) = body.smtp_tls.as_deref().filter(|s| !s.is_empty()) {
         if tls != "implicit" && tls != "starttls" {
