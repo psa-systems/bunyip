@@ -1294,9 +1294,17 @@ impl AuthService {
             refresh_expires_at = refresh_expires_at.min(session.expires_at);
         }
 
-        // Revoke old token
+        // Revoke old token.
+        //
+        // BUNYIP-1047: the earlier unguarded `UPDATE ... WHERE id` ignored
+        // whether the row was already revoked, so two concurrent refreshes
+        // for the same token could both fall through and mint new tokens
+        // (single-use broken). Consume via the guarded UPDATE and refuse the
+        // refresh when the token was already revoked by a racing caller.
         // SPEC-8.7.9
-        TokenRepository::revoke_refresh_token(&self.pool, stored_token.id).await?;
+        if !TokenRepository::consume_refresh_token(&self.pool, stored_token.id).await? {
+            return Err(AppError::InvalidCredentials);
+        }
 
         // Create new tokens, carrying the rotated-out token's absolute deadline
         // (capped at the op-session's absolute ceiling if one was linked, so
@@ -2500,6 +2508,14 @@ impl AuthService {
         device_info: Option<String>,
         ip_address: Option<IpAddr>,
     ) -> Result<AcceptInviteResult, AppError> {
+        // BUNYIP-1047 / BUNYIP-726: this path both mints a session and may
+        // create an account (the None arm below), so it must run the country
+        // gate before the single-use invite token is claimed, same as every
+        // other session-minting method. The in-crate test
+        // `every_session_minting_method_runs_the_country_gate` documents the
+        // invariant.
+        self.enforce_country_gate(ip_address)?;
+
         let ip = ip_address.map(IpNetwork::from);
         let token_hash = self.jwt.hash_token(&token);
 
