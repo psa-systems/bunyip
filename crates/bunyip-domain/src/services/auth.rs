@@ -2128,11 +2128,17 @@ impl AuthService {
             return Err(AppError::conflict("Email already registered"));
         }
 
+        // Confirm the request FIRST so the guarded single-use claim arbitrates
+        // the race: two concurrent confirmations can no longer both fall
+        // through to `update_email` and race on the unique email index.
+        // BUNYIP-1046: refuse the confirmation when the row was already
+        // confirmed by a concurrent request.
+        if !TokenRepository::confirm_email_change_request(&mut *tx, request.id).await? {
+            return Err(AppError::InvalidCredentials);
+        }
+
         // Update email (set verified since they proved ownership)
         UserRepository::update_email(&mut *tx, user.id, &new_email, true).await?;
-
-        // Confirm the request
-        TokenRepository::confirm_email_change_request(&mut *tx, request.id).await?;
 
         // Revoke all refresh tokens (force re-login)
         TokenRepository::revoke_all_user_refresh_tokens(&mut *tx, user.id).await?;
