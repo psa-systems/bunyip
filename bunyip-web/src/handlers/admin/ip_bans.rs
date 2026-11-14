@@ -337,7 +337,16 @@ pub async fn ip_ban_create(
     .await
     {
         Ok(()) => format!("/admin/ip-bans?toast_ok=Banned%20{}", urlenc(f.ip.trim())),
-        Err(e) => format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: log the identifying value (IP); toast unchanged.
+            tracing::warn!(
+                ip = %f.ip.trim(),
+                status = e.status,
+                code = %e.code,
+                "admin/ip-bans: create_ip_ban failed"
+            );
+            format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
