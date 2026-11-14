@@ -107,7 +107,7 @@ jobs:
 
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
         with:
           # Shallow is fine for cargo: no step here walks git log. The
           # migration-immutability guard moved to the `guards` job below,
@@ -145,7 +145,7 @@ jobs:
         # on one runner; this one keeps COLD runs on a different runner
         # fast too. Bump this key literal in step with the version
         # literal in the next step.
-        uses: https://github.com/actions/cache@v4
+        uses: https://github.com/actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-binstall
           key: cargo-binstall-1.14.3-linux-musl
@@ -324,7 +324,7 @@ jobs:
 
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
         with:
           # Full history so the migration-immutability gate can diff against the
           # merge-base with origin/main (BUNYIP-293).
@@ -604,7 +604,7 @@ jobs:
         shell: nu {0}
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false

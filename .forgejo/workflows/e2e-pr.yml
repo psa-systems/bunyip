@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
 
       - name: Classify diff
         # Always `code` outside a pull_request event (PC-134, BUNYIP-1040).
@@ -110,7 +110,7 @@ jobs:
 
     steps:
       - name: Clone the repository
-        uses: https://code.forgejo.org/actions/checkout@v5
+        uses: https://code.forgejo.org/actions/checkout@v7
 
       # See e2e.yml for why npm/npx run through corepack and node scripts use
       # the concrete node24 binary. --ignore-scripts: no dependency lifecycle
