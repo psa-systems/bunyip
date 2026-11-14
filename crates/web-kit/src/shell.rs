@@ -24,16 +24,49 @@ static SSE_API_ORIGIN: OnceLock<String> = OnceLock::new();
 // SPEC-13.6.3, SPEC-13.6.4: first install wins; trailing slashes stripped
 /// Install the public-facing API origin used by the SSE subscriber. Called once
 /// from `main` before any request is served. Idempotent.
+///
+/// BUNYIP-1042: a rejected second install (different value) used to be
+/// silently dropped. The second value is still ignored (first install wins),
+/// but it now logs at warn naming the attempted second value so an operator
+/// can see the misuse.
 pub fn install_sse_api_origin(origin: impl Into<String>) {
-    let _ = SSE_API_ORIGIN.set(origin.into().trim_end_matches('/').to_string());
+    let value = origin.into().trim_end_matches('/').to_string();
+    if let Err(rejected) = SSE_API_ORIGIN.set(value) {
+        tracing::warn!(
+            setter = "install_sse_api_origin",
+            attempted = %rejected,
+            existing = SSE_API_ORIGIN.get().map(String::as_str).unwrap_or(""),
+            "web-kit install OnceLock already set; ignoring the new value (first install wins)"
+        );
+    }
 }
 
 // SPEC-13.6.4: localhost default when nothing was installed
 fn sse_api_origin() -> &'static str {
-    SSE_API_ORIGIN
-        .get()
-        .map(String::as_str)
-        .unwrap_or("http://localhost:4401")
+    SSE_API_ORIGIN.get().map(String::as_str).unwrap_or_else(|| {
+        // BUNYIP-1042: previously fell back to `http://localhost:4401` with
+        // no trace, so a deployment that forgot to install the origin
+        // served markup pointing at localhost. Log once at the first read
+        // (the warn_once gate below) so the misconfiguration is visible;
+        // the fallback stays so the shell still renders.
+        warn_once(
+            &MISSING_SSE_WARNED,
+            "web-kit sse_api_origin: install_sse_api_origin was never called; falling back to http://localhost:4401",
+        );
+        "http://localhost:4401"
+    })
+}
+
+static MISSING_SSE_WARNED: AtomicBool = AtomicBool::new(false);
+static MISSING_ASSET_VERSION_WARNED: AtomicBool = AtomicBool::new(false);
+
+fn warn_once(flag: &AtomicBool, msg: &str) {
+    if flag
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        tracing::warn!("{msg}");
+    }
 }
 
 /// The build-derived cache buster every `/assets/*` reference carries. The
@@ -47,13 +80,29 @@ static ASSET_VERSION_CELL: OnceLock<&'static str> = OnceLock::new();
 // SPEC-13.6.3: first install wins
 /// Install the consumer's build asset version. Called once from `main` before
 /// serving. Idempotent.
+///
+/// BUNYIP-1042: rejected second install is logged, same shape as
+/// `install_sse_api_origin`.
 pub fn install_asset_version(version: &'static str) {
-    let _ = ASSET_VERSION_CELL.set(version);
+    if let Err(rejected) = ASSET_VERSION_CELL.set(version) {
+        tracing::warn!(
+            setter = "install_asset_version",
+            attempted = %rejected,
+            existing = ASSET_VERSION_CELL.get().copied().unwrap_or(""),
+            "web-kit install OnceLock already set; ignoring the new value (first install wins)"
+        );
+    }
 }
 
 // SPEC-13.6.2: dev when nothing was installed
 pub fn asset_version() -> &'static str {
-    ASSET_VERSION_CELL.get().copied().unwrap_or("dev")
+    ASSET_VERSION_CELL.get().copied().unwrap_or_else(|| {
+        warn_once(
+            &MISSING_ASSET_VERSION_WARNED,
+            "web-kit asset_version: install_asset_version was never called; falling back to `dev` (every /assets/* URL will use ?v=dev)",
+        );
+        "dev"
+    })
 }
 
 // SPEC-13.6.1: every /assets reference carries the build version
@@ -70,8 +119,16 @@ static COMMUNITY_ENABLED: OnceLock<bool> = OnceLock::new();
 
 // SPEC-13.6.3: first install wins
 /// Install the community feature flag. Called once from `main`. Idempotent.
+/// BUNYIP-1042: rejected second install is logged.
 pub fn install_community_enabled(enabled: bool) {
-    let _ = COMMUNITY_ENABLED.set(enabled);
+    if let Err(rejected) = COMMUNITY_ENABLED.set(enabled) {
+        tracing::warn!(
+            setter = "install_community_enabled",
+            attempted = rejected,
+            existing = *COMMUNITY_ENABLED.get().unwrap_or(&false),
+            "web-kit install OnceLock already set; ignoring the new value (first install wins)"
+        );
+    }
 }
 
 // SPEC-13.6.5: false until installed
@@ -131,8 +188,16 @@ static DEFAULT_SHARE_IMAGE: OnceLock<Option<String>> = OnceLock::new();
 
 // SPEC-13.6.3: first install wins
 /// Install the fallback share image. Called once from `main`. Idempotent.
+/// BUNYIP-1042: rejected second install is logged.
 pub fn install_default_share_image(url: Option<String>) {
-    let _ = DEFAULT_SHARE_IMAGE.set(url);
+    if let Err(rejected) = DEFAULT_SHARE_IMAGE.set(url) {
+        tracing::warn!(
+            setter = "install_default_share_image",
+            attempted = ?rejected,
+            existing = ?DEFAULT_SHARE_IMAGE.get().and_then(Option::as_deref),
+            "web-kit install OnceLock already set; ignoring the new value (first install wins)"
+        );
+    }
 }
 
 // SPEC-13.6.5: None until installed with a value
