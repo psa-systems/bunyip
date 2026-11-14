@@ -1710,7 +1710,10 @@ pub async fn stripe_save(
         body["cancel_url"] = json!(cancel_url);
     }
     match admin_api::update_stripe_config(&st.api, c.forward.as_deref(), body).await {
-        Ok(()) => redirect_cookies("/admin/stripe", &c.set_cookies),
+        Ok(()) => redirect_cookies(
+            "/admin/stripe?toast_ok=Stripe%20settings%20saved",
+            &c.set_cookies,
+        ),
         // BUNYIP-516: the api's request id rides along so a save that still
         // reports a generic line can be found in the api log.
         Err(e) => render_error(&e.user_message_with_reference()),
