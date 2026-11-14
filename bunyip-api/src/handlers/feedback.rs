@@ -797,7 +797,9 @@ pub async fn list_feedback(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    // BUNYIP-1052: clamp low AND high so a client passing 0 or a negative value
+    // does not reach the repository as LIMIT 0.
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     if let Some(b) = query.bucket.as_deref() {
         match b {
@@ -1221,7 +1223,9 @@ pub async fn list_feedback_archive(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    // BUNYIP-1052: clamp low AND high so a client passing 0 or a negative value
+    // does not reach the repository as LIMIT 0.
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     let (items, total) = FeedbackRepository::list_archived(&pool, page, per_page).await?;
 

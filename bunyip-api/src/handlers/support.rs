@@ -40,7 +40,9 @@ pub async fn list_support_tickets(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    // BUNYIP-1052: clamp low AND high so a client passing 0 or a negative value
+    // does not reach the repository as LIMIT 0.
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     // BUNYIP-995: compute the offset in i64 and saturate, mirroring
     // BUNYIP-946 F14, so a page value large enough to overflow an i32
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
