@@ -87,7 +87,14 @@ async fn main() -> anyhow::Result<()> {
     // Load a local .env if present (dev convenience; no-op in containers that
     // inject real environment). Must run before Config::from_env().
     // SPEC-9.3.1: local .env loaded before any config read
-    let _ = dotenvy::dotenv();
+    // BUNYIP-1052: a missing `.env` is the normal production case and stays
+    // silent; a parse error is a real operator mistake and now reaches stderr
+    // (tracing is not initialized yet, hence eprintln).
+    if let Err(e) = dotenvy::dotenv() {
+        if !e.not_found() {
+            eprintln!(".env load failed: {e}");
+        }
+    }
 
     // Initialize tracing/logging BEFORE the config loads (BUNYIP-537), so a
     // configuration failure is reported as operator-facing log lines instead of
