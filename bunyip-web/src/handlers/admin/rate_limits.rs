@@ -623,7 +623,16 @@ pub async fn rate_limit_reset(
     let target =
         match admin_api::reset_rate_limit(&st.api, c.forward.as_deref(), &f.action, &f.key).await {
             Ok(()) => format!("{base}?toast_ok=Rate%20limit%20reset"),
-            Err(_) => format!("{base}?toast_err=Could%20not%20reset%20rate%20limit"),
+            Err(e) => {
+                // BUNYIP-1055: log the cause so the toast ties to a log line.
+                tracing::warn!(
+                    error = ?e,
+                    action = %f.action,
+                    key = %f.key,
+                    "reset_rate_limit failed"
+                );
+                format!("{base}?toast_err=Could%20not%20reset%20rate%20limit")
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -875,7 +884,7 @@ pub async fn rate_limit_whitelist_add(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let target = match admin_api::add_rate_limit_whitelist(
+    let target: String = match admin_api::add_rate_limit_whitelist(
         &st.api,
         c.forward.as_deref(),
         f.kind.trim(),
@@ -884,10 +893,19 @@ pub async fn rate_limit_whitelist_add(
     )
     .await
     {
-        Ok(()) => "/admin/rate-limits?toast_ok=Added%20to%20whitelist",
-        Err(_) => "/admin/rate-limits?toast_err=Could%20not%20add%20to%20whitelist",
+        Ok(()) => "/admin/rate-limits?toast_ok=Added%20to%20whitelist".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(
+                error = ?e,
+                kind = %f.kind.trim(),
+                value = %f.value.trim(),
+                "rate_limit_whitelist_add failed"
+            );
+            "/admin/rate-limits?toast_err=Could%20not%20add%20to%20whitelist".to_string()
+        }
     };
-    redirect_cookies(target, &c.set_cookies)
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Form body for removing a whitelist entry.
@@ -908,14 +926,18 @@ pub async fn rate_limit_whitelist_remove(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let target =
+    let target: String =
         match admin_api::delete_rate_limit_whitelist(&st.api, c.forward.as_deref(), f.id.trim())
             .await
         {
-            Ok(()) => "/admin/rate-limits?toast_ok=Removed%20from%20whitelist",
-            Err(_) => "/admin/rate-limits?toast_err=Could%20not%20remove%20from%20whitelist",
+            Ok(()) => "/admin/rate-limits?toast_ok=Removed%20from%20whitelist".to_string(),
+            Err(e) => {
+                // BUNYIP-1055: log the cause so the toast ties to a log line.
+                tracing::warn!(error = ?e, id = %f.id.trim(), "rate_limit_whitelist_remove failed");
+                "/admin/rate-limits?toast_err=Could%20not%20remove%20from%20whitelist".to_string()
+            }
         };
-    redirect_cookies(target, &c.set_cookies)
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 #[cfg(test)]

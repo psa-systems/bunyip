@@ -522,10 +522,19 @@ pub async fn feedback_status(
                 from_tab_path(f.from.as_deref()),
                 urlencoding::encode(toast),
             ),
-            Err(_) => format!(
-                "{}?toast_err=Could%20not%20update%20status",
-                from_tab_path(f.from.as_deref()),
-            ),
+            // BUNYIP-1055: log the cause with the feedback id so the toast
+            // is matched to a real log line.
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    feedback_id = %id,
+                    "feedback_status: update failed"
+                );
+                format!(
+                    "{}?toast_err=Could%20not%20update%20status",
+                    from_tab_path(f.from.as_deref()),
+                )
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -553,10 +562,14 @@ pub async fn feedback_mark_spam(
             "{}?toast_ok=Marked%20as%20spam",
             from_tab_path(f.from.as_deref()),
         ),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20mark%20spam",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_mark_spam failed");
+            format!(
+                "{}?toast_err=Could%20not%20mark%20spam",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -578,10 +591,13 @@ pub async fn feedback_unmark_spam(
             "{}?toast_ok=Restored%20from%20spam",
             from_tab_path(f.from.as_deref()),
         ),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20unmark%20spam",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_unmark_spam failed");
+            format!(
+                "{}?toast_err=Could%20not%20unmark%20spam",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -602,10 +618,13 @@ pub async fn feedback_archive_action(
     };
     let target = match admin_api::archive_feedback(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("{}?toast_ok=Archived", from_tab_path(f.from.as_deref()),),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20archive",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_archive failed");
+            format!(
+                "{}?toast_err=Could%20not%20archive",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -625,10 +644,13 @@ pub async fn feedback_delete(
     };
     let target = match admin_api::delete_feedback(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("{}?toast_ok=Deleted", from_tab_path(f.from.as_deref()),),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20delete",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_delete failed");
+            format!(
+                "{}?toast_err=Could%20not%20delete",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
