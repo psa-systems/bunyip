@@ -74,7 +74,7 @@ test runs.
 
 | Var | Req | Purpose |
 | --- | --- | --- |
-| `E2E_BASE_URL` | yes | hub-web apex the browser projects navigate to. No default (staging `https://a8n.systems`, prod `https://psa.systems`) |
+| `E2E_BASE_URL` | yes | hub-web apex the browser projects navigate to. No default; set the per-environment host explicitly (see `docs/self-hosting.md` for the operator-facing staging/prod map) |
 | `E2E_OP_BASE_URL` | rec | OIDC OP + API host (`/oauth2/*`, `/.well-known/*`). Defaults to prepending `api.` to `E2E_BASE_URL`. bunyip serves OP and `/v1` on one host |
 | `E2E_API_BASE_URL` | no | `/v1` JSON API host. Defaults to `E2E_OP_BASE_URL` |
 | `E2E_EMAIL` / `E2E_PASSWORD` | yes | the dedicated E2E account (2FA enabled) |

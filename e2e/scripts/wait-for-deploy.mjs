@@ -161,7 +161,7 @@ function resolveBuildSha(headSha) {
 }
 
 // Required: no domain is hardcoded as a fallback. Inject the per-environment
-// hub host (staging `https://a8n.systems`, prod `https://psa.systems`).
+// hub host (see docs/self-hosting.md for the operator-facing staging/prod map).
 // SPEC-3.37.1
 const hubBaseURL = pick(process.env.E2E_BASE_URL);
 if (!hubBaseURL) {
