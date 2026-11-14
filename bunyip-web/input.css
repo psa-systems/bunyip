@@ -701,3 +701,46 @@
     scrollbar-color: hsl(var(--muted-foreground) / var(--sb-alpha)) transparent;
   }
 }
+
+/* BUNYIP-1079: Safari <= 15.6 (the macOS 12 system WebKit the Let's Chat desktop
+   app embeds) lacks `@property` (needs 16.4+) and `color-mix()` (needs 16.2+),
+   which Tailwind v4 emits for its translate utilities and every opacity-modified
+   color. Two portal components the desktop app shows render broken there: the
+   switch knob never moves (its `translate-x` is backed by an unregistered
+   `@property` custom prop), and opacity-tinted fills paint solid (Tailwind's own
+   fallback, outside its `@supports (color-mix)` guard, is full opacity). These
+   rules degrade those components cleanly; modern browsers render identically. */
+
+/* Switch knob position, @property-free (replaces Tailwind's `translate-x` on the
+   knob, which is why `toggle_switch`/`toggle_switch_field` no longer emit it).
+   Unconditional: the position is identical in every browser and this is now the
+   only positioner. The button variant insets the knob 2px off-state; the field
+   variant already insets it with `left-0.5`, so off-state needs no transform. */
+[data-switch] [data-switch-knob] {
+  transform: translateX(2px);
+}
+[data-switch][aria-checked="true"] [data-switch-knob] {
+  transform: translateX(22px);
+}
+.peer:checked ~ [data-switch-knob] {
+  transform: translateX(22px);
+}
+
+/* Opacity fallbacks, only where `color-mix()` is unsupported, so modern
+   rendering is byte-for-byte untouched. */
+@supports not (color: color-mix(in lab, red, red)) {
+  /* Off-state switch track: `--muted-foreground` is an `H S% L%` token, so an
+     `hsl()` alpha reproduces the 40% tint color-mix would. */
+  [data-switch][aria-checked="false"],
+  .peer:not(:checked) ~ [data-switch-track] {
+    background-color: hsl(var(--muted-foreground) / 0.4);
+  }
+  /* Success badge: `teal-500` resolves through a var chain to a hex, so no
+     static alpha fallback is possible; render it as a teal outline
+     (currentColor border, transparent fill) rather than the solid teal block
+     the full-opacity fallback paints. Skin-agnostic. */
+  [data-badge="success"] {
+    background-color: transparent;
+    border-color: currentColor;
+  }
+}
