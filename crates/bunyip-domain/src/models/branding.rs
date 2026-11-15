@@ -128,15 +128,19 @@ pub const MAX_NEWSLETTER_URL_LEN: usize = 2048;
 /// BUNYIP-560: a full custom-property ramp is a few hundred bytes; 4 KiB is a
 /// paste accident, not a palette.
 pub const MAX_THEME_CSS_LEN: usize = 4096;
-/// `#rgb`, `#rrggbb` or `#rrggbbaa`.
+/// `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` (the four CSS Color Module Level 4
+/// hex forms); the longest is 9 bytes including the `#`.
 pub const MAX_THEME_COLOR_LEN: usize = 9;
 
 // SPEC-7.2.87: hex colour check for the theme-color metas.
-/// BUNYIP-560: is this a CSS hex colour (`#rgb`, `#rrggbb`, `#rrggbbaa`)?
+/// BUNYIP-560: is this a CSS hex colour (`#rgb`, `#rgba`, `#rrggbb`,
+/// `#rrggbbaa`)?
 ///
 /// `theme-color` is exactly a colour, and hex is the one notation every browser
 /// that honours the meta accepts, so the field is restricted to it rather than
-/// to "some string that reaches an attribute".
+/// to "some string that reaches an attribute". BUNYIP-1045: the 4-digit
+/// `#rgba` short-alpha form is deliberately accepted (CSS Color Module Level
+/// 4) alongside the other three.
 fn is_hex_color(value: &str) -> bool {
     let Some(digits) = value.strip_prefix('#') else {
         return false;

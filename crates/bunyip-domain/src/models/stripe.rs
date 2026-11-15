@@ -144,10 +144,7 @@ impl StripeConfigResponse {
                 .cancel_url
                 .clone()
                 .unwrap_or_else(crate::services::stripe::default_cancel_url),
-            trial_period_days: config
-                .trial_period_days
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or_else(crate::services::stripe::trial_period_days_from_env),
+            trial_period_days: resolved_trial_days(config.trial_period_days, "from_provider"),
             updated_at: Some(config.updated_at),
             source: if secret_key.is_some() || webhook_secret.is_some() {
                 provider.as_str().to_string()
@@ -198,10 +195,7 @@ impl StripeConfigResponse {
                 .cancel_url
                 .clone()
                 .unwrap_or_else(crate::services::stripe::default_cancel_url),
-            trial_period_days: config
-                .trial_period_days
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or_else(crate::services::stripe::trial_period_days_from_env),
+            trial_period_days: resolved_trial_days(config.trial_period_days, "from_db"),
             updated_at: Some(config.updated_at),
             source: "database".to_string(),
         })
@@ -230,6 +224,31 @@ impl StripeConfigResponse {
 
     fn default_app_tag() -> String {
         crate::services::stripe::DEFAULT_APP_TAG.to_string()
+    }
+}
+
+// BUNYIP-1045: a stored negative or out-of-u32-range `trial_period_days` used
+// to silently fall back to the environment default. The fallback itself stays
+// so the admin page still renders a sensible value, but the misconfiguration
+// is logged at warn so an operator can see why the displayed days do not
+// match the row.
+fn resolved_trial_days(stored: Option<i32>, context: &'static str) -> u32 {
+    match stored {
+        None => crate::services::stripe::trial_period_days_from_env(),
+        Some(v) => match u32::try_from(v) {
+            Ok(n) => n,
+            Err(e) => {
+                let fallback = crate::services::stripe::trial_period_days_from_env();
+                tracing::warn!(
+                    stored = v,
+                    error = %e,
+                    fallback,
+                    context,
+                    "stripe trial_period_days DB column is out of u32 range; falling back to the environment default"
+                );
+                fallback
+            }
+        },
     }
 }
 
