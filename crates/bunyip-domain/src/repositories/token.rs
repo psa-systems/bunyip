@@ -856,25 +856,31 @@ impl TokenRepository {
         Ok(())
     }
 
-    /// Confirm an email change request
-    // SPEC-7.3.251, SPEC-7.3.252
+    /// Confirm an email change request.
+    ///
+    /// BUNYIP-1046: guarded single-use claim. Returns `true` when this caller
+    /// won the race and transitioned the row from unconfirmed to confirmed;
+    /// `false` when a concurrent confirmation got there first. Callers that
+    /// detect `false` must refuse to apply the change.
+    // SPEC-7.3.251, SPEC-7.3.252, SPEC-7.3.7
     pub async fn confirm_email_change_request<'e, E>(
         executor: E,
         request_id: Uuid,
-    ) -> Result<(), AppError>
+    ) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1
+            UPDATE email_change_requests SET confirmed_at = NOW()
+            WHERE id = $1 AND confirmed_at IS NULL
             "#,
         )
         .bind(request_id)
         .execute(executor)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     /// Count recent email change requests for a user (for rate limiting)
