@@ -659,10 +659,8 @@ impl EmailConfig {
                 .get("SUPPORT_IMAP_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            imap_poll_secs: env::var("SUPPORT_IMAP_POLL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(60),
+            // BUNYIP-1044: warn on malformed values (see `env_parse_or_default`).
+            imap_poll_secs: env_parse_or_default("SUPPORT_IMAP_POLL_SECS", 60),
         }
     }
 
@@ -844,6 +842,34 @@ pub(crate) fn parse_smtp_from_name(smtp_from: &str) -> String {
 /// Parse a comma-separated list of CIDR ranges into trusted-proxy networks.
 /// Invalid entries are logged and skipped rather than aborting startup, so a
 /// single typo cannot take the whole service down; an empty or all-invalid
+/// BUNYIP-1044: parse `env::var(name)` as `T`, falling back to `default` on
+/// unset or malformed values. Unset is quiet (the documented case); a value
+/// that is set but does not parse now warns naming the key, the raw value
+/// and the fallback, so an operator can see why the default kicked in. Used
+/// by the `Download`/`OCI`/`OIDC` and `SUPPORT_IMAP_POLL_SECS` readers.
+fn env_parse_or_default<T>(name: &str, default: T) -> T
+where
+    T: std::str::FromStr + std::fmt::Display,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    match env::var(name) {
+        Err(_) => default,
+        Ok(raw) => match raw.parse::<T>() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    key = name,
+                    raw = %raw,
+                    error = %e,
+                    default = %default,
+                    "config: environment value does not parse; falling back to the default"
+                );
+                default
+            }
+        },
+    }
+}
+
 /// list means no proxy is trusted and forwarding headers are ignored.
 fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
     raw.split(',')
@@ -1075,22 +1101,12 @@ impl DownloadConfig {
             forgejo_api_token: secret_env("FORGEJO_API_TOKEN"),
             cache_dir: env::var("DOWNLOAD_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-downloads".to_string()),
-            cache_max_bytes: env::var("DOWNLOAD_CACHE_MAX_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10_737_418_240),
-            concurrency_per_user: env::var("DOWNLOAD_CONCURRENCY_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
-            daily_limit_per_user: env::var("DOWNLOAD_DAILY_LIMIT_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(50),
-            release_cache_ttl_secs: env::var("FORGEJO_RELEASE_CACHE_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
+            // BUNYIP-1044: unset falls back quietly; a set-but-malformed
+            // value now warns via `env_parse_or_default` naming the key.
+            cache_max_bytes: env_parse_or_default("DOWNLOAD_CACHE_MAX_BYTES", 10_737_418_240),
+            concurrency_per_user: env_parse_or_default("DOWNLOAD_CONCURRENCY_PER_USER", 2),
+            daily_limit_per_user: env_parse_or_default("DOWNLOAD_DAILY_LIMIT_PER_USER", 50),
+            release_cache_ttl_secs: env_parse_or_default("FORGEJO_RELEASE_CACHE_TTL_SECS", 300),
         }
     }
 
@@ -1190,10 +1206,9 @@ impl OciConfig {
             enabled: env::var("OCI_REGISTRY_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            port: env::var("OCI_REGISTRY_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(18081),
+            // BUNYIP-1044: set-but-malformed values warn via
+            // `env_parse_or_default` instead of silently taking the default.
+            port: env_parse_or_default("OCI_REGISTRY_PORT", 18081),
             service: env::var("OCI_REGISTRY_SERVICE")
                 .unwrap_or_else(|_| "oci.example.com".to_string()),
             realm: env::var("OCI_REGISTRY_REALM")
@@ -1201,26 +1216,12 @@ impl OciConfig {
                 .filter(|s| !s.is_empty()),
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
-            blob_cache_max_bytes: env::var("OCI_BLOB_CACHE_MAX_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(53_687_091_200), // 50 GiB
-            manifest_cache_ttl_secs: env::var("OCI_MANIFEST_CACHE_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
-            concurrent_manifests_per_user: env::var("OCI_CONCURRENT_MANIFESTS_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
-            pulls_per_user_per_day: env::var("OCI_PULLS_PER_USER_PER_DAY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(50),
-            token_ttl_secs: env::var("OCI_TOKEN_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(900),
+            // 50 GiB default
+            blob_cache_max_bytes: env_parse_or_default::<u64>("OCI_BLOB_CACHE_MAX_BYTES", 53_687_091_200),
+            manifest_cache_ttl_secs: env_parse_or_default("OCI_MANIFEST_CACHE_TTL_SECS", 300),
+            concurrent_manifests_per_user: env_parse_or_default("OCI_CONCURRENT_MANIFESTS_PER_USER", 2),
+            pulls_per_user_per_day: env_parse_or_default("OCI_PULLS_PER_USER_PER_DAY", 50),
+            token_ttl_secs: env_parse_or_default("OCI_TOKEN_TTL_SECS", 900),
         }
     }
 }
@@ -1287,34 +1288,17 @@ impl OidcConfig {
                 .unwrap_or_else(|_| "dev-key".to_string()),
             jwt_public_keys_dir: env::var("OIDC_JWT_PUBLIC_KEYS_DIR")
                 .unwrap_or_else(|_| "secrets".to_string()),
+            // BUNYIP-1044: set-but-malformed values warn via
+            // `env_parse_or_default` instead of silently taking the default.
             // SPEC-7.1.82: clamped to 60..=900
-            access_token_ttl_secs: env::var("OIDC_ACCESS_TOKEN_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(600)
+            access_token_ttl_secs: env_parse_or_default("OIDC_ACCESS_TOKEN_TTL_SECONDS", 600)
                 .clamp(60, 900),
-            refresh_token_ttl_secs: env::var("OIDC_REFRESH_TOKEN_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2_592_000),
-            refresh_idle_ttl_secs: env::var("OIDC_REFRESH_IDLE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1_209_600),
+            refresh_token_ttl_secs: env_parse_or_default("OIDC_REFRESH_TOKEN_TTL_SECONDS", 2_592_000),
+            refresh_idle_ttl_secs: env_parse_or_default("OIDC_REFRESH_IDLE_TTL_SECONDS", 1_209_600),
             // SPEC-7.1.82: capped at 120
-            code_ttl_secs: env::var("OIDC_CODE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(60)
-                .min(120),
-            session_idle_ttl_secs: env::var("SESSION_IDLE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(28_800),
-            session_idle_ttl_remember_secs: env::var("SESSION_IDLE_TTL_REMEMBER_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1_209_600),
+            code_ttl_secs: env_parse_or_default("OIDC_CODE_TTL_SECONDS", 60).min(120),
+            session_idle_ttl_secs: env_parse_or_default("SESSION_IDLE_TTL_SECONDS", 28_800),
+            session_idle_ttl_remember_secs: env_parse_or_default("SESSION_IDLE_TTL_REMEMBER_SECONDS", 1_209_600),
             lifecycle_event_key: env::var("OIDC_LIFECYCLE_EVENT_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
