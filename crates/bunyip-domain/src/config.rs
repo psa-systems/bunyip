@@ -1217,9 +1217,15 @@ impl OciConfig {
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
             // 50 GiB default
-            blob_cache_max_bytes: env_parse_or_default::<u64>("OCI_BLOB_CACHE_MAX_BYTES", 53_687_091_200),
+            blob_cache_max_bytes: env_parse_or_default::<u64>(
+                "OCI_BLOB_CACHE_MAX_BYTES",
+                53_687_091_200,
+            ),
             manifest_cache_ttl_secs: env_parse_or_default("OCI_MANIFEST_CACHE_TTL_SECS", 300),
-            concurrent_manifests_per_user: env_parse_or_default("OCI_CONCURRENT_MANIFESTS_PER_USER", 2),
+            concurrent_manifests_per_user: env_parse_or_default(
+                "OCI_CONCURRENT_MANIFESTS_PER_USER",
+                2,
+            ),
             pulls_per_user_per_day: env_parse_or_default("OCI_PULLS_PER_USER_PER_DAY", 50),
             token_ttl_secs: env_parse_or_default("OCI_TOKEN_TTL_SECS", 900),
         }
@@ -1293,12 +1299,18 @@ impl OidcConfig {
             // SPEC-7.1.82: clamped to 60..=900
             access_token_ttl_secs: env_parse_or_default("OIDC_ACCESS_TOKEN_TTL_SECONDS", 600)
                 .clamp(60, 900),
-            refresh_token_ttl_secs: env_parse_or_default("OIDC_REFRESH_TOKEN_TTL_SECONDS", 2_592_000),
+            refresh_token_ttl_secs: env_parse_or_default(
+                "OIDC_REFRESH_TOKEN_TTL_SECONDS",
+                2_592_000,
+            ),
             refresh_idle_ttl_secs: env_parse_or_default("OIDC_REFRESH_IDLE_TTL_SECONDS", 1_209_600),
             // SPEC-7.1.82: capped at 120
             code_ttl_secs: env_parse_or_default("OIDC_CODE_TTL_SECONDS", 60).min(120),
             session_idle_ttl_secs: env_parse_or_default("SESSION_IDLE_TTL_SECONDS", 28_800),
-            session_idle_ttl_remember_secs: env_parse_or_default("SESSION_IDLE_TTL_REMEMBER_SECONDS", 1_209_600),
+            session_idle_ttl_remember_secs: env_parse_or_default(
+                "SESSION_IDLE_TTL_REMEMBER_SECONDS",
+                1_209_600,
+            ),
             lifecycle_event_key: env::var("OIDC_LIFECYCLE_EVENT_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -1541,10 +1553,9 @@ impl Config {
                     failures.push(ConfigFailure {
                         var: "APP_KEY_VERSION",
                         reason: format!("the value `{raw}` is not a valid i16 ({e})"),
-                        remedy:
-                            "Set it to the small positive integer stamped on the matching \
+                        remedy: "Set it to the small positive integer stamped on the matching \
                              APP_ENCRYPTION_KEY (same value used when the key was created)."
-                                .to_string(),
+                            .to_string(),
                     });
                     1
                 }

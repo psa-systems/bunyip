@@ -2257,19 +2257,18 @@ pub async fn get_system_health(
             (DashboardStats::default(), false)
         }
     };
-    let (recent_logs_count, recent_logs_ok) =
-        match sqlx::query_as::<_, (i64,)>(
-            "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
-        )
-        .fetch_one(pool.get_ref())
-        .await
-        {
-            Ok((n,)) => (n, true),
-            Err(e) => {
-                tracing::warn!(error = %e, "system_health: recent audit-log count failed; reporting 0 under `degraded`");
-                (0, false)
-            }
-        };
+    let (recent_logs_count, recent_logs_ok) = match sqlx::query_as::<_, (i64,)>(
+        "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
+    )
+    .fetch_one(pool.get_ref())
+    .await
+    {
+        Ok((n,)) => (n, true),
+        Err(e) => {
+            tracing::warn!(error = %e, "system_health: recent audit-log count failed; reporting 0 under `degraded`");
+            (0, false)
+        }
+    };
 
     let overall_status = if db_health.status == "healthy" && stats_ok && recent_logs_ok {
         "healthy"

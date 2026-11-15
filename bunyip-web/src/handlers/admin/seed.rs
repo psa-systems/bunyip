@@ -129,19 +129,21 @@ pub async fn seed_export(State(st): State<AppState>, headers: HeaderMap) -> Resp
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::CONTENT_DISPOSITION, disposition);
             builder = with_attachment_hardening(builder);
-            builder.body(Body::from_stream(resp.bytes_stream())).unwrap_or_else(|e| {
-                // BUNYIP-1056: a response build failure used to redirect
-                // with no error toast or log; log the cause and surface
-                // the condition to the admin.
-                tracing::warn!(error = %e, "admin/seed: could not build export response");
-                redirect_cookies(
-                    &format!(
-                        "/admin/seed?error={}",
-                        urlenc("Could not build the seed export response.")
-                    ),
-                    &c.set_cookies,
-                )
-            })
+            builder
+                .body(Body::from_stream(resp.bytes_stream()))
+                .unwrap_or_else(|e| {
+                    // BUNYIP-1056: a response build failure used to redirect
+                    // with no error toast or log; log the cause and surface
+                    // the condition to the admin.
+                    tracing::warn!(error = %e, "admin/seed: could not build export response");
+                    redirect_cookies(
+                        &format!(
+                            "/admin/seed?error={}",
+                            urlenc("Could not build the seed export response.")
+                        ),
+                        &c.set_cookies,
+                    )
+                })
         }
         Ok(resp) => {
             // BUNYIP-1056: a non-success upstream status previously
@@ -149,7 +151,10 @@ pub async fn seed_export(State(st): State<AppState>, headers: HeaderMap) -> Resp
             // with no log. Log the status here so an operator can see
             // the cause when the API refuses the export.
             let status = resp.status().as_u16();
-            tracing::warn!(status, "admin/seed: upstream seed export returned non-success");
+            tracing::warn!(
+                status,
+                "admin/seed: upstream seed export returned non-success"
+            );
             redirect_cookies(
                 &format!(
                     "/admin/seed?error={}",

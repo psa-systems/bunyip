@@ -262,7 +262,10 @@ pub async fn get_user(
     cookie: Option<&str>,
     user_id: &str,
 ) -> Result<AdminUser, ApiError> {
-    parse(api.get(&format!("/admin/users/{}", enc(user_id)), cookie).await?)
+    parse(
+        api.get(&format!("/admin/users/{}", enc(user_id)), cookie)
+            .await?,
+    )
 }
 
 // SPEC-11.17.3
@@ -440,7 +443,11 @@ pub async fn update_application(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api
-        .put(&format!("/admin/applications/{}", enc(app_id)), cookie, Some(body))
+        .put(
+            &format!("/admin/applications/{}", enc(app_id)),
+            cookie,
+            Some(body),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -557,8 +564,11 @@ pub async fn list_user_entitlements(
     user_id: &str,
 ) -> Result<Vec<UserEntitlement>, ApiError> {
     parse(
-        api.get(&format!("/admin/users/{}/entitlements", enc(user_id)), cookie)
-            .await?,
+        api.get(
+            &format!("/admin/users/{}/entitlements", enc(user_id)),
+            cookie,
+        )
+        .await?,
     )
 }
 
@@ -1173,7 +1183,10 @@ pub async fn feedback_detail(
     cookie: Option<&str>,
     id: &str,
 ) -> Result<AdminFeedbackDetail, ApiError> {
-    parse(api.get(&format!("/admin/feedback/{}", enc(id)), cookie).await?)
+    parse(
+        api.get(&format!("/admin/feedback/{}", enc(id)), cookie)
+            .await?,
+    )
 }
 
 // SPEC-11.17.18
@@ -1236,7 +1249,11 @@ pub async fn restore_feedback(
 /// BUNYIP-92: flip `is_spam` to TRUE.
 pub async fn mark_feedback_spam(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{}/mark-spam", enc(id)), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/mark-spam", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1249,7 +1266,11 @@ pub async fn unmark_feedback_spam(
     id: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{}/unmark-spam", enc(id)), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/unmark-spam", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1269,7 +1290,11 @@ pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Resul
 /// Reversible via the existing archive-restore endpoint.
 pub async fn archive_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{}/archive", enc(id)), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/archive", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1339,7 +1364,11 @@ pub async fn update_stripe_product(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api
-        .put(&format!("/admin/stripe/products/{}", enc(id)), cookie, Some(body))
+        .put(
+            &format!("/admin/stripe/products/{}", enc(id)),
+            cookie,
+            Some(body),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1713,7 +1742,11 @@ pub async fn update_app_doc(
 /// Admin: delete a documentation page.
 pub async fn delete_app_doc(api: &Api, cookie: Option<&str>, doc_id: &str) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/application-docs/{}", enc(doc_id)), cookie, None)
+        .delete(
+            &format!("/admin/application-docs/{}", enc(doc_id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }

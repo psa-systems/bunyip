@@ -1775,7 +1775,11 @@ impl AuthService {
         // trace, leaving prior reset tokens live (the ones we claim to
         // invalidate) while the new one was still issued. Log the failure at
         // warn so an operator can see when the invariant does not hold.
-        let cleared = match TokenRepository::revoke_pending_password_reset_tokens(&self.pool, user.id).await {
+        let cleared = match TokenRepository::revoke_pending_password_reset_tokens(
+            &self.pool, user.id,
+        )
+        .await
+        {
             Ok(n) => n,
             Err(e) => {
                 tracing::warn!(

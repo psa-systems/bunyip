@@ -624,12 +624,11 @@ impl UserRepository {
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let row: Option<(Uuid,)> = sqlx::query_as(
-            "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE",
-        )
-        .bind(user_id)
-        .fetch_optional(executor)
-        .await?;
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
+                .bind(user_id)
+                .fetch_optional(executor)
+                .await?;
 
         Ok(row.is_some())
     }

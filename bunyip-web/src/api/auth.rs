@@ -288,7 +288,10 @@ pub async fn register_challenge(api: &Api) -> Option<String> {
     let r = match api.get("/auth/register-challenge", None).await {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(status = e.status, "register_challenge: upstream fetch failed; form will embed an empty token");
+            tracing::warn!(
+                status = e.status,
+                "register_challenge: upstream fetch failed; form will embed an empty token"
+            );
             return None;
         }
     };
