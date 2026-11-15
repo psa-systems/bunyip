@@ -20,7 +20,12 @@
 // The script polls <op>/v1/version every 15s for up to 10 minutes and
 // compares the reported `commit` (the SHORT git hash baked from the
 // GIT_COMMIT build arg, `git rev-parse --short HEAD`) against the resolved
-// expected SHA via GITHUB_SHA.startsWith(commit). The root /version reports
+// expected SHA via `expectedSha.startsWith(result.commit)`. BUNYIP-1041:
+// the header earlier wrote this as `GITHUB_SHA.startsWith(commit)`, but
+// the actual check (line 240) tests whether the RESOLVED expected SHA
+// (`expectedSha`, derived in this script) begins with the SHORT commit
+// returned by /v1/version, not the raw GITHUB_SHA env var. The root
+// /version reports
 // the same GIT_COMMIT value under `.revision` (BUNYIP-752); /v1/version is
 // used here only because it was already the established gate.
 //
