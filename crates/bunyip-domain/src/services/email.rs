@@ -1558,6 +1558,23 @@ impl EmailService {
         email: &str,
         feedback: &Feedback,
     ) -> Result<(), AppError> {
+        // BUNYIP-1047: refuse to send when there is no admin response. A blank
+        // reply body is never the intended content of a feedback response
+        // email, and the previous `unwrap_or("")` would mail the user an
+        // empty-body form letter if an admin somehow invoked this with the
+        // response column unset.
+        let response = feedback
+            .admin_response
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::validation(
+                    "admin_response",
+                    "Cannot send a feedback response with no response text.",
+                )
+            })?;
+
         let config = self.config();
         if !config.enabled {
             tracing::info!(feedback_id = %feedback.id, email = %email, "Feedback response email skipped");
@@ -1570,10 +1587,7 @@ impl EmailService {
             &feedback.subject.as_deref().unwrap_or("Your feedback"),
         );
         context.insert("original_message", &feedback.message);
-        context.insert(
-            "response_message",
-            &feedback.admin_response.as_deref().unwrap_or(""),
-        );
+        context.insert("response_message", response);
 
         let (html, text) = self.render_template("feedback_response", &context)?;
         self.send_email(
@@ -1632,6 +1646,24 @@ impl EmailService {
         if !config.enabled || self.transport().is_none() {
             return Err(AppError::internal(
                 "Email sending is disabled, so no test message was sent.",
+            ));
+        }
+
+        // BUNYIP-1047: `send_email` returns `Ok(())` for a suppressed or
+        // RFC-reserved recipient so transactional senders degrade gracefully,
+        // but this probe exists precisely so the operator can learn whether
+        // mail actually leaves. Refuse those recipients up front rather than
+        // reading as success when nothing was sent.
+        if self.is_suppressed(to).await? {
+            return Err(AppError::validation(
+                "to",
+                "This address is on the suppression list, so no test message was sent.",
+            ));
+        }
+        if is_reserved_recipient(to) {
+            return Err(AppError::validation(
+                "to",
+                "This address is an RFC-reserved domain with no deliverable MX, so no test message was sent.",
             ));
         }
 
