@@ -106,12 +106,28 @@ pub async fn users(
         path.push_str(&format!("&search={}", urlenc(search)));
     }
     // The API's `active` flag is tri-state: true = live only, false =
-    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it explicitly
-    // for active/suspended so the default page is not the "All" view.
+    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it
+    // explicitly for active/suspended so the default page is not the "All"
+    // view. BUNYIP-1053: closed-set `{"active", "suspended", "all"}`; an
+    // unknown value used to fall through to `active=true`, silently hiding
+    // what the caller actually asked for. Now returns a decode-shaped
+    // error so the caller can surface the bad input.
     match status {
+        "active" => path.push_str("&active=true"),
         "suspended" => path.push_str("&active=false"),
         "all" => {}
-        _ => path.push_str("&active=true"),
+        other => {
+            return Err(ApiError {
+                status: 400,
+                code: "DECODE_ERROR".to_string(),
+                message: format!(
+                    "bunyip-web /admin/users: unknown status `{other}`; expected active / suspended / all"
+                ),
+                retry_after: None,
+                request_id: None,
+                bucket: None,
+            });
+        }
     }
     if !tier.is_empty() {
         path.push_str(&format!("&tier={}", urlenc(tier)));
@@ -945,13 +961,22 @@ pub async fn rate_limit_history(
     since: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<AdminRateLimitHistory>, ApiError> {
-    let mut path = String::from("/admin/rate-limits/history?");
+    // BUNYIP-1053: the earlier builder always started with `?` and appended
+    // `&` after each parameter, leaving a trailing `?` or `&` when all
+    // parameters were absent / the last one was present. Build the parts
+    // first and join cleanly so no trailing separator reaches the API.
+    let mut params: Vec<String> = Vec::new();
     if let Some(s) = since {
-        path.push_str(&format!("since={}&", urlenc(s)));
+        params.push(format!("since={}", urlenc(s)));
     }
     if let Some(l) = limit {
-        path.push_str(&format!("limit={l}&"));
+        params.push(format!("limit={l}"));
     }
+    let path = if params.is_empty() {
+        String::from("/admin/rate-limits/history")
+    } else {
+        format!("/admin/rate-limits/history?{}", params.join("&"))
+    };
     parse(api.get(&path, cookie).await?)
 }
 
