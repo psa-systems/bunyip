@@ -28,7 +28,7 @@ function deriveOpBase(hubUrl) {
 }
 
 // Required: no domain is hardcoded as a fallback. Inject the per-environment
-// hub host (staging `https://a8n.systems`, prod `https://psa.systems`).
+// hub host (see docs/self-hosting.md for the operator-facing staging/prod map).
 const hubBaseURL = pick(process.env.E2E_BASE_URL);
 if (!hubBaseURL) {
   console.error('E2E_BASE_URL is unset; set it to the hub host (see e2e/.env.example). Aborting.');

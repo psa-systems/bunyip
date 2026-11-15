@@ -21,7 +21,7 @@ import { env } from './env';
 
 // Absolute-URL matchers for each flow's token-link. The token is base64url /
 // hex (`[\w.-]`); the host is whatever APP_URL the deployment renders into the
-// email body (staging `https://a8n.systems`). `match[0]` is the full URL, from
+// email body (the hub-web host). `match[0]` is the full URL, from
 // which the caller pulls `?token=` via `new URL(...)`.
 export const MAGIC_LINK_RE = /https?:\/\/[^\s"'<>]+\/magic-link\?token=[\w.-]+/;
 export const PASSWORD_RESET_RE = /https?:\/\/[^\s"'<>]+\/password-reset\/confirm\?token=[\w.-]+/;

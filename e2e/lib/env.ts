@@ -30,9 +30,12 @@ function optional(name: string): string | undefined {
 }
 
 // Derive the OP/API host from the hub-web host by prepending `api.`. bunyip's
-// canonical staging deploy serves the hub at `a8n.systems` and the API/OP at
-// `api.a8n.systems` (prod: `psa.systems` -> `api.psa.systems`). Returns null
-// when the hub host is already prefixed or the URL cannot be parsed.
+// canonical deploys serve the hub at the top-level host and the API/OP at
+// the `api.` subdomain (e.g. hub `example.com` -> API `api.example.com`).
+// Returns null when the hub host is already prefixed or the URL cannot be
+// parsed. BUNYIP-1041: internal staging/prod hostnames previously named in
+// this comment are tracked only in the operator-facing docs under
+// `docs/self-hosting.md`, not in the e2e library source.
 // SPEC-3.36.3
 function deriveApiBase(hubUrl: string): string | null {
   try {
@@ -49,11 +52,12 @@ function deriveApiBase(hubUrl: string): string | null {
 }
 
 // Required: no domain is ever hardcoded as a fallback. The hub host differs
-// per environment (staging `https://a8n.systems`, prod `https://psa.systems`),
-// so the operator must inject it explicitly.
-// Strip a trailing slash so `${base}${route}` (e.g. in discoverOidc) never
-// produces a double slash like `https://api.a8n.systems//v1/...`, mirroring the
-// gate scripts' own normalisation.
+// per environment (see `docs/self-hosting.md` for the operator-facing map
+// of staging and production apices), so the operator must inject it
+// explicitly. Strip a trailing slash so `${base}${route}` (e.g. in
+// discoverOidc) never produces a double slash like
+// `https://api.example.com//v1/...`, mirroring the gate scripts' own
+// normalisation.
 const stripTrailingSlash = (u: string): string => u.replace(/\/+$/, '');
 
 const hubBaseURL = stripTrailingSlash(required('E2E_BASE_URL'));
@@ -135,7 +139,7 @@ export const env = {
 const REQUIRED: Array<{ name: string; purpose: string }> = [
   {
     name: 'E2E_BASE_URL',
-    purpose: 'hub-web host the suite navigates to (e.g. https://a8n.systems); no default',
+    purpose: 'hub-web host the suite navigates to (e.g. https://example.com); no default',
   },
   { name: 'E2E_EMAIL', purpose: 'login email of the dedicated E2E account' },
   { name: 'E2E_PASSWORD', purpose: 'password for E2E_EMAIL' },
