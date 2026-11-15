@@ -312,7 +312,17 @@ impl EmailService {
         } else {
             Self::authenticate(&mut conn, &config.smtp_username, &config.smtp_password).await
         };
-        let _ = conn.quit().await;
+        // BUNYIP-1047: previously `let _ = conn.quit().await;` discarded a
+        // failed QUIT (mostly observable when the relay closed early). Log at
+        // warn naming the host so the drop is not invisible; the probe's
+        // verdict (`auth`) is still what the caller gets.
+        if let Err(e) = conn.quit().await {
+            tracing::warn!(
+                host = %config.smtp_host,
+                error = ?e,
+                "email test_connection: QUIT failed after probe"
+            );
+        }
         auth
     }
 
@@ -1454,11 +1464,14 @@ impl EmailService {
         let verify_url = format!("{}/settings/verify-email?token={}", config.base_url, token);
 
         if !config.enabled {
-            tracing::info!(
-                email = %email,
-                link = %verify_url,
-                "Email verify link (dev mode - not sending email)"
-            );
+            // BUNYIP-1047: previously logged the single-use token link at
+            // INFO. Match the magic-link / reset / change-verify shape: info
+            // without the token, debug with the link only under
+            // `EMAIL_LOG_TOKENS`.
+            tracing::info!(email = %email, "Email verify (dev mode - token suppressed)");
+            if config.log_tokens {
+                tracing::debug!(email = %email, link = %verify_url, "Email verify link (EMAIL_LOG_TOKENS)");
+            }
             return Ok(());
         }
 
@@ -1580,11 +1593,13 @@ impl EmailService {
         let invite_url = format!("{}/invite/accept?token={}", config.base_url, token);
 
         if !config.enabled {
-            tracing::info!(
-                email = %email,
-                link = %invite_url,
-                "Admin invite link (dev mode - not sending email)"
-            );
+            // BUNYIP-1047: previously logged the single-use invite token at
+            // INFO. Same shape as magic-link / reset: info without the token,
+            // debug with the link only under `EMAIL_LOG_TOKENS`.
+            tracing::info!(email = %email, "Admin invite (dev mode - token suppressed)");
+            if config.log_tokens {
+                tracing::debug!(email = %email, link = %invite_url, "Admin invite link (EMAIL_LOG_TOKENS)");
+            }
             return Ok(());
         }
 
