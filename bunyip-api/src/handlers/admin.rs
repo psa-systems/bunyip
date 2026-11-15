@@ -1683,8 +1683,12 @@ pub async fn import_seed_data(
 // Dashboard Stats
 // =============================================================================
 
-/// Dashboard statistics response
-#[derive(Debug, Serialize)]
+/// Dashboard statistics response. `Default` yields an all-zero snapshot the
+/// system-health endpoint surfaces when the DB sub-query behind
+/// `collect_dashboard_stats` fails, so the health report can still ship as
+/// `degraded` instead of failing the whole endpoint (BUNYIP-1051 /
+/// SPEC-10.9.4).
+#[derive(Debug, Serialize, Default)]
 pub struct DashboardStats {
     pub total_users: i64,
     pub active_members: i64,
@@ -2237,21 +2241,42 @@ pub async fn get_system_health(
     };
 
     // Reuse the dashboard counts (no duplicated SQL) and surface the recent
-    // audit-log volume. Errors propagate rather than being swallowed by
-    // `.ok().flatten()`, so a failing stats query degrades the health report
-    // honestly instead of silently dropping the stats block.
-    let stats = collect_dashboard_stats(pool.get_ref()).await?;
-    let recent_logs: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
-    )
-    .fetch_one(pool.get_ref())
-    .await?;
+    // audit-log volume.
+    //
+    // BUNYIP-1051 / SPEC-10.9.4: the stats and recent-logs queries used to
+    // propagate with `?`, which meant an unhealthy database made the whole
+    // endpoint fail first and the `degraded`/`unhealthy` branch never
+    // shipped. Surface those failures into the degraded report instead:
+    // the stats block carries zeros (plus a log line), and `overall_status`
+    // degrades whenever any sub-query failed, not only when `SELECT 1`
+    // did.
+    let (stats, stats_ok) = match collect_dashboard_stats(pool.get_ref()).await {
+        Ok(s) => (s, true),
+        Err(e) => {
+            tracing::warn!(error = %e, "system_health: collect_dashboard_stats failed; reporting zeros under `degraded`");
+            (DashboardStats::default(), false)
+        }
+    };
+    let (recent_logs_count, recent_logs_ok) =
+        match sqlx::query_as::<_, (i64,)>(
+            "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
+        )
+        .fetch_one(pool.get_ref())
+        .await
+        {
+            Ok((n,)) => (n, true),
+            Err(e) => {
+                tracing::warn!(error = %e, "system_health: recent audit-log count failed; reporting 0 under `degraded`");
+                (0, false)
+            }
+        };
 
-    let overall_status = if db_health.status == "healthy" {
+    let overall_status = if db_health.status == "healthy" && stats_ok && recent_logs_ok {
         "healthy"
     } else {
         "degraded"
     };
+    let recent_logs = (recent_logs_count,);
 
     // BUNYIP-474: dataset freshness. Read-only (the .BIN is refreshed out of
     // band by scripts/refresh-ip2-datasets.nu); this just reports the on-disk age.
