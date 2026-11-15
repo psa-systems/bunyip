@@ -32,6 +32,25 @@ pub struct GroupForm {
     pub sort_order: String,
 }
 
+// BUNYIP-1055: `group_form` reads an `Option<&ApplicationGroup>` for the
+// typed-value side; synthesize one from the submitted `GroupForm` so a
+// rejected create/save re-renders with the admin's typed input instead of
+// blank fields. The sibling application/email/branding forms already do
+// this; this brings groups in line.
+fn submitted_group(id: &str, f: &GroupForm) -> ApplicationGroup {
+    let description = f.description.trim();
+    let icon_url = f.icon_url.trim();
+    ApplicationGroup {
+        id: id.to_string(),
+        name: f.name.clone(),
+        slug: f.slug.clone(),
+        display_name: f.display_name.clone(),
+        description: (!description.is_empty()).then(|| description.to_string()),
+        icon_url: (!icon_url.is_empty()).then(|| icon_url.to_string()),
+        sort_order: f.sort_order.trim().parse().unwrap_or(0),
+    }
+}
+
 // SPEC-12.6.2
 /// JSON body for create/update of a group. Required identity fields are
 /// bounded and slug-checked; description / icon_url collapse empty to null;
@@ -216,10 +235,17 @@ pub async fn application_group_create(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-1055: preserve typed input on validation and API-reject paths.
+    let submitted = submitted_group("", &f);
     let body = match group_body(&f) {
         Ok(b) => b,
         Err(msg) => {
-            let content = group_form("/admin/application-groups", "New group", None, Some(&msg));
+            let content = group_form(
+                "/admin/application-groups",
+                "New group",
+                Some(&submitted),
+                Some(&msg),
+            );
             return admin_response(&c, &user, "/admin/application-groups", "New group", content);
         }
     };
@@ -229,7 +255,7 @@ pub async fn application_group_create(
             let content = group_form(
                 "/admin/application-groups",
                 "New group",
-                None,
+                Some(&submitted),
                 Some(&e.user_message()),
             );
             admin_response(&c, &user, "/admin/application-groups", "New group", content)
@@ -289,13 +315,20 @@ pub async fn application_group_save(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-1055: preserve typed input on validation and API-reject paths.
+    let submitted = submitted_group(&id, &f);
+    let heading = if submitted.display_name.trim().is_empty() {
+        "Edit group".to_string()
+    } else {
+        format!("Edit {}", submitted.display_name)
+    };
     let body = match group_body(&f) {
         Ok(b) => b,
         Err(msg) => {
             let content = group_form(
                 &format!("/admin/application-groups/{id}"),
-                "Edit group",
-                None,
+                &heading,
+                Some(&submitted),
                 Some(&msg),
             );
             return admin_response(
@@ -312,8 +345,8 @@ pub async fn application_group_save(
         Err(e) => {
             let content = group_form(
                 &format!("/admin/application-groups/{id}"),
-                "Edit group",
-                None,
+                &heading,
+                Some(&submitted),
                 Some(&e.user_message()),
             );
             admin_response(
