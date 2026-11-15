@@ -328,6 +328,12 @@ pub async fn delete_user(
 
     UserRepository::soft_delete(&pool, user_id).await?;
 
+    // BUNYIP-1051: revoke every refresh-token family for the deleted user so
+    // existing sessions cannot keep minting access tokens against the
+    // now-tombstoned row. Matches the sibling `update_user_status` deactivation
+    // path (line 415), which already does this.
+    TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user_id).await?;
+
     // BUNYIP-998: leave Mirzam's two lists, with the address read above.
     crate::mirzam_sync::notify(
         &mirzam,
@@ -1200,11 +1206,22 @@ pub async fn delete_application(
         return Err(AppError::validation("password", "Invalid password"));
     }
 
-    // Verify TOTP code (2FA must be enabled)
+    // Verify TOTP code (2FA must be enabled).
+    //
+    // BUNYIP-1051: `.map_err(|_|)` discarded the cause and reported every
+    // error as "2FA must be enabled" - a DB failure looked indistinguishable
+    // from a missing enrolment. Log the real cause at warn and still return
+    // the validation error, so an admin sees a sensible message while the
+    // operator sees why in the logs.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, &body.totp_code)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "delete application: totp verify_code failed"
+            );
             AppError::validation("totp_code", "2FA must be enabled to delete applications")
         })?;
     if !totp_valid {
@@ -2672,10 +2689,19 @@ pub async fn grant_lifetime_membership(
     // BUNYIP-943: 2FA gate, BEFORE any mutation, mirroring set_user_tier so a
     // cancelled or wrong code leaves lifetime_member and the $0 invoice
     // subscription untouched.
+    // BUNYIP-1051: log the swallowed cause before mapping to the generic
+    // "2FA must be enabled" message so a DB failure is attributable.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "grant lifetime membership: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     if !totp_valid {
         return Err(AppError::validation("totp_code", "Invalid 2FA code"));
     }
@@ -2747,10 +2773,18 @@ pub async fn revoke_lifetime_membership(
     let user_id = path.into_inner();
 
     // BUNYIP-943: same 2FA gate as grant_lifetime_membership, before any mutation.
+    // BUNYIP-1051: log the underlying cause before mapping to the generic message.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "revoke lifetime membership: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     if !totp_valid {
         return Err(AppError::validation("totp_code", "Invalid 2FA code"));
     }
@@ -2868,10 +2902,18 @@ pub async fn set_user_tier(
 
     // 2FA gate. A missing/invalid code yields Err here, BEFORE any mutation, so
     // a cancelled or wrong code leaves the tier and every slot count unchanged.
+    // BUNYIP-1051: log the underlying cause before mapping to the generic message.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "set_user_tier: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     let plan = plan_admin_tier_move(totp_valid, &from_tier, &to_tier)?;
 
     // Trial windows come from the resolved tier settings.
@@ -4759,26 +4801,54 @@ pub(crate) async fn dispatch_lifecycle_event(
         return;
     }
 
-    let http = reqwest::Client::builder()
+    // BUNYIP-1051: previously `.unwrap_or_default()` silently fell back to
+    // a default reqwest client (no 5s timeout) on a client build failure,
+    // and a non-2xx response was treated as delivered. Log the build
+    // failure and bail out rather than send with the wrong client; also
+    // branch on the response status so an HTTP error is not invisible.
+    let http = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .unwrap_or_default();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                event_type,
+                "dispatch_lifecycle_event: reqwest client build failed; skipping this fire-and-forget pass"
+            );
+            return;
+        }
+    };
 
     for (client_id, uri) in targets {
         match provider.mint_lifecycle_token(user_id, event_type, client_id) {
             Ok(token) => {
-                if let Err(e) = http
+                match http
                     .post(&uri)
                     .form(&[("lifecycle_event", &token)])
                     .send()
                     .await
                 {
-                    tracing::warn!(
-                        error = %e,
-                        client_id = %client_id,
-                        event_type,
-                        "lifecycle event POST failed"
-                    );
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if !status.is_success() {
+                            tracing::warn!(
+                                %client_id,
+                                %status,
+                                event_type,
+                                "lifecycle event POST returned non-2xx"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            client_id = %client_id,
+                            event_type,
+                            "lifecycle event POST failed"
+                        );
+                    }
                 }
             }
             Err(e) => {
