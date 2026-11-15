@@ -719,7 +719,19 @@ pub async fn application_reorder(
     };
     match admin_api::reorder_applications(&st.api, c.forward.as_deref(), &f.ordered_ids).await {
         Ok(()) => status_cookies(StatusCode::NO_CONTENT, &c.set_cookies),
-        Err(_) => status_cookies(StatusCode::BAD_GATEWAY, &c.set_cookies),
+        Err(e) => {
+            // BUNYIP-1055: previously `Err(_)` returned 502 with no trace.
+            // Log the status, cause and request_id so a failed reorder is
+            // attributable in the operator log.
+            tracing::warn!(
+                status = e.status,
+                request_id = ?e.request_id,
+                code = %e.code,
+                message = %e.message,
+                "admin/applications: reorder_applications failed; answering 502"
+            );
+            status_cookies(StatusCode::BAD_GATEWAY, &c.set_cookies)
+        }
     }
 }
 

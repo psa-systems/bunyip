@@ -227,12 +227,23 @@ pub async fn ip_bans(
     // the page.
     let looked_up_ip = q.ip.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let enrichment = match looked_up_ip {
-        Some(ip) => Some(
-            admin_api::ip_enrichment(&st.api, c.forward.as_deref(), ip)
-                .await
-                .ok()
-                .flatten(),
-        ),
+        Some(ip) => Some(match admin_api::ip_enrichment(&st.api, c.forward.as_deref(), ip).await {
+            Ok(opt) => opt,
+            Err(e) => {
+                // BUNYIP-1055: `.ok().flatten()` previously turned a failed
+                // enrichment lookup into "no enrichment available", which
+                // read identically to an unlisted address with no log.
+                // Warn-log the cause so a dataset outage is visible; page
+                // still renders the "no enrichment available" panel.
+                tracing::warn!(
+                    ip = %ip,
+                    status = e.status,
+                    code = %e.code,
+                    "admin/ip_bans: ip_enrichment lookup failed; rendering no-enrichment panel"
+                );
+                None
+            }
+        }),
         None => None,
     };
 
