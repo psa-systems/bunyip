@@ -768,10 +768,28 @@ impl EmailConfig {
 /// The SMTP TLS mode a provider's raw value names. Anything but `starttls`
 /// (case-insensitively) is implicit TLS, which is what the environment read has
 /// always done; the database provider only ever holds one of the two spellings.
+///
+/// BUNYIP-1044: a typo or whitespace-mangled value (e.g. `start tls`,
+/// `implict`) silently fell through to implicit TLS, so an operator who
+/// typed `SMTP_TLS=starttls ` with a trailing space sent plaintext on the
+/// SMTPS port. The set is still closed to the two canonical spellings; a
+/// third value now warns naming the raw input, so the operator can see the
+/// typo without changing the fallback shape.
 fn smtp_tls_from(raw: Option<&str>) -> SmtpTls {
-    match raw.unwrap_or_default().to_lowercase().as_str() {
+    let Some(raw) = raw else {
+        return SmtpTls::Implicit;
+    };
+    let trimmed = raw.trim();
+    match trimmed.to_lowercase().as_str() {
         "starttls" => SmtpTls::Starttls,
-        _ => SmtpTls::Implicit,
+        "implicit" | "tls" | "" => SmtpTls::Implicit,
+        _ => {
+            tracing::warn!(
+                raw = %raw,
+                "SMTP_TLS: unrecognised value; falling back to implicit TLS. Expected `starttls` or `implicit`."
+            );
+            SmtpTls::Implicit
+        }
     }
 }
 
@@ -791,10 +809,19 @@ fn client_id_from_host(host: &str) -> ClientId {
 // SPEC-7.1.72: address half of SMTP_FROM
 /// Parse email address from SMTP_FROM.
 /// Supports "Display Name <email>" or plain "email" format.
+///
+/// BUNYIP-1044: the earlier `smtp_from[start+1..end]` slice panicked when
+/// the first `>` preceded the first `<` (e.g. `a> <b`), hitting
+/// index-out-of-bounds at startup. A malformed value now falls through to
+/// the plain-string branch (trim and return) rather than panicking;
+/// `check_smtp_from` on the typed config path still surfaces the
+/// misconfiguration as a startup ConfigFailure.
 pub(crate) fn parse_smtp_from_email(smtp_from: &str) -> String {
     if let Some(start) = smtp_from.find('<') {
         if let Some(end) = smtp_from.find('>') {
-            return smtp_from[start + 1..end].trim().to_string();
+            if end > start {
+                return smtp_from[start + 1..end].trim().to_string();
+            }
         }
     }
     smtp_from.trim().to_string()
@@ -1316,7 +1343,18 @@ impl Config {
         // the resulting process env. The load is kept separate from parsing so
         // tests can exercise `from_env_inner` against a controlled process env
         // without a repo-root `.env` re-injecting values mid-test (BUNYIP-102).
-        let _ = dotenvy::dotenv();
+        //
+        // BUNYIP-1044: a malformed `.env` (or any failure other than
+        // not-found) used to be discarded silently with `let _ = ...`. File-
+        // not-found is the normal production case so it stays quiet; every
+        // other dotenvy error now warns naming the cause, matching the
+        // bunyip-api BUNYIP-1049 fix.
+        match dotenvy::dotenv() {
+            Ok(_) | Err(dotenvy::Error::Io(_)) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "config: dotenvy::dotenv load failed; continuing with the process env only");
+            }
+        }
         Self::from_env_inner()
     }
 
@@ -1505,11 +1543,29 @@ impl Config {
                     Vec::new()
                 }
             };
-        // SPEC-7.1.38: version stamped on newly written rows
-        let app_key_version: i16 = env::var("APP_KEY_VERSION")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
+        // SPEC-7.1.38: version stamped on newly written rows.
+        //
+        // BUNYIP-1044: a set but unparseable `APP_KEY_VERSION` used to silently
+        // become `1`, stamping new rows with the wrong key version and
+        // breaking re-encryption. Report it as a startup `ConfigFailure`
+        // so the operator fixes it before any row is written.
+        let app_key_version: i16 = match env::var("APP_KEY_VERSION") {
+            Err(_) => 1,
+            Ok(raw) => match raw.parse() {
+                Ok(v) => v,
+                Err(e) => {
+                    failures.push(ConfigFailure {
+                        var: "APP_KEY_VERSION",
+                        reason: format!("the value `{raw}` is not a valid i16 ({e})"),
+                        remedy:
+                            "Set it to the small positive integer stamped on the matching \
+                             APP_ENCRYPTION_KEY (same value used when the key was created)."
+                                .to_string(),
+                    });
+                    1
+                }
+            },
+        };
 
         let tier = TierConfig::resolve(&deployment, None);
         let download = DownloadConfig::from_env();
