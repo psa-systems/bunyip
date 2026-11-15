@@ -726,7 +726,12 @@ pub async fn list_rate_limit_overview(
             message: "`threshold` must be between 0.1 and 1.0".to_string(),
         });
     }
-    let ratio = threshold.clamp(0.1, 1.0);
+    // BUNYIP-1051: the previous `threshold.clamp(0.1, 1.0)` here was dead
+    // code - the explicit range check above already refuses out-of-range
+    // values with 400, so the clamp never changed the input. Use the
+    // validated value directly; the `OverviewQuery::threshold` field doc
+    // (already) names the 400 as the gate, not clamping.
+    let ratio = threshold;
     let limit = query.limit.unwrap_or(5).clamp(1, 100);
     let now = Utc::now();
     let since = now - window;

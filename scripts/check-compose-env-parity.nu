@@ -39,9 +39,15 @@ const PROD_ONLY_KEYS = [
     "INFISICAL_CLIENT_SECRET",
 ]
 
-# Every key from `keys` that has a line inside the api service's environment
-# block, matched loosely (`  KEY:` anywhere in the file) since compose.dev-sso.yml
-# is a partial overlay rather than a complete service definition.
+# Every key from `keys` present as an indented `  KEY:` line ANYWHERE in the
+# file. BUNYIP-1041: an earlier comment claimed this matched inside the
+# bunyip-api service's environment block, but the pattern is a plain regex
+# with no service-block scoping, so a `  KEY:` line under any other service
+# (or under volumes/networks) would satisfy the guard too. Kept as-is
+# because compose.dev-sso.yml is a partial overlay rather than a complete
+# service definition and the other services in bunyip's compose files do
+# not use these particular keys, so the loose match remains sound in
+# practice; comment restated so a reader does not assume stronger scoping.
 def keys-in-file [content: string, keys: list<string>]: nothing -> list<string> {
     let pattern = $"^\\s+\(($keys | str join '|')\):"
     $content

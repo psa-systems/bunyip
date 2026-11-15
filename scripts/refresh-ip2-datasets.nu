@@ -79,9 +79,18 @@ def refresh-one [id: string, token: string, dataset_dir: string, tmp: string]: n
     # SPEC-3.35.8
     # Extract into a fresh per-id subdir (no existing files, so no overwrite),
     # then stage in the destination directory and rename into place atomically.
+    #
+    # BUNYIP-1041: `^unzip -j ... | ignore` used to drop the extract exit
+    # status; a failed extract then showed up as a confusing `mv: no such
+    # file` from the follow-up rename. Inspect `$env.LAST_EXIT_CODE` and
+    # fail loudly here.
     let outdir = $"($tmp)/($id)"
     mkdir $outdir
-    ^unzip -j $zip $bin -d $outdir | ignore
+    ^unzip -j $zip $bin -d $outdir
+    if $env.LAST_EXIT_CODE != 0 {
+        print --stderr $"refresh: unzip failed for ($id) \(exit ($env.LAST_EXIT_CODE)\)"
+        return false
+    }
     let staged = $"($dataset_dir)/.($spec.name).staged.($nu.pid)"
     mv $"($outdir)/($bin | path basename)" $staged
     mv $staged $"($dataset_dir)/($spec.name)"
@@ -117,7 +126,15 @@ def main [] {
         print --stderr $"refresh: ($err.msg)"
         [false]
     })
-    try { rm --recursive $tmp }
+    # BUNYIP-1041: a cleanup failure (permission denied, filesystem gone,
+    # etc.) used to be swallowed silently. Still non-fatal (the refresh
+    # itself has already succeeded or failed by this point), but a warn
+    # keeps the operator informed when `$tmp` could not be removed.
+    try {
+        rm --recursive $tmp
+    } catch {|err|
+        print --stderr $"refresh: cleanup of ($tmp) failed: ($err.msg)"
+    }
 
     # SPEC-3.35.9
     if ($results | any {|ok| not $ok }) {

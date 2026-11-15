@@ -737,7 +737,18 @@ pub async fn feedback_detail(
     let tab = FeedbackTab::from_query(q.from.as_deref());
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
+        Err(e) => {
+            // BUNYIP-1055: previously `Err(_)` redirected with no toast and
+            // no log, so a failed detail fetch looked identical to clicking
+            // the back link. Warn-log the id and cause.
+            tracing::warn!(
+                feedback_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/feedback: feedback_detail failed; bouncing back to list"
+            );
+            return redirect_cookies(tab.path(), &c.set_cookies);
+        }
     };
     let content = feedback_detail_view(&detail, tab, None, None);
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
@@ -966,7 +977,18 @@ pub async fn feedback_respond(
     } else {
         match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
             Ok(()) => None,
-            Err(_) => Some("Could not send response".to_string()),
+            Err(e) => {
+                // BUNYIP-1055: previously `Err(_)` lost the cause. Log it
+                // naming the feedback id; toast text remains generic so a
+                // raw API error does not leak to the admin UI.
+                tracing::warn!(
+                    feedback_id = %id,
+                    status = e.status,
+                    code = %e.code,
+                    "admin/feedback: respond_to_feedback failed"
+                );
+                Some("Could not send response".to_string())
+            }
         }
     };
 
@@ -980,7 +1002,16 @@ pub async fn feedback_respond(
     let tab = FeedbackTab::Active;
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
+        Err(e) => {
+            // BUNYIP-1055: previously `Err(_)` lost the cause for the
+            // reload-after-failed-respond path. Log naming the id.
+            tracing::warn!(
+                feedback_id = %id,
+                status = e.status,
+                "admin/feedback: feedback_detail reload after failed respond failed; bouncing to list"
+            );
+            return redirect_cookies(tab.path(), &c.set_cookies);
+        }
     };
     let content = feedback_detail_view(&detail, tab, Some(response), Some(&error));
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
@@ -1181,7 +1212,18 @@ pub async fn feedback_restore(
     let target = match admin_api::restore_feedback(&st.api, c.forward.as_deref(), &archive_id).await
     {
         Ok(()) => "/admin/feedback/archive?toast_ok=Restored".to_string(),
-        Err(_) => "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: `Err(_)` previously dropped the cause; the toast
+            // text is deliberately generic (no API message leaked), but
+            // the operator log now names the id and status.
+            tracing::warn!(
+                archive_id = %archive_id,
+                status = e.status,
+                code = %e.code,
+                "admin/feedback: restore_feedback failed"
+            );
+            "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string()
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }

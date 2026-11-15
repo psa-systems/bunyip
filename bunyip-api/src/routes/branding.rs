@@ -1,8 +1,8 @@
 //! Public branding route configuration (BUNYIP-561).
 //!
-//! Unauthenticated and deliberately NOT in `rate_limit_floor::EXEMPT_PATHS`, so
-//! the default per-IP cap applies like it does to every other route. Registered
-//! the same way `routes/pricing.rs` is.
+//! Unauthenticated and NOT in `rate_limit_floor::EXEMPT_PATHS`, so the default
+//! per-IP cap applies. `routes/pricing.rs` is registered the same way, though
+//! pricing is exempt from the cap (BUNYIP-518); branding is not.
 
 use actix_web::web;
 

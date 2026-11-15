@@ -3,14 +3,9 @@
 Welcome to {{ app_name }}!
 ---------------------
 
-Thanks for subscribing! You now have access to all our developer tools.
+Thanks for subscribing. Your subscription is active and your account has access to every connected app under this deployment.
 
-What's included:
-- RUS - Fast URL shortening with QR codes
-- Rusty Links - Bookmark management
-- All future applications at no extra cost
-
-Your price of ${{ price }}/month is locked forever.
+Your price of ${{ price }}/month is locked. No surprises.
 
 Go to your dashboard: {{ dashboard_url }}
 

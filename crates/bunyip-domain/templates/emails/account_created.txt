@@ -2,8 +2,9 @@
 {% block content %}
 Welcome to {{ app_name }}
 
-Your account is ready. {{ app_name }} is your single sign-on for the whole
-PSA Systems suite. Sign in here once and every connected app follows.
+Your account is ready. {{ app_name }} is your single sign-on for every
+connected app under this deployment. Sign in here once and every connected
+app follows.
 
 Head to your dashboard to{% if not email_verified %} verify your email and{% endif %} connect your first app.
 

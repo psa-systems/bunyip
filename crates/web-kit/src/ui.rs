@@ -185,9 +185,18 @@ pub fn icon_is_known(name: &str) -> bool {
 
 // SPEC-13.13.1, SPEC-13.13.4: unknown name renders an invisible svg; callers must not pass one
 pub fn icon(name: &str, class: &str) -> Markup {
+    let path = inner(name);
+    // BUNYIP-1042: an unknown name used to produce an empty invisible svg
+    // with no trace, so a typo'd icon rendered as a blank placeholder and
+    // only a consumer-crate test (bunyip-web's icon-scan guard) caught it.
+    // Log at warn so an untested call site surfaces at render time; the
+    // blank-svg fallback stays so the shell still renders.
+    if path.is_empty() {
+        tracing::warn!(icon = %name, "web-kit icon(): unknown name; rendering an invisible svg");
+    }
     html! {
         svg class=(class) viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" {
-            (PreEscaped(inner(name)))
+            (PreEscaped(path))
         }
     }
 }

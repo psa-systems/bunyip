@@ -57,8 +57,16 @@ pub struct FeedbackOutcome {
 /// [`AppError::Unauthorized`] here so the HTTP response wording stays
 /// uniform and the server leaks nothing about which branch tripped.
 pub fn verify_signature(secret: &str, body: &[u8], signature_hex: &str) -> Result<(), AppError> {
-    dunite_webhook::inbound::verify_signature(secret.as_bytes(), body, signature_hex)
-        .map_err(|_| AppError::Unauthorized)
+    dunite_webhook::inbound::verify_signature(secret.as_bytes(), body, signature_hex).map_err(|e| {
+        // BUNYIP-1048: the three classified refusal arms (`Missing`,
+        // `Malformed`, `Mismatch`) still collapse to `Unauthorized` so
+        // the HTTP response wording stays uniform and no branch leaks to
+        // the client; the cause is logged server-side at warn so an
+        // operator can tell the three apart in the logs. Signature
+        // bytes are not logged.
+        tracing::warn!(error = ?e, "mailer webhook signature verification failed");
+        AppError::Unauthorized
+    })
 }
 
 // SPEC-8.26.3: verify before parse

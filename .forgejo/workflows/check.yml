@@ -208,9 +208,12 @@ jobs:
       # SPEC-3.4.8: ungated: unrelated to the PR diff
       - name: Dependency audit
         # Cargo.lock against the RustSec advisory database: an uncovered
-        # vulnerability fails, a warning is reported only, and the one
-        # pre-populated EXCEPTIONS row (rsa via sqlx-mysql, never compiled in)
-        # suppresses that advisory until its dated review (BUNYIP-905). Runs on
+        # vulnerability fails, a warning is reported only, and
+        # `scripts/check-dependency-audit.nu` holds a handful of EXCEPTIONS
+        # rows (rsa via sqlx-mysql, h2 via actix-http, idna via validator,
+        # libsqlite3-sys via sqlx-sqlite) that suppress specific advisories
+        # until dated review (BUNYIP-905, BUNYIP-1066, BUNYIP-1068; count is
+        # drifted historically, see the script for the live set). Runs on
         # the runner host like the rest of this job, so the cargo-audit install
         # is reused from the host's persisted cargo cache rather than paid for
         # on every push. --self-test first, so a gate that stopped detecting
@@ -490,7 +493,8 @@ jobs:
         # A price is the tier's Stripe amount and a dunning deadline is the
         # member's grace_period_end, so neither is a literal: no price per
         # period and no `within N days` in any string literal under
-        # bunyip-web/src, and every legitimate non-copy occurrence carries a
+        # `bunyip-web/src` or `crates/web-kit/src` (both trees the guard
+        # scans), and every legitimate non-copy occurrence carries a
         # `// price-literal-ok:` reason (BUNYIP-590).
         # --self-test first, so a gate that stopped detecting anything fails the
         # build instead of passing vacuously.

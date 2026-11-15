@@ -405,10 +405,17 @@ impl FromRequest for SuperAdminUser {
                 None => {
                     let pool =
                         pool.ok_or_else(|| AppError::internal("Database pool not available"))?;
-                    UserRepository::find_by_id(&pool, claims.sub)
-                        .await?
-                        .map(|u| u.is_super_admin)
-                        .unwrap_or(false)
+                    // BUNYIP-1043: a missing user row used to map to
+                    // `is_super_admin = false` and then `Forbidden`, which
+                    // hid the "the user was deleted but their cookie is
+                    // still presented" case under a permission denial.
+                    // Other extractors answer `Unauthorized` for a
+                    // deleted-user cookie; align here so the client gets
+                    // the same remediation.
+                    match UserRepository::find_by_id(&pool, claims.sub).await? {
+                        Some(u) => u.is_super_admin,
+                        None => return Err(AppError::Unauthorized),
+                    }
                 }
             };
             if !super_admin_allowed(&claims.role, is_super_admin) {
@@ -514,10 +521,17 @@ async fn verify_either(
 pub async fn resolve_rate_limit_subject(req: &HttpRequest) -> Option<Uuid> {
     let token = extract_token(req)?;
 
-    verify_once(req, &token)
-        .await
-        .ok()
-        .map(|identity| identity.claims.sub)
+    // BUNYIP-1043: `.ok()` dropped the verification cause silently, so a
+    // caller moved to the per-IP budget with no trace. Log at debug so an
+    // operator can grep for the reason when token-authed calls unexpectedly
+    // hit the tighter cap; the behaviour (fall back to per-IP) is unchanged.
+    match verify_once(req, &token).await {
+        Ok(identity) => Some(identity.claims.sub),
+        Err(e) => {
+            tracing::debug!(error = %e, "rate-limit subject: token verification failed; falling back to per-IP budget");
+            None
+        }
+    }
 }
 
 // SPEC-7.4.2
@@ -625,14 +639,24 @@ impl AuthCookies {
     pub const OP_SESSION_COOKIE: &'static str = "bunyip_op_session";
 
     /// Create the OP session cookie carrying the opaque `sid`.
-    /// Max-Age mirrors the 7-day `op_sessions.expires_at` set at session creation.
+    ///
+    /// BUNYIP-1043: an earlier doc here claimed Max-Age mirrored a 7-day
+    /// `op_sessions.expires_at`, but `create_op_session` has set that
+    /// deadline to 1 day (non-remember) or 30 days (remember, BUNYIP-381)
+    /// for a long time. The cookie Max-Age is 30 days: that keeps a
+    /// "remember me" session's sid reaching the server up to its own
+    /// absolute ceiling, and a non-remember session's sid is still a dead
+    /// value after one day because the server's `op_sessions.expires_at`
+    /// is the authoritative deadline (a cookie outliving its row is
+    /// harmless, the server refuses it). The helper takes no `remember`
+    /// flag, so the max covers both cases.
     pub fn op_session(sid: &str, secure: bool, cookie_domain: Option<&str>) -> Cookie<'static> {
         let mut builder = Cookie::build(Self::OP_SESSION_COOKIE, sid.to_owned())
             .path("/")
             .http_only(true)
             .secure(secure)
             .same_site(SameSite::Lax)
-            .max_age(actix_web::cookie::time::Duration::days(7));
+            .max_age(actix_web::cookie::time::Duration::days(30));
 
         if let Some(domain) = cookie_domain {
             builder = builder.domain(domain.to_owned());
@@ -825,9 +849,20 @@ pub fn extract_device_info(req: &HttpRequest) -> Option<String> {
         .get(header::USER_AGENT)
         .and_then(|ua| ua.to_str().ok())
         .map(|s| {
-            // Truncate to reasonable length
+            // Truncate to reasonable length.
+            //
+            // BUNYIP-1043: previously `s[..256]` was a byte-index slice that
+            // panicked when byte 256 landed inside a multi-byte UTF-8
+            // sequence (a non-ASCII User-Agent would crash the request).
+            // `floor_char_boundary` falls back to the nearest grapheme-safe
+            // byte at or before 256, keeping the output valid UTF-8 and
+            // bounded.
             if s.len() > 256 {
-                s[..256].to_string()
+                let mut end = 256;
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                s[..end].to_string()
             } else {
                 s.to_string()
             }
@@ -944,9 +979,12 @@ mod tests {
         assert!(cookie.http_only().unwrap_or(false));
         assert!(cookie.secure().unwrap_or(false));
         assert_eq!(cookie.domain(), Some(".example.com"));
+        // BUNYIP-1043: cookie Max-Age is 30 days, sized to the longest
+        // remembered session (BUNYIP-381); the server's op_sessions row
+        // stays the authoritative deadline for non-remember sessions.
         assert_eq!(
             cookie.max_age(),
-            Some(actix_web::cookie::time::Duration::days(7))
+            Some(actix_web::cookie::time::Duration::days(30))
         );
     }
 
@@ -977,9 +1015,10 @@ mod tests {
             .find(|c| c.domain() == Some(".mokosh.systems"))
             .expect("domain-scoped set cookie present");
         assert_eq!(set.value(), "sid123");
+        // BUNYIP-1043: Max-Age is 30 days (see op_session_cookie_properties).
         assert_eq!(
             set.max_age(),
-            Some(actix_web::cookie::time::Duration::days(7))
+            Some(actix_web::cookie::time::Duration::days(30))
         );
 
         let clear = cookies

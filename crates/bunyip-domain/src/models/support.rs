@@ -37,11 +37,30 @@ impl TicketStatus {
     // SPEC-7.2.132: unknown value reads as Open.
     /// Parse a stored value; an unknown string falls back to `Open` so a row is
     /// never undisplayable.
+    ///
+    /// BUNYIP-1045: the fallback itself stays so a row with a corrupt status
+    /// still renders, but the unknown value now surfaces at warn (via
+    /// `from_stored_with_context`) so a corrupt column is not invisibly
+    /// masquerading as a legitimate open ticket.
     pub fn from_str_lenient(s: &str) -> Self {
+        Self::from_stored_with_context(s, None)
+    }
+
+    /// Same fallback as [`Self::from_str_lenient`], with the ticket id (when
+    /// known) threaded into the warn log so an operator can locate the row.
+    pub fn from_stored_with_context(s: &str, ticket_id: Option<Uuid>) -> Self {
         match s {
+            "open" => TicketStatus::Open,
             "pending" => TicketStatus::Pending,
             "closed" => TicketStatus::Closed,
-            _ => TicketStatus::Open,
+            other => {
+                tracing::warn!(
+                    stored_status = %other,
+                    ticket_id = ?ticket_id,
+                    "support ticket: stored status is not in the closed set; falling back to Open"
+                );
+                TicketStatus::Open
+            }
         }
     }
 }

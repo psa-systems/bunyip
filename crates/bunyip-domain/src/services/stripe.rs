@@ -279,10 +279,25 @@ pub fn default_cancel_url() -> String {
 /// unparseable `BUNYIP_BILLING_TRIAL_PERIOD_DAYS` falls back to the 30-day
 /// default rather than disabling the trial.
 pub fn trial_period_days_from_env() -> u32 {
-    std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS")
-        .ok()
-        .and_then(|s| s.trim().parse::<u32>().ok())
-        .unwrap_or(DEFAULT_TRIAL_PERIOD_DAYS)
+    match std::env::var("BUNYIP_BILLING_TRIAL_PERIOD_DAYS") {
+        Err(_) => DEFAULT_TRIAL_PERIOD_DAYS,
+        Ok(raw) => match raw.trim().parse::<u32>() {
+            Ok(v) => v,
+            Err(e) => {
+                // BUNYIP-1048: previously fell through to the 30-day default
+                // with no trace, so a malformed env value was indistinguishable
+                // from an unset one. Log at warn so the operator can see the
+                // fallback kicked in.
+                tracing::warn!(
+                    raw = %raw,
+                    error = %e,
+                    default_days = DEFAULT_TRIAL_PERIOD_DAYS,
+                    "BUNYIP_BILLING_TRIAL_PERIOD_DAYS is not a valid u32; falling back to the default"
+                );
+                DEFAULT_TRIAL_PERIOD_DAYS
+            }
+        },
+    }
 }
 
 // SPEC-8.35.4, SPEC-8.35.7
@@ -321,10 +336,29 @@ pub fn stripe_settings_from_db_model(db: &crate::models::stripe::StripeConfig) -
         cancel_url: db.cancel_url.clone().unwrap_or(defaults.cancel_url),
         free_price_id: None,
         app_tag: db.app_tag.clone().unwrap_or(defaults.app_tag),
-        trial_period_days: db
-            .trial_period_days
-            .and_then(|v| u32::try_from(v).ok())
-            .unwrap_or(defaults.trial_period_days),
+        trial_period_days: trial_days_or_default(db.trial_period_days, defaults.trial_period_days),
+    }
+}
+
+// BUNYIP-1048: a negative or out-of-u32-range `trial_period_days` column used
+// to silently become the derived default with no trace. Log at warn so the
+// malformed row is attributable; the default fallback itself stays so an
+// operator seeing a stale wrong value is not stuck unable to boot the api.
+fn trial_days_or_default(stored: Option<i32>, default: u32) -> u32 {
+    match stored {
+        None => default,
+        Some(v) => match u32::try_from(v) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(
+                    stored = v,
+                    error = %e,
+                    default_days = default,
+                    "stripe trial_period_days DB column is out of u32 range; falling back to the default"
+                );
+                default
+            }
+        },
     }
 }
 
@@ -343,13 +377,39 @@ pub fn stripe_config_from_db_model(
 ) -> Result<StripeConfig, AppError> {
     let defaults = unconfigured_stripe_config();
 
+    // BUNYIP-1048: a row with only one of (ciphertext, nonce) set is a
+    // schema invariant violation (BUNYIP-483 pairs them). Previously it
+    // fell through to the unconfigured placeholder with no trace, so Stripe
+    // quietly stayed in "payments disabled" mode until someone noticed.
+    // Surface the inconsistency as an internal error naming which column is
+    // broken, so the admin page shows it and ops can fix the row.
     let secret_key = match (&db.secret_key, &db.secret_key_nonce) {
         (Some(ct), Some(nonce)) => decrypt_secret(key_set, ct, nonce, db.key_version)?,
-        _ => defaults.secret_key,
+        (None, None) => defaults.secret_key,
+        (Some(_), None) => {
+            return Err(AppError::internal(
+                "stripe secret_key: ciphertext is set but secret_key_nonce is NULL; the row is inconsistent",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AppError::internal(
+                "stripe secret_key: secret_key_nonce is set but ciphertext is NULL; the row is inconsistent",
+            ));
+        }
     };
     let webhook_secret = match (&db.webhook_secret, &db.webhook_secret_nonce) {
         (Some(ct), Some(nonce)) => decrypt_secret(key_set, ct, nonce, db.key_version)?,
-        _ => defaults.webhook_secret,
+        (None, None) => defaults.webhook_secret,
+        (Some(_), None) => {
+            return Err(AppError::internal(
+                "stripe webhook_secret: ciphertext is set but webhook_secret_nonce is NULL; the row is inconsistent",
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(AppError::internal(
+                "stripe webhook_secret: webhook_secret_nonce is set but ciphertext is NULL; the row is inconsistent",
+            ));
+        }
     };
 
     let app_tag = db.app_tag.clone().unwrap_or(defaults.app_tag);
@@ -358,10 +418,7 @@ pub fn stripe_config_from_db_model(
     // derived default.
     let success_url = db.success_url.clone().unwrap_or(defaults.success_url);
     let cancel_url = db.cancel_url.clone().unwrap_or(defaults.cancel_url);
-    let trial_period_days = db
-        .trial_period_days
-        .and_then(|v| u32::try_from(v).ok())
-        .unwrap_or(defaults.trial_period_days);
+    let trial_period_days = trial_days_or_default(db.trial_period_days, defaults.trial_period_days);
 
     Ok(StripeConfig {
         secret_key,

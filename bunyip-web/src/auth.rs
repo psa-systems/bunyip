@@ -85,7 +85,18 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
                         // from the DB before minting, so the two agree by
                         // construction; the extra call is defensive against a
                         // parallel DB write racing our compare).
-                        let user_after = api::auth::me(api, Some(&merged)).await.unwrap_or(user);
+                        // BUNYIP-1053: the re-read failure used to be dropped
+                        // silently via `unwrap_or(user)`; still falls back to
+                        // the earlier `user` so the request keeps serving,
+                        // but log the cause so an operator can see why the
+                        // defensive re-read failed.
+                        let user_after = match api::auth::me(api, Some(&merged)).await {
+                            Ok(u) => u,
+                            Err(e) => {
+                                tracing::warn!(status = e.status, "auth: /users/me re-read after refresh failed; keeping pre-refresh user");
+                                user
+                            }
+                        };
                         return AuthCtx {
                             user: Some(user_after),
                             set_cookies: set,
@@ -102,30 +113,60 @@ pub async fn authenticate(api: &Api, cookie: Option<&str>) -> AuthCtx {
                 feedback_badge: None,
             }
         }
-        Err(e) if e.status == 401 => match api::auth::refresh(api, Some(cookie)).await {
-            Ok(set) => {
-                let merged = merge_cookies(Some(cookie), &set);
-                let user = api::auth::me(api, Some(&merged)).await.ok();
-                AuthCtx {
-                    user,
-                    set_cookies: set,
-                    forward: Some(merged),
-                    feedback_badge: None,
+        Err(e) if e.status == 401 => {
+            match api::auth::refresh(api, Some(cookie)).await {
+                Ok(set) => {
+                    let merged = merge_cookies(Some(cookie), &set);
+                    // BUNYIP-1053: the re-read failure after a SUCCESSFUL refresh
+                    // used to be dropped by `.ok()`, so the visitor saw a phantom
+                    // sign-out with no trace. Log the cause before falling through
+                    // to `None` (keeps the anonymous-user shape so the shell
+                    // still renders).
+                    let user = match api::auth::me(api, Some(&merged)).await {
+                        Ok(u) => Some(u),
+                        Err(me_err) => {
+                            tracing::warn!(status = me_err.status, "auth: /users/me after successful refresh failed; signing visitor out");
+                            None
+                        }
+                    };
+                    AuthCtx {
+                        user,
+                        set_cookies: set,
+                        forward: Some(merged),
+                        feedback_badge: None,
+                    }
+                }
+                Err(refresh_err) => {
+                    tracing::warn!(
+                        status = refresh_err.status,
+                        "auth: refresh after 401 failed; signing visitor out"
+                    );
+                    AuthCtx {
+                        user: None,
+                        set_cookies: vec![],
+                        forward: Some(cookie.to_string()),
+                        feedback_badge: None,
+                    }
                 }
             }
-            Err(_) => AuthCtx {
+        }
+        Err(e) => {
+            // BUNYIP-1053: a non-401 /users/me failure (5xx or transport) used
+            // to produce an anonymous visitor silently; only Api::send logs
+            // the transport part. Surface status and request_id here so the
+            // phantom sign-out is attributable.
+            tracing::warn!(
+                status = e.status,
+                request_id = ?e.request_id,
+                "auth: /users/me failed with a non-401 status; signing visitor out"
+            );
+            AuthCtx {
                 user: None,
                 set_cookies: vec![],
                 forward: Some(cookie.to_string()),
                 feedback_badge: None,
-            },
-        },
-        Err(_) => AuthCtx {
-            user: None,
-            set_cookies: vec![],
-            forward: Some(cookie.to_string()),
-            feedback_badge: None,
-        },
+            }
+        }
     }
 }
 

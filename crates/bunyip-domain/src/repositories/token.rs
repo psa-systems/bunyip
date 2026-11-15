@@ -237,6 +237,25 @@ impl TokenRepository {
         Ok(())
     }
 
+    /// BUNYIP-1047: single-use consume of a refresh token. Returns `true` when
+    /// this call is the one that revoked the token (the token-rotation step
+    /// on the refresh path owns), `false` when it was already revoked by a
+    /// concurrent refresh. Callers that detect `false` must refuse to mint
+    /// new tokens: single-use convention.
+    pub async fn consume_refresh_token(pool: &PgPool, token_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens SET revoked_at = NOW()
+            WHERE id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(token_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Revoke refresh token by hash
     // SPEC-7.3.245
     pub async fn revoke_refresh_token_by_hash(
@@ -837,25 +856,31 @@ impl TokenRepository {
         Ok(())
     }
 
-    /// Confirm an email change request
-    // SPEC-7.3.251, SPEC-7.3.252
+    /// Confirm an email change request.
+    ///
+    /// BUNYIP-1046: guarded single-use claim. Returns `true` when this caller
+    /// won the race and transitioned the row from unconfirmed to confirmed;
+    /// `false` when a concurrent confirmation got there first. Callers that
+    /// detect `false` must refuse to apply the change.
+    // SPEC-7.3.251, SPEC-7.3.252, SPEC-7.3.7
     pub async fn confirm_email_change_request<'e, E>(
         executor: E,
         request_id: Uuid,
-    ) -> Result<(), AppError>
+    ) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
-            UPDATE email_change_requests SET confirmed_at = NOW() WHERE id = $1
+            UPDATE email_change_requests SET confirmed_at = NOW()
+            WHERE id = $1 AND confirmed_at IS NULL
             "#,
         )
         .bind(request_id)
         .execute(executor)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     /// Count recent email change requests for a user (for rate limiting)

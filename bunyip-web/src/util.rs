@@ -183,9 +183,18 @@ fn fnv1a(s: &str) -> u64 {
 
 // SPEC-11.12.8
 fn is_future(iso: &str) -> bool {
-    DateTime::parse_from_rfc3339(iso)
-        .map(|d| d.with_timezone(&Utc) > Utc::now())
-        .unwrap_or(false)
+    match DateTime::parse_from_rfc3339(iso) {
+        Ok(d) => d.with_timezone(&Utc) > Utc::now(),
+        Err(e) => {
+            // BUNYIP-1053: an unparseable `trial_ends_at` used to read as
+            // "no trial" with no trace, so a malformed stored value quietly
+            // hid an active trial. Falls back to false so the UI stays
+            // safe, but warn-log the offending value so the row can be
+            // fixed.
+            tracing::warn!(error = %e, iso = %iso, "is_future: unparseable RFC3339 timestamp; treating as not-in-the-future");
+            false
+        }
+    }
 }
 
 // SPEC-11.12.8

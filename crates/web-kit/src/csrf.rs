@@ -6,8 +6,13 @@
 //! end-state, but it's also ~25 form templates of churn and a real
 //! regression risk for the OIDC flow if a token slips into the wrong
 //! redirect chain. This middleware ships the smaller, fully-defensive
-//! step: every POST request must carry an `Origin` (or `Referer`
-//! fallback) header that matches the BFF's configured `web_origin`.
+//! step: every state-changing POST must carry an `Origin` (or
+//! `Referer` fallback) header whose host (and non-default port) match
+//! the request's own `Host` header. BUNYIP-1042: an earlier version of
+//! this comment named the BFF's configured `web_origin` as the
+//! comparand, but the code has always compared host-to-host (Origin's
+//! host vs Host header); a reverse proxy that rewrites Host would
+//! break this check regardless of what `web_origin` was configured to.
 //!
 //! Browsers send `Origin` reliably on cross-site POSTs, so a cross-
 //! origin form submission from a compromised child app (or a phisher's
@@ -111,9 +116,15 @@ pub async fn enforce_origin_with(
 
     // SPEC-13.3.1, SPEC-13.3.2, SPEC-13.3.3, SPEC-13.3.4:
     //  Origin wins; Referer only when Origin is absent; otherwise refuse
+    //
+    // BUNYIP-1042: normalise both sides against the scheme's default port
+    // so `Host: h:443` vs `Origin: https://h:443` compares equal (either
+    // half may elect to spell the default). The Origin side already names
+    // its scheme (so a known default is derivable); the Host side does
+    // not, so comparison is "host-only or exact host:port match".
     let matches_origin = match (&host, &header_origin, &header_referer) {
-        (Some(h), Some(o), _) => host_of(o).as_deref() == Some(h.as_str()),
-        (Some(h), None, Some(r)) => host_of(r).as_deref() == Some(h.as_str()),
+        (Some(h), Some(o), _) => host_matches(h, o),
+        (Some(h), None, Some(r)) => host_matches(h, r),
         _ => false,
     };
 
@@ -143,7 +154,9 @@ pub async fn enforce_origin_with(
 // SPEC-13.3.7: host plus non-default port; unparseable input is a mismatch
 /// Extract the host (`example.com:443`) from a full URL like
 /// `https://example.com/path`. Returns `None` for inputs that don't
-/// parse as URLs (treat as mismatch).
+/// parse as URLs (treat as mismatch). `Url::port()` drops a scheme-default
+/// port, which is what callers want when they compare against a bare `Host`
+/// header; `host_matches` layers the "both-with-default-port" fallback on top.
 fn host_of(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url).ok()?;
     let host = parsed.host_str()?.to_string();
@@ -151,6 +164,39 @@ fn host_of(url: &str) -> Option<String> {
         Some(p) => Some(format!("{host}:{p}")),
         None => Some(host),
     }
+}
+
+/// BUNYIP-1042: compare a request's `Host` header against an `Origin` or
+/// `Referer` URL. The browser may spell the scheme-default port on either
+/// side or neither; a bare match or a default-expanded match both count.
+fn host_matches(host_header: &str, url: &str) -> bool {
+    let Some(parsed) = url::Url::parse(url).ok() else {
+        return false;
+    };
+    let Some(url_host) = parsed.host_str() else {
+        return false;
+    };
+    let url_host_colon = parsed
+        .port()
+        .map(|p| format!("{url_host}:{p}"))
+        .unwrap_or_else(|| url_host.to_string());
+    if url_host_colon == host_header {
+        return true;
+    }
+    // Fall back to the scheme's known default so `Host: h:443` vs
+    // `Origin: https://h` (or vice versa) still matches.
+    if let Some(default_p) = parsed.port_or_known_default() {
+        let with_default = format!("{url_host}:{default_p}");
+        if with_default == host_header {
+            return true;
+        }
+        // Also handle the mirror: url carries the default explicitly but
+        // the Host header omits it.
+        if parsed.port().is_some() && url_host == host_header {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
