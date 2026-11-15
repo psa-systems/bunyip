@@ -168,7 +168,7 @@ pub async fn seed_export(State(st): State<AppState>, headers: HeaderMap) -> Resp
         Err(e) => {
             // BUNYIP-1056: transport failure also silently redirected;
             // log the cause before redirecting.
-            tracing::warn!(error = %e, "admin/seed: seed export transport failed");
+            tracing::warn!(error = ?e, "admin/seed: seed export transport failed");
             redirect_cookies(
                 &format!(
                     "/admin/seed?error={}",
