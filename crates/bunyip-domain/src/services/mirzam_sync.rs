@@ -221,7 +221,19 @@ impl MirzamClient {
             }
         };
         let status = response.status().as_u16();
-        let body = response.text().await.unwrap_or_default();
+        // BUNYIP-1048: a body-read failure used to degrade to an empty string
+        // with no log, so the caller's 409 classifier and failure-detail
+        // formatter would see nothing. Log the read failure at warn so the
+        // empty-body fallback is attributable; the empty body itself is
+        // still returned, which keeps the existing status-based classifier
+        // working.
+        let body = match response.text().await {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!(status, error = %e, "mirzam: response body read failed; returning empty body");
+                String::new()
+            }
+        };
         Ok((status, body))
     }
 
