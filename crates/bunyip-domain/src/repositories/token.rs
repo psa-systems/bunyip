@@ -237,6 +237,25 @@ impl TokenRepository {
         Ok(())
     }
 
+    /// BUNYIP-1047: single-use consume of a refresh token. Returns `true` when
+    /// this call is the one that revoked the token (the token-rotation step
+    /// on the refresh path owns), `false` when it was already revoked by a
+    /// concurrent refresh. Callers that detect `false` must refuse to mint
+    /// new tokens: single-use convention.
+    pub async fn consume_refresh_token(pool: &PgPool, token_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE refresh_tokens SET revoked_at = NOW()
+            WHERE id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(token_id)
+        .execute(pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
     /// Revoke refresh token by hash
     // SPEC-7.3.245
     pub async fn revoke_refresh_token_by_hash(
