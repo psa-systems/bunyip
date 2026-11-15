@@ -121,7 +121,15 @@ export async function registerDisposable(ctx: APIRequestContext): Promise<Dispos
 // SPEC-3.39.6
 export async function deleteMe(ctx: APIRequestContext, password: string): Promise<void> {
   try {
-    await ctx.delete(`${routes.userMe}?purge=1`, { data: { password } });
+    const resp = await ctx.delete(`${routes.userMe}?purge=1`, { data: { password } });
+    // BUNYIP-1041: a non-2xx reply used to be dropped on the floor, so a
+    // cleanup that HTTP-failed looked identical to one that succeeded.
+    // Log the status and a bounded body excerpt; still non-throwing.
+    if (!resp.ok()) {
+      let body = "";
+      try { body = (await resp.text()).slice(0, 500); } catch { body = "<unreadable>"; }
+      console.warn(`[accounts] self-delete HTTP ${resp.status()} (will be swept later): ${body}`);
+    }
   } catch (err) {
     console.warn(`[accounts] self-delete failed (will be swept later): ${String(err)}`);
   }
@@ -137,7 +145,13 @@ export async function deleteMe(ctx: APIRequestContext, password: string): Promis
 // SPEC-3.39.6
 export async function softDeleteMe(ctx: APIRequestContext, password: string): Promise<void> {
   try {
-    await ctx.delete(routes.userMe, { data: { password } });
+    const resp = await ctx.delete(routes.userMe, { data: { password } });
+    // BUNYIP-1041: non-2xx replies were silently dropped; log them.
+    if (!resp.ok()) {
+      let body = "";
+      try { body = (await resp.text()).slice(0, 500); } catch { body = "<unreadable>"; }
+      console.warn(`[accounts] self-soft-delete HTTP ${resp.status()} (will be swept later): ${body}`);
+    }
   } catch (err) {
     console.warn(`[accounts] self-soft-delete failed (will be swept later): ${String(err)}`);
   }
