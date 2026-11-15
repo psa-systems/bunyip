@@ -979,9 +979,12 @@ mod tests {
         assert!(cookie.http_only().unwrap_or(false));
         assert!(cookie.secure().unwrap_or(false));
         assert_eq!(cookie.domain(), Some(".example.com"));
+        // BUNYIP-1043: cookie Max-Age is 30 days, sized to the longest
+        // remembered session (BUNYIP-381); the server's op_sessions row
+        // stays the authoritative deadline for non-remember sessions.
         assert_eq!(
             cookie.max_age(),
-            Some(actix_web::cookie::time::Duration::days(7))
+            Some(actix_web::cookie::time::Duration::days(30))
         );
     }
 
@@ -1012,9 +1015,10 @@ mod tests {
             .find(|c| c.domain() == Some(".mokosh.systems"))
             .expect("domain-scoped set cookie present");
         assert_eq!(set.value(), "sid123");
+        // BUNYIP-1043: Max-Age is 30 days (see op_session_cookie_properties).
         assert_eq!(
             set.max_age(),
-            Some(actix_web::cookie::time::Duration::days(7))
+            Some(actix_web::cookie::time::Duration::days(30))
         );
 
         let clear = cookies
