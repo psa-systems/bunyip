@@ -455,7 +455,30 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
         }
     };
 
-    // SPEC-8.33.6, SPEC-8.33.8
+    // SPEC-8.33.7, SPEC-8.33.8: BUNYIP-1048 reordering - parse only the
+    // schema_version field first, so a future-version envelope whose shape
+    // has evolved is classified as VersionMismatch (what the module doc
+    // promises) rather than Unreachable("did not parse as a status
+    // envelope"). The version-matched branch then parses the full envelope.
+    #[derive(serde::Deserialize)]
+    struct SchemaVersionOnly {
+        schema_version: String,
+    }
+
+    let reported_version = match serde_json::from_str::<SchemaVersionOnly>(&body) {
+        Ok(peek) => peek.schema_version,
+        Err(e) => {
+            return AppProviderStatus::Unreachable {
+                reason: format!("response did not carry a `schema_version` field: {e}"),
+            }
+        }
+    };
+
+    if reported_version != PROVIDER_STATUS_SCHEMA_VERSION {
+        return AppProviderStatus::VersionMismatch { reported_version };
+    }
+
+    // SPEC-8.33.6
     let envelope: ProviderStatusEnvelope = match serde_json::from_str(&body) {
         Ok(envelope) => envelope,
         Err(e) => {
@@ -464,13 +487,6 @@ pub async fn fetch_remote(app: &RemoteProviderApp) -> AppProviderStatus {
             }
         }
     };
-
-    // SPEC-8.33.7
-    if envelope.schema_version != PROVIDER_STATUS_SCHEMA_VERSION {
-        return AppProviderStatus::VersionMismatch {
-            reported_version: envelope.schema_version,
-        };
-    }
 
     AppProviderStatus::Ok {
         report: envelope.report,
