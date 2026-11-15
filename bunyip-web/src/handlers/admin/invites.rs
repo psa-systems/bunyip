@@ -218,7 +218,19 @@ pub async fn invite_create(
     let email = f.email.trim();
     let target = match admin_api::create_admin_invite(&st.api, c.forward.as_deref(), email).await {
         Ok(()) => format!("/admin/invites?toast_ok=Invited%20{}", urlenc(email)),
-        Err(e) => format!("/admin/invites?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: previously the API message reached the admin's
+            // toast but the failure was not logged here. Log the
+            // identifying value (the email being invited); the admin
+            // toast content is unchanged.
+            tracing::warn!(
+                email = %email,
+                status = e.status,
+                code = %e.code,
+                "admin/invites: create_admin_invite failed"
+            );
+            format!("/admin/invites?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -241,7 +253,16 @@ pub async fn invite_revoke(
     let target =
         match admin_api::revoke_admin_invite(&st.api, c.forward.as_deref(), &invite_id).await {
             Ok(()) => "/admin/invites?toast_ok=Invite%20revoked".to_string(),
-            Err(e) => format!("/admin/invites?toast_err={}", urlenc(&e.user_message())),
+            Err(e) => {
+                // BUNYIP-1055: log the identifying value; toast unchanged.
+                tracing::warn!(
+                    invite_id = %invite_id,
+                    status = e.status,
+                    code = %e.code,
+                    "admin/invites: revoke_admin_invite failed"
+                );
+                format!("/admin/invites?toast_err={}", urlenc(&e.user_message()))
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }

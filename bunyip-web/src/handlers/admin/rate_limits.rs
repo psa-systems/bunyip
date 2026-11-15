@@ -706,7 +706,17 @@ pub async fn rate_limit_config_save(
     .await
     {
         Ok(()) => "/admin/rate-limits?toast_ok=Rate%20limit%20updated".to_string(),
-        Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: log the identifying value (action) with the
+            // cause; toast text unchanged (carries the user_message).
+            tracing::warn!(
+                action = %f.action.trim(),
+                status = e.status,
+                code = %e.code,
+                "admin/rate-limits: rate_limit_config save failed"
+            );
+            format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -739,7 +749,16 @@ pub async fn rate_limit_config_reset(
             Ok(()) => {
                 "/admin/rate-limits?toast_ok=Reverted%20to%20the%20default%20limit".to_string()
             }
-            Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+            Err(e) => {
+                // BUNYIP-1055: log the action; toast carries user_message.
+                tracing::warn!(
+                    action = %f.action.trim(),
+                    status = e.status,
+                    code = %e.code,
+                    "admin/rate-limits: delete_rate_limit_config failed"
+                );
+                format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message()))
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
