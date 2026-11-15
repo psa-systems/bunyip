@@ -502,6 +502,19 @@ pub async fn authorize(
         ));
     }
 
+    // BUNYIP-1043: the `openid` check at the top of this handler runs on the
+    // RAW `q.scope`, not the intersection; a client whose `allowed_scopes`
+    // did not include `openid` would pass the raw check (because the user
+    // requested it) but the intersection would strip it, leaving a code
+    // issued without `openid`. Re-check after the intersection so `openid`
+    // has to survive the client's allowed set too.
+    if !requested_scopes.iter().any(|s| s == "openid") {
+        return Ok(oidc_error(
+            "invalid_scope",
+            "openid is not in the intersection of the requested scopes and this client's allowed scopes",
+        ));
+    }
+
     // BUNYIP-140 JIT path: replace the old "grant every allowed_scope"
     // behaviour with a baseline-only auto-grant. Scopes that disclose
     // user-profile data (`profile`, `phone`) are no longer auto-granted;
@@ -1041,7 +1054,16 @@ async fn handle_authorization_code_grant(
         &code_row.scope,
         code_row.auth_time,
         code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
-        &code_row.amr.clone().unwrap_or_default(),
+        // BUNYIP-1043: the authorize path and the refresh family default amr
+        // to `["pwd"]` (see lines 658 and 1070 in this file). The code-grant
+        // path used to default to an EMPTY list via `unwrap_or_default()`,
+        // so an auth code from a session without a stored amr minted an
+        // at+jwt with no amr claim while the sibling paths carried one.
+        // Align to the same default.
+        &code_row
+            .amr
+            .clone()
+            .unwrap_or_else(|| vec!["pwd".to_string()]),
         code_row.selected_tenant_id,
         Some(&code_row.op_session_sid),
     )?;
