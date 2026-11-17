@@ -140,10 +140,26 @@ fn format_uptime(secs: u64) -> String {
 /// elides the rest. An unexpected shape renders nothing rather than guessing.
 fn update_summary(update: Option<&serde_json::Value>) -> Option<String> {
     let obj = update?.as_object()?;
-    let available = obj
-        .get("available")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // BUNYIP-1056: a missing or non-bool `available` used to silently read as
+    // false, so a payload shape drift could hide an available update. Log and
+    // bail so the operator sees "no update banner" instead of a false "none
+    // available" and gets a log trace to chase the shape in dunite.
+    let available = match obj.get("available") {
+        Some(v) => match v.as_bool() {
+            Some(b) => b,
+            None => {
+                tracing::warn!(
+                    value = ?v,
+                    "update_summary: `available` is not a bool; omitting update banner"
+                );
+                return None;
+            }
+        },
+        None => {
+            tracing::warn!("update_summary: `available` missing; omitting update banner");
+            return None;
+        }
+    };
     if !available {
         return None;
     }
@@ -260,11 +276,37 @@ pub async fn system_status(State(st): State<crate::web::AppState>, headers: Head
         admin_api::system_health(&st.api, c.forward.as_deref()),
         admin_api::api_version(&st.api)
     );
+    // BUNYIP-1056: each sub-fetch was surfaced on screen but not logged, so
+    // an operator could not correlate a repeated error with an incident. Log
+    // each at warn with its request_id once at the handler boundary.
     let fetch_error = fetched.as_ref().err().cloned();
+    if let Some(ref e) = fetch_error {
+        tracing::warn!(
+            error = %e.user_message(),
+            request_id = ?e.request_id,
+            admin_id = %user.id,
+            "admin/status: integration_status fetch failed"
+        );
+    }
     let integrations = fetched.unwrap_or_default();
     let health_error = fetched_health.as_ref().err().cloned();
+    if let Some(ref e) = health_error {
+        tracing::warn!(
+            error = %e.user_message(),
+            request_id = ?e.request_id,
+            admin_id = %user.id,
+            "admin/status: system_health fetch failed"
+        );
+    }
     let health = fetched_health.ok();
     let api_version_error = fetched_api_version.as_ref().err().cloned();
+    if let Some(ref e) = api_version_error {
+        tracing::warn!(
+            error = %e.user_message(),
+            request_id = ?e.request_id,
+            "admin/status: api_version fetch failed"
+        );
+    }
     let api_version = fetched_api_version.ok();
     let content = status_content(
         health.as_ref(),

@@ -105,6 +105,11 @@ since = "v0.17.0"
 required = false
 
 [[variable]]
+name = "BUNYIP_BLOG_URL"
+since = "v0.22.0"
+required = false
+
+[[variable]]
 name = "BUNYIP_COMMUNITY_URL"
 since = "v0.17.0"
 required = false

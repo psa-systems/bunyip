@@ -475,6 +475,9 @@ services:
       # ══ Integration: Let's Chat community ═════════════════════════════════
       # BUNYIP-329: empty hides the sidebar Community button entirely.
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
+      # BUNYIP-1077: empty hides the Blog link in the public header and footer
+      # and the "Read past posts on the blog" line in the newsletter section.
+      BUNYIP_BLOG_URL: ${BUNYIP_BLOG_URL:-}
     expose:
       - "4400"
     ports:

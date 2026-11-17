@@ -34,6 +34,21 @@ use crate::web::{redirect_cookies, AppState};
 /// key simply could not see them.
 pub(super) type Loaded<'a, T> = Result<&'a [T], &'a ApiError>;
 
+/// BUNYIP-1056: log an admin-visible `?toast_err=...` failure so the operator
+/// has a trace alongside the toast the admin sees. Every write handler on the
+/// Stripe page routes its ApiError through this before building the redirect
+/// target. The toast URL itself is built by the caller because some screens
+/// use `user_message_with_reference()` and others use `user_message()`, and
+/// the catalog form appends submitted values to the query string.
+fn log_stripe_err(e: &ApiError, action: &str) {
+    tracing::warn!(
+        error = %e.user_message(),
+        request_id = ?e.request_id,
+        action = %action,
+        "admin/stripe: {action} failed"
+    );
+}
+
 // SPEC-12.27.6: cause line for an unreadable list
 /// The cause line under a "could not read" box.
 ///
@@ -1145,10 +1160,13 @@ pub async fn stripe_product_create(
     }
     let target = match admin_api::create_stripe_product(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => "/admin/stripe?toast_ok=Product%20created".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "create product");
+            format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1220,10 +1238,13 @@ pub async fn stripe_product_edit(
     let target =
         match admin_api::update_stripe_product(&st.api, c.forward.as_deref(), &id, body).await {
             Ok(()) => "/admin/stripe?toast_ok=Product%20updated".to_string(),
-            Err(e) => format!(
-                "/admin/stripe?toast_err={}",
-                urlenc(&e.user_message_with_reference())
-            ),
+            Err(e) => {
+                log_stripe_err(&e, "edit product");
+                format!(
+                    "/admin/stripe?toast_err={}",
+                    urlenc(&e.user_message_with_reference())
+                )
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1242,10 +1263,13 @@ pub async fn stripe_product_archive(
     };
     let target = match admin_api::archive_stripe_product(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Product%20archived".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "archive product");
+            format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1265,7 +1289,10 @@ pub async fn stripe_product_unarchive(
     let target = match admin_api::unarchive_stripe_product(&st.api, c.forward.as_deref(), &id).await
     {
         Ok(()) => "/admin/stripe?toast_ok=Product%20restored".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            log_stripe_err(&e, "unarchive product");
+            format!("/admin/stripe?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1325,6 +1352,7 @@ pub async fn stripe_webhook_create(
         // text back to the page. A toast would fade in 2.5 seconds and the form
         // would come back blank, so the admin retyped everything to retry.
         Err(e) => {
+            log_stripe_err(&e, "create webhook endpoint");
             let mut target = format!(
                 "/admin/stripe?webhook_error={}&webhook_url={}&webhook_events={}",
                 urlenc(&e.user_message_with_reference()),
@@ -1387,10 +1415,13 @@ pub async fn stripe_webhook_delete(
     };
     let target = match admin_api::delete_stripe_webhook(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Webhook%20endpoint%20deleted".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "delete webhook endpoint");
+            format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1450,10 +1481,13 @@ pub async fn stripe_price_create(
     });
     let target = match admin_api::create_stripe_price(&st.api, c.forward.as_deref(), body).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20created".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "create price");
+            format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1500,10 +1534,13 @@ pub async fn stripe_price_replace(
     let target =
         match admin_api::replace_stripe_price(&st.api, c.forward.as_deref(), &id, body).await {
             Ok(()) => "/admin/stripe?toast_ok=Price%20replaced".to_string(),
-            Err(e) => format!(
-                "/admin/stripe?toast_err={}",
-                urlenc(&e.user_message_with_reference())
-            ),
+            Err(e) => {
+                log_stripe_err(&e, "replace price");
+                format!(
+                    "/admin/stripe?toast_err={}",
+                    urlenc(&e.user_message_with_reference())
+                )
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1522,10 +1559,13 @@ pub async fn stripe_price_archive(
     };
     let target = match admin_api::archive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20archived".to_string(),
-        Err(e) => format!(
-            "/admin/stripe?toast_err={}",
-            urlenc(&e.user_message_with_reference())
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "archive price");
+            format!(
+                "/admin/stripe?toast_err={}",
+                urlenc(&e.user_message_with_reference())
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1544,7 +1584,10 @@ pub async fn stripe_price_unarchive(
     };
     let target = match admin_api::unarchive_stripe_price(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => "/admin/stripe?toast_ok=Price%20restored".to_string(),
-        Err(e) => format!("/admin/stripe?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            log_stripe_err(&e, "unarchive price");
+            format!("/admin/stripe?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1649,11 +1692,14 @@ pub async fn stripe_catalog_save(
         // BUNYIP-616: carry the submitted values on the failure redirect so the
         // re-rendered form shows what the admin submitted, not the stored row,
         // and the only thing left to change is the value that was rejected.
-        Err(e) => format!(
-            "/admin/tier-settings?toast_err={}&{}",
-            urlenc(&e.user_message_with_reference()),
-            catalog_form_query(&f),
-        ),
+        Err(e) => {
+            log_stripe_err(&e, "save tier catalog mapping");
+            format!(
+                "/admin/tier-settings?toast_err={}&{}",
+                urlenc(&e.user_message_with_reference()),
+                catalog_form_query(&f),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }

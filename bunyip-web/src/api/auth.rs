@@ -8,7 +8,7 @@ use super::types::{
     AuthResponse, PaginatedResponse, RecoveryCodesResponse, SetupStatus, TrustedDeviceInfo,
     TwoFactorSetupResponse, TwoFactorStatusResponse, User,
 };
-use super::{decode_error, ok_data, parse, Api, ApiError};
+use super::{decode_error, ok_data, parse, Api, ApiError, DECODE_ERROR_CODE, DECODE_ERROR_MESSAGE};
 
 // SPEC-11.15.1
 /// A page of the signed-in user's trusted devices (BUNYIP-138 / BUNYIP-177).
@@ -327,12 +327,31 @@ pub async fn accept_invite(
         .and_then(|b| b.as_bool())
         .unwrap_or(false)
     {
-        let email = data
+        // BUNYIP-1053: missing / non-string email on the needs_password branch
+        // used to collapse to empty; the handler then rendered an empty invite
+        // form. Log + surface as decode error so the user sees "retry" rather
+        // than a form with no email.
+        match data
             .get("email")
             .and_then(|e| e.as_str())
-            .unwrap_or_default()
-            .to_string();
-        return Ok((Some(email), None, cookies));
+            .filter(|s| !s.is_empty())
+        {
+            Some(email) => return Ok((Some(email.to_string()), None, cookies)),
+            None => {
+                tracing::error!(
+                    endpoint = "/auth/invite/accept",
+                    "needs_password=true without non-empty email"
+                );
+                return Err(ApiError {
+                    status: 0,
+                    code: DECODE_ERROR_CODE.into(),
+                    message: DECODE_ERROR_MESSAGE.into(),
+                    retry_after: None,
+                    request_id: None,
+                    bucket: None,
+                });
+            }
+        }
     }
     let auth: AuthResponse = serde_json::from_value(data)
         .map_err(|e| decode_error::<AuthResponse>("/auth/invite/accept", &e))?;
@@ -475,11 +494,30 @@ pub async fn confirm_email_verification(api: &Api, token: &str) -> Result<String
         )
         .await?;
     let data = ok_data(&r)?;
-    Ok(data
+    // BUNYIP-1053: missing / non-string membership_tier used to collapse to
+    // the empty string with no log. A 2xx missing this field is a deployment
+    // skew, surface as decode error.
+    match data
         .get("membership_tier")
         .and_then(|t| t.as_str())
-        .unwrap_or_default()
-        .to_string())
+        .filter(|s| !s.is_empty())
+    {
+        Some(tier) => Ok(tier.to_string()),
+        None => {
+            tracing::error!(
+                endpoint = "/users/me/email/verify/confirm",
+                "2xx response missing membership_tier string"
+            );
+            Err(ApiError {
+                status: 0,
+                code: DECODE_ERROR_CODE.into(),
+                message: DECODE_ERROR_MESSAGE.into(),
+                retry_after: None,
+                request_id: r.request_id.clone(),
+                bucket: None,
+            })
+        }
+    }
 }
 
 // SPEC-11.15.16

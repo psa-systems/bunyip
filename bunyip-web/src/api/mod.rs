@@ -220,11 +220,20 @@ impl Api {
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
+        // BUNYIP-1053: body-read and body-parse failures used to collapse to
+        // Value::Null with no log, so a non-JSON 5xx surfaced to the user as
+        // REQUEST_FAILED with no operator trace. Log both now.
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api body read failed");
+            String::new()
+        });
         let body = if text.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&text).unwrap_or(Value::Null)
+            serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, %url, status, "bunyip-api body parse failed");
+                Value::Null
+            })
         };
         Ok(Resp {
             path: path.to_string(),
@@ -258,22 +267,36 @@ impl Api {
             .header(ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|e| ApiError {
-                status: 0,
-                code: "FETCH_FAILED".into(),
-                message: format!("GET {url}: {e}"),
-                retry_after: None,
-                request_id: None,
-                bucket: None,
+            .map_err(|e| {
+                // BUNYIP-1053: get_root used to bypass server-status
+                // classification, so /version left no trace on an outage.
+                tracing::warn!(error = %e, %url, "bunyip-api root request failed (transport)");
+                crate::server_status::note_transport_error();
+                ApiError {
+                    status: 0,
+                    code: "FETCH_FAILED".into(),
+                    message: format!("GET {url}: {e}"),
+                    retry_after: None,
+                    request_id: None,
+                    bucket: None,
+                }
             })?;
         let status = resp.status().as_u16();
+        // BUNYIP-1053: mirror send(): any response clears the down state.
+        crate::server_status::note_status(status);
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api root body read failed");
+            String::new()
+        });
         let body = if text.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&text).unwrap_or(Value::Null)
+            serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, %url, status, "bunyip-api root body parse failed");
+                Value::Null
+            })
         };
         Ok(Resp {
             path: path.to_string(),
@@ -377,8 +400,14 @@ impl Api {
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
-        let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api form body read failed");
+            String::new()
+        });
+        let body = serde_json::from_str(&text).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api form body parse failed");
+            Value::Null
+        });
         Ok(Resp {
             path: path.to_string(),
             status,
