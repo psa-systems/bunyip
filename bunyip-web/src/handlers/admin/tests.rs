@@ -3045,34 +3045,11 @@ mod rate_limit_management_tests {
     }
 }
 
-#[cfg(test)]
-mod tier_settings_partial_failure_tests {
-    //! BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
-    //! separate backend writes; a failure of the second after the first
-    //! already committed must not read as "nothing was saved".
-    use super::*;
-    use crate::api::ApiError;
-
-    fn cfg() -> TierConfigResponse {
-        serde_json::from_value(json!({})).expect("defaulted TierConfigResponse")
-    }
-
-    fn form_values() -> TierFormValues {
-        TierFormValues {
-            lifetime_slots: "10".into(),
-            early_adopter_slots: "5".into(),
-            early_adopter_trial_days: "14".into(),
-            standard_trial_days: "7".into(),
-            trial_period_days: "30".into(),
-            orgs_enabled: true,
-        }
-    }
-
-    // BUNYIP-1056: the earlier BUNYIP-829 "tier settings saved but stripe
-    // step failed" partial-failure test is gone with its helper; the save
-    // is now a single transaction through `update_tier_settings`, so the
-    // partial state it covered can no longer be reached.
-}
+// BUNYIP-1056: the earlier BUNYIP-829 `tier_settings_partial_failure_tests`
+// module (and its `stripe_step_error_message` test) is gone with the helper
+// it exercised; `update_tier_settings` now covers both writes in one
+// transaction, so the "tier settings saved but stripe step failed" state the
+// test asserted can no longer be reached.
 
 #[cfg(test)]
 mod feature_toggle_page_tests {
