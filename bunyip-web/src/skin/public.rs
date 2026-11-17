@@ -237,9 +237,21 @@ fn newsletter_section(url: &str, brand_name: &str) -> Markup {
 /// shared cache.
 async fn landing_applications(st: &AppState, cookie: Option<&str>) -> Vec<Application> {
     match cookie {
-        Some(cookie) => calls::applications(&st.api, Some(cookie))
-            .await
-            .unwrap_or_default(),
+        // BUNYIP-1054: a failed cookie-bearing fetch used to collapse to an
+        // empty list with no log, so an entitled visitor silently lost their
+        // application cards on an API outage. Log and still degrade to empty
+        // so the page renders.
+        Some(cookie) => match calls::applications(&st.api, Some(cookie)).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e.user_message(),
+                    request_id = ?e.request_id,
+                    "landing_applications: cookie-bearing /v1/applications fetch failed; rendering empty"
+                );
+                Vec::new()
+            }
+        },
         None => (*st.public_applications().await).clone(),
     }
 }
