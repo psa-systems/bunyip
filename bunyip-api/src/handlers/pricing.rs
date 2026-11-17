@@ -558,9 +558,12 @@ async fn slot_usage(pool: &PgPool) -> ((i64, i64), Option<UnpublishedReason>) {
                 error = %e,
                 "pricing: tier-assignment count failed; treating tiers as available"
             );
-            ((0, 0), Some(UnpublishedReason::UsageCountFailed {
-                detail: e.to_string(),
-            }))
+            (
+                (0, 0),
+                Some(UnpublishedReason::UsageCountFailed {
+                    detail: e.to_string(),
+                }),
+            )
         }
     }
 }

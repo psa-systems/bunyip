@@ -159,24 +159,20 @@ pub async fn consent_get(
     // unreachable" without a log, so the "An application" fallback card was
     // the first and only trace. Log cause + client_id at warn and keep the
     // fallback so the page still renders.
-    let identity = match crate::api::calls::client_identity(
-        &st.api,
-        c.forward.as_deref(),
-        &q.client_id,
-    )
-    .await
-    {
-        Ok(v) => Some(v),
-        Err(e) => {
-            tracing::warn!(
-                error = %e.user_message(),
-                request_id = ?e.request_id,
-                client_id = %q.client_id,
-                "consent_get: client_identity lookup failed; rendering generic app card"
-            );
-            None
-        }
-    };
+    let identity =
+        match crate::api::calls::client_identity(&st.api, c.forward.as_deref(), &q.client_id).await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e.user_message(),
+                    request_id = ?e.request_id,
+                    client_id = %q.client_id,
+                    "consent_get: client_identity lookup failed; rendering generic app card"
+                );
+                None
+            }
+        };
     let client_name = identity.as_ref().and_then(|i| i.name.as_deref());
     let logo_uri = identity.as_ref().and_then(|i| i.logo_uri.as_deref());
 
