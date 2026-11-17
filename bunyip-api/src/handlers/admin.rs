@@ -2126,12 +2126,18 @@ pub async fn create_admin_invite(
         )
         .await?;
 
-    // Send invite email (in background)
+    // Send invite email (in background per SPEC-10.8.5); BUNYIP-265: no raw
+    // email in logs, correlate via the initiating admin id.
     let email = body.email.clone();
     let email_svc = email_service.get_ref().clone();
+    let initiator = admin.0.sub;
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_admin_invite(&email, &token).await {
-            tracing::error!(error = %e, email = %email, "Failed to send admin invite email");
+            tracing::error!(
+                error = %e,
+                admin_id = %initiator,
+                "Failed to send admin invite email"
+            );
         }
     });
 
