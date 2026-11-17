@@ -907,7 +907,21 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
     // until the webhook lands. Lifetime members and any user already
     // Active see the celebration unchanged.
     let fwd = c.forward.as_deref();
-    let membership = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    // BUNYIP-1057: checkout_success used to swallow a membership-fetch failure
+    // to None, so the "Finalizing your membership" card persisted indefinitely
+    // without any operator trace on API outage. Log cause + request_id.
+    let membership = match calls::membership(&st.api, fwd).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "checkout_success: membership fetch failed; rendering finalizing card"
+            );
+            None
+        }
+    };
     let is_active = user.lifetime_member
         || membership
             .as_ref()
@@ -1129,7 +1143,22 @@ pub async fn membership(
         st.stripe_enabled(),
         st.pricing(),
     );
-    let current: Option<Membership> = membership_data.unwrap_or(None);
+    // BUNYIP-1057: a membership-fetch failure used to collapse to None with
+    // no log, so the page rendered "No Active Membership" + Subscribe silently
+    // on API outage. Log the cause and keep the None fallback so the rest of
+    // the join still renders.
+    let current: Option<Membership> = match membership_data {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership page: membership fetch failed; rendering no-active"
+            );
+            None
+        }
+    };
     let payments_error = payments_data.as_ref().err().cloned();
     let payments = payments_data.unwrap_or_default();
     let invoices_error = invoices_data.as_ref().err().cloned();
@@ -1397,39 +1426,73 @@ fn humanise_checkout_error(raw: &str) -> String {
 }
 // SPEC-12.55.10: cancel at period end
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::cancel(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: `.unwrap_or_default()` used to turn a failed cancel into
+    // an empty cookie list, so a Membership redirect looked like success to
+    // the user. Log the cause so the operator can trace the silent fail; the
+    // bounce back to /membership re-reads the real membership state so the
+    // user ends up seeing the still-Active card if nothing changed.
+    let extra = match calls::cancel(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_cancel: cancel failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 // SPEC-12.55.10: cancel immediately
 pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::cancel_now(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: same silent-fail pattern as membership_cancel.
+    let extra = match calls::cancel_now(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_cancel_now: cancel_now failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 // SPEC-12.55.10: undo pending cancellation
 pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::reactivate(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: same silent-fail pattern as membership_cancel.
+    let extra = match calls::reactivate(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_reactivate: reactivate failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
