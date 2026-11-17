@@ -284,18 +284,10 @@ pub struct TierForm {
     pub orgs_enabled: Option<String>,
 }
 
-/// BUNYIP-829: `update_tier_config` and `update_stripe_config` are two
-/// separate backend writes that cannot be wrapped in one database transaction
-/// from this BFF. When the first succeeds and the second fails, the tier
-/// settings (slots, trial days, organizations toggle) are already committed,
-/// so the error must say so rather than reading as a single undifferentiated
-/// failure that implies nothing was saved.
-pub(super) fn stripe_step_error_message(e: &ApiError) -> String {
-    format!(
-        "Tier settings (slots, trial days, organizations toggle) were saved, but the checkout trial period was not: {}",
-        e.user_message()
-    )
-}
+// BUNYIP-1056: the earlier BUNYIP-829 `stripe_step_error_message` helper
+// is gone - the tier + stripe writes are now one transaction through
+// `update_tier_settings`, so the "partial failure" message it rendered
+// can no longer happen. The retired-helper test was dropped with it.
 
 // SPEC-12.26.2, SPEC-12.26.3, SPEC-12.26.4, SPEC-12.20.2: validate, one API call
 pub async fn tier_settings_save(
@@ -354,7 +346,17 @@ pub async fn tier_settings_save(
             // trial length did not.
             match admin_api::update_tier_settings(&st.api, fwd, body).await {
                 Ok(()) => return redirect_cookies("/admin/tier-settings", &c.set_cookies),
-                Err(e) => e.user_message(),
+                Err(e) => {
+                    // BUNYIP-1056: top-level save failure used to re-render
+                    // with no operator trace; log cause + request_id + admin id.
+                    tracing::warn!(
+                        error = %e.user_message(),
+                        request_id = ?e.request_id,
+                        admin_id = %user.id,
+                        "admin/tier-settings: save failed"
+                    );
+                    e.user_message()
+                }
             }
         }
         Err(msg) => msg,

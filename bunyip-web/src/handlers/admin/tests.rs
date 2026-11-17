@@ -3068,45 +3068,10 @@ mod tier_settings_partial_failure_tests {
         }
     }
 
-    #[test]
-    fn stripe_step_failure_says_tier_settings_were_saved() {
-        // Simulates `update_tier_config` returning `Ok` and `update_stripe_config`
-        // returning `Err`: the handler builds its error message from
-        // `stripe_step_error_message`, which must distinguish "tier settings
-        // saved, checkout trial not saved" from a generic failure.
-        let stripe_err = ApiError {
-            status: 500,
-            code: "INTERNAL".into(),
-            message: "boom".into(),
-            retry_after: None,
-            request_id: None,
-            bucket: None,
-        };
-        let msg = stripe_step_error_message(&stripe_err);
-        let cfg = cfg();
-        let values = form_values();
-        let html = tier_settings_content(
-            Ok(&cfg),
-            None,
-            Err("unavailable"),
-            &values,
-            Some(&msg),
-            None,
-        )
-        .into_string();
-
-        assert!(
-            html.contains("Tier settings")
-                && html.contains("were saved")
-                && html.contains("checkout trial period was not"),
-            "the rendered page must say the tier settings saved and the checkout trial did not: {html}"
-        );
-        assert_ne!(
-            msg,
-            stripe_err.user_message(),
-            "the message must distinguish the partial-failure outcome from the bare backend error"
-        );
-    }
+    // BUNYIP-1056: the earlier BUNYIP-829 "tier settings saved but stripe
+    // step failed" partial-failure test is gone with its helper; the save
+    // is now a single transaction through `update_tier_settings`, so the
+    // partial state it covered can no longer be reached.
 }
 
 #[cfg(test)]

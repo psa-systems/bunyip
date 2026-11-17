@@ -255,7 +255,18 @@ pub async fn system_config_save(
     .await
     {
         Ok(()) => return redirect_cookies("/admin/system-config", &c.set_cookies),
-        Err(e) => e.user_message(),
+        Err(e) => {
+            // BUNYIP-1056: the save path used to swallow the cause; the user
+            // sees only the generic user_message and the operator had no
+            // trace at all. Log the full cause with request_id.
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                admin_id = %user.id,
+                "admin/system-config: save failed"
+            );
+            e.user_message()
+        }
     };
 
     // SPEC-12.24.3: failure re-renders with submitted values and the error
