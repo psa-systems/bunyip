@@ -151,6 +151,17 @@ pub(super) fn tier_settings_content(
                     // BUNYIP-527: the catalog mapping (price selects + per-tier
                     // visibility + publish switch + live status), its own form
                     // posting to /admin/tier-settings/catalog.
+                    // BUNYIP-1056: an unreadable Stripe price list used to leave
+                    // the catalog selects as "derived from the price on save"
+                    // placeholders with no on-screen notice. Say so explicitly
+                    // above the section so the admin knows why the selects are
+                    // empty and where to look (the Stripe page) to fix it.
+                    @if prices.is_none() {
+                        (error_box(
+                            "Could not load the Stripe price list, so the catalog selects below are empty. \
+                             Check the Stripe page (secret key + permissions) and reload this page."
+                        ))
+                    }
                     (super::stripe_catalog_section(Ok(c), prices, status, catalog_submitted))
                 }
             }
