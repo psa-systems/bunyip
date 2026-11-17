@@ -639,14 +639,46 @@ pub async fn download_asset(
             }
             builder
                 .body(Body::from_stream(resp.bytes_stream()))
-                .unwrap_or_else(|_| redirect_cookies("/downloads", &c.set_cookies))
+                .unwrap_or_else(|e| {
+                    // BUNYIP-1057: a response-build failure used to redirect
+                    // with no trace; the user saw the Downloads page again
+                    // for no visible reason. Log the cause before the bounce.
+                    tracing::warn!(
+                        error = %e,
+                        slug = %slug,
+                        asset = %asset_name,
+                        "download_asset: could not build streaming response; redirecting to /downloads"
+                    );
+                    redirect_cookies("/downloads", &c.set_cookies)
+                })
         }
         // Any non-2xx (expired session, lost entitlement, upstream outage) must
         // NOT be saved as the asset. The anchor carries no `download` attribute,
         // so navigating the browser back renders HTML instead of downloading it:
         // sign-in on 401, the downloads page otherwise.
         Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
-        _ => redirect_cookies("/downloads", &c.set_cookies),
+        // BUNYIP-1057: every other non-2xx used to silently redirect, so an
+        // upstream outage was invisible to operators while users saw the
+        // Downloads page. Log status and the slug/asset for correlation.
+        Ok(resp) => {
+            tracing::warn!(
+                status = resp.status().as_u16(),
+                slug = %slug,
+                asset = %asset_name,
+                "download_asset: upstream returned non-success; redirecting to /downloads"
+            );
+            redirect_cookies("/downloads", &c.set_cookies)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                slug = %slug,
+                asset = %asset_name,
+                "download_asset: transport failure; redirecting to /downloads"
+            );
+            redirect_cookies("/downloads", &c.set_cookies)
+        }
     }
 }
 
@@ -1585,7 +1617,23 @@ pub async fn settings(
     // join and runs alongside the independent sessions fetch.
     let ((twofa_enabled, trusted_devices), sessions_data) = tokio::join!(
         async {
-            let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
+            // BUNYIP-1057: a failed `/users/me/2fa/status` fetch used to fall
+            // back to the claim flag with no log; the user's trusted-device
+            // section could silently render or hide based on a stale value.
+            // Log the cause so the operator can trace flaps; keep the user's
+            // flag as the fallback so the card still renders coherently.
+            let twofa = match auth_api::status_2fa(&st.api, fwd).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e.user_message(),
+                        request_id = ?e.request_id,
+                        user_id = %user.id,
+                        "settings: 2FA status fetch failed; falling back to claim flag"
+                    );
+                    None
+                }
+            };
             let twofa_enabled = twofa
                 .as_ref()
                 .map(|s| s.enabled)
