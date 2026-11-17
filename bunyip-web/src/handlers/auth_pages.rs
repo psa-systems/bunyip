@@ -666,18 +666,12 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     // BUNYIP-590: the price the card quotes comes from the cached pricing
     // payload; the two fetches are independent, so they run concurrently.
     let (signup_token, pricing) = tokio::join!(auth_api::register_challenge(&st.api), st.pricing());
-    // BUNYIP-1057: a failed register_challenge used to fall back to an empty
-    // token with no log, so the register POST later rejected a valid submit
-    // with a bare "please try again" and the operator had no trace. Log the
-    // cause at warn; keep the empty-token fallback so the page still renders.
-    let signup_token = signup_token.unwrap_or_else(|e| {
-        tracing::warn!(
-            error = %e.user_message(),
-            request_id = ?e.request_id,
-            "register_get: register_challenge failed; rendering with empty token"
-        );
-        String::new()
-    });
+    // BUNYIP-1057: register_challenge already logs its own fetch / parse
+    // failures at warn (BUNYIP-1053), so the caller just folds the None
+    // back into the empty-token fallback without a duplicate log. The
+    // form embeds an empty token; when the bot guard is on, the user
+    // just reloads for a fresh one.
+    let signup_token = signup_token.unwrap_or_default();
     auth_page(
         &st,
         &headers,
