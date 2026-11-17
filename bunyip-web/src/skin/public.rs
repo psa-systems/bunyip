@@ -198,7 +198,9 @@ fn newsletter_blurb(brand_name: &str) -> String {
 /// cookie, and Mirzam answers with its confirmation email and its thank-you
 /// page. `website` is Mirzam's honeypot, kept out of sight and out of the tab
 /// order so only a bot fills it.
-fn newsletter_section(url: &str, brand_name: &str) -> Markup {
+/// BUNYIP-1077: when `blog_url` is set, a one-line link under the form invites
+/// the visitor to the blog archive. Unset omits the line.
+fn newsletter_section(url: &str, brand_name: &str, blog_url: &str) -> Markup {
     html! {
         @if !url.is_empty() {
             section id="newsletter" class="relative border-t border-border/50 py-20" {
@@ -218,6 +220,15 @@ fn newsletter_section(url: &str, brand_name: &str) -> Markup {
                             button type="submit" class=(button_class("brand", "default", "w-full sm:w-auto shrink-0")) { "Subscribe" }
                         }
                         p class="mt-3 text-sm text-muted-foreground" { "We email you a link to confirm. Unsubscribe anytime." }
+                        // BUNYIP-1077: the blog archive sits beside the signup so
+                        // readers arriving via the newsletter can browse past posts.
+                        @if !blog_url.is_empty() {
+                            p class="mt-3 text-sm text-muted-foreground" {
+                                "Read past posts on the "
+                                a href=(blog_url) class="text-primary-text hover:underline" { "blog" }
+                                "."
+                            }
+                        }
                     }
                 }
             }
@@ -361,7 +372,7 @@ pub async fn landing(State(st): State<AppState>, headers: HeaderMap) -> Response
             @if app_links_allowed {
                 (wired_apps_section(&apps, &st.cfg.app_domain))
             }
-            (newsletter_section(&branding.newsletter_url, &branding.brand_name))
+            (newsletter_section(&branding.newsletter_url, &branding.brand_name, &st.cfg.blog_url))
             // CTA
             section class="relative overflow-hidden border-t border-border/50 py-20" {
                 div class="container relative" {
@@ -1048,18 +1059,35 @@ mod tests {
 
     #[test]
     fn newsletter_section_is_absent_without_a_url() {
-        assert!(newsletter_section("", "Acme").into_string().is_empty());
+        assert!(newsletter_section("", "Acme", "").into_string().is_empty());
     }
 
     #[test]
     fn newsletter_section_posts_to_the_mirzam_list_with_its_honeypot() {
         let url = "https://news.example.com/s/00000000-0000-0000-0000-000000000000";
-        let html = newsletter_section(url, "Acme").into_string();
+        let html = newsletter_section(url, "Acme", "").into_string();
         assert!(html.contains(&format!(r#"action="{url}""#)));
         assert!(html.contains(r#"method="post""#));
         assert!(html.contains(r#"name="email" type="email" required"#));
         assert!(html.contains(r#"name="website" type="text" tabindex="-1""#));
         assert!(html.contains("Acme news and release notes"));
+    }
+
+    // BUNYIP-1077: the blog line appears only when the url is non-empty.
+    #[test]
+    fn newsletter_section_links_the_blog_when_configured() {
+        let news = "https://news.example.com/s/00000000-0000-0000-0000-000000000000";
+        let blog = "https://blog.example.com";
+        let html = newsletter_section(news, "Acme", blog).into_string();
+        assert!(html.contains(&format!(r#"href="{blog}""#)), "{html}");
+        assert!(html.contains("Read past posts on the"), "{html}");
+    }
+
+    #[test]
+    fn newsletter_section_omits_the_blog_line_without_a_blog_url() {
+        let news = "https://news.example.com/s/00000000-0000-0000-0000-000000000000";
+        let html = newsletter_section(news, "Acme", "").into_string();
+        assert!(!html.contains("Read past posts on the"), "{html}");
     }
 
     #[test]
