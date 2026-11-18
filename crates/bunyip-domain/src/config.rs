@@ -2566,6 +2566,10 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "product blog URL linked from the public header, footer and newsletter section; empty hides every blog link (BUNYIP-1077)",
     ),
     EnvVarSpec::defaulted(
+        "BUNYIP_DOCS_URL",
+        "optional external docs URL linked from the public header and footer additively next to the in-product `/docs` hub; empty hides the entry (BUNYIP-1077)",
+    ),
+    EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",
         "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),

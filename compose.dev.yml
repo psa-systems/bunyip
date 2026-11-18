@@ -186,6 +186,8 @@ services:
       BUNYIP_COMMUNITY_URL: ${BUNYIP_COMMUNITY_URL:-}
       # BUNYIP-1077: optional product-blog URL; empty hides every blog link.
       BUNYIP_BLOG_URL: ${BUNYIP_BLOG_URL:-}
+      # BUNYIP-1077: optional external docs URL; empty hides the Docs entry.
+      BUNYIP_DOCS_URL: ${BUNYIP_DOCS_URL:-}
       # BUNYIP-409: trust the ingress (Traefik on dev-sso) so bunyip-web reads
       # the end-user IP from X-Forwarded-For and forwards it to bunyip-api.
       # RFC1918 ranges; no effect on plain localhost dev (the browser sends no

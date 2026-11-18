@@ -42,6 +42,7 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 #### Added
 
 - [`BUNYIP_BLOG_URL`](#var-bunyip-blog-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`BUNYIP_DOCS_URL`](#var-bunyip-docs-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_BACKCHANNEL_LOGOUT_URI`](#var-drillmark-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 
@@ -835,8 +836,9 @@ deployment configuration, and are listed here only so the boundary is explicit.
 
 bunyip-web is a separate binary with its own configuration (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`,
 `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`,
-`BUNYIP_BLOG_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working
-default. It holds no secrets and reads none of the api variables above, so the api's inventory does not cover it.
+`BUNYIP_BLOG_URL`, `BUNYIP_DOCS_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one
+has a working default. It holds no secrets and reads none of the api variables above, so the api's inventory does not
+cover it.
 
 It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta description and Open Graph image are
 the admin-managed `branding` record above (BUNYIP-561), fetched from bunyip-api rather than read from the environment.
@@ -880,6 +882,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-bunyip-config-dir"></a>`BUNYIP_CONFIG_DIR` | no | v0.17.0 | Defaulted |
 | <a id="var-bunyip-config-file"></a>`BUNYIP_CONFIG_FILE` | no | v0.15.0 | Defaulted |
 | <a id="var-bunyip-cookie-shared-domain"></a>`BUNYIP_COOKIE_SHARED_DOMAIN` | no | v0.5.0 | Defaulted |
+| <a id="var-bunyip-docs-url"></a>`BUNYIP_DOCS_URL` | no | v0.22.0 | Defaulted |
 | <a id="var-bunyip-e2e-bootstrap-allow"></a>`BUNYIP_E2E_BOOTSTRAP_ALLOW` | no | v0.5.0 | Defaulted |
 | <a id="var-bunyip-e2e-totp-secret"></a>`BUNYIP_E2E_TOTP_SECRET` | no | v0.15.0 | Defaulted |
 | <a id="var-bunyip-oidc-issuer"></a>`BUNYIP_OIDC_ISSUER` | no | v0.17.0 | Defaulted |
