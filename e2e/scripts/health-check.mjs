@@ -27,8 +27,9 @@ function deriveOpBase(hubUrl) {
   }
 }
 
-// Required: no domain is hardcoded as a fallback. Inject the per-environment
-// hub host (staging `https://a8n.systems`, prod `https://psa.systems`).
+// Required: no domain is hardcoded as a fallback. The per-environment hub host
+// is operator-supplied (${BUNYIP_HOST} in docs/self-hosting.md's Topology
+// section); set E2E_BASE_URL to that deployment's actual hub origin.
 const hubBaseURL = pick(process.env.E2E_BASE_URL);
 if (!hubBaseURL) {
   console.error('E2E_BASE_URL is unset; set it to the hub host (see e2e/.env.example). Aborting.');

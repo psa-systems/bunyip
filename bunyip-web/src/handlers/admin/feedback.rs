@@ -488,18 +488,31 @@ pub async fn feedback_status(
         Ok(v) => v,
         Err(r) => return r,
     };
+    // BUNYIP-1055: match the four UI-submitted values explicitly; reject
+    // anything else with a redirect + error toast so a tampered value no
+    // longer silently re-opens the row.
     let status = match f.status.as_str() {
+        "new" => FeedbackStatus::New,
         "reviewed" => FeedbackStatus::Reviewed,
         "responded" => FeedbackStatus::Responded,
         "closed" => FeedbackStatus::Closed,
-        _ => FeedbackStatus::New,
+        _ => {
+            return redirect_cookies(
+                &format!(
+                    "{}?toast_err=Unknown%20status%20value",
+                    from_tab_path(f.from.as_deref())
+                ),
+                &c.set_cookies,
+            );
+        }
     };
     let toast = match status {
         FeedbackStatus::Closed => "Closed",
         FeedbackStatus::Reviewed => "Marked reviewed",
         FeedbackStatus::New => "Re-opened",
         FeedbackStatus::Responded => "Marked responded",
-        // Unreachable: the parse above maps anything unrecognised to `New`.
+        // Unreachable: the parse above rejects anything outside the four
+        // UI-known values.
         FeedbackStatus::Unknown => "Updated",
     };
     let target =
@@ -509,10 +522,19 @@ pub async fn feedback_status(
                 from_tab_path(f.from.as_deref()),
                 urlencoding::encode(toast),
             ),
-            Err(_) => format!(
-                "{}?toast_err=Could%20not%20update%20status",
-                from_tab_path(f.from.as_deref()),
-            ),
+            // BUNYIP-1055: log the cause with the feedback id so the toast
+            // is matched to a real log line.
+            Err(e) => {
+                tracing::warn!(
+                    error = ?e,
+                    feedback_id = %id,
+                    "feedback_status: update failed"
+                );
+                format!(
+                    "{}?toast_err=Could%20not%20update%20status",
+                    from_tab_path(f.from.as_deref()),
+                )
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -540,10 +562,14 @@ pub async fn feedback_mark_spam(
             "{}?toast_ok=Marked%20as%20spam",
             from_tab_path(f.from.as_deref()),
         ),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20mark%20spam",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_mark_spam failed");
+            format!(
+                "{}?toast_err=Could%20not%20mark%20spam",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -565,10 +591,13 @@ pub async fn feedback_unmark_spam(
             "{}?toast_ok=Restored%20from%20spam",
             from_tab_path(f.from.as_deref()),
         ),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20unmark%20spam",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_unmark_spam failed");
+            format!(
+                "{}?toast_err=Could%20not%20unmark%20spam",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -589,10 +618,13 @@ pub async fn feedback_archive_action(
     };
     let target = match admin_api::archive_feedback(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("{}?toast_ok=Archived", from_tab_path(f.from.as_deref()),),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20archive",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_archive failed");
+            format!(
+                "{}?toast_err=Could%20not%20archive",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -612,10 +644,13 @@ pub async fn feedback_delete(
     };
     let target = match admin_api::delete_feedback(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("{}?toast_ok=Deleted", from_tab_path(f.from.as_deref()),),
-        Err(_) => format!(
-            "{}?toast_err=Could%20not%20delete",
-            from_tab_path(f.from.as_deref()),
-        ),
+        Err(e) => {
+            tracing::warn!(error = ?e, feedback_id = %id, "feedback_delete failed");
+            format!(
+                "{}?toast_err=Could%20not%20delete",
+                from_tab_path(f.from.as_deref()),
+            )
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -682,8 +717,8 @@ pub async fn feedback_export(State(st): State<AppState>, headers: HeaderMap) -> 
 // SPEC-12.10.1
 /// GET /admin/feedback/:id
 ///
-/// Detail subpage for a single feedback submission. Shows the unmasked
-/// email (callers already pass `admin_guard`), full message, captured
+/// Detail subpage for a single feedback submission. BUNYIP-94 renders the
+/// address masked (not unmasked), full message, captured
 /// `page_path`, current status, and either the existing admin response
 /// or an inline form to send one.
 pub async fn feedback_detail(
@@ -702,7 +737,18 @@ pub async fn feedback_detail(
     let tab = FeedbackTab::from_query(q.from.as_deref());
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
+        Err(e) => {
+            // BUNYIP-1055: previously `Err(_)` redirected with no toast and
+            // no log, so a failed detail fetch looked identical to clicking
+            // the back link. Warn-log the id and cause.
+            tracing::warn!(
+                feedback_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/feedback: feedback_detail failed; bouncing back to list"
+            );
+            return redirect_cookies(tab.path(), &c.set_cookies);
+        }
     };
     let content = feedback_detail_view(&detail, tab, None, None);
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
@@ -921,14 +967,28 @@ pub async fn feedback_respond(
         // API - but render like the other two paths rather than a silent
         // redirect, so the empty state is not special-cased.
         Some("Response cannot be empty".to_string())
-    } else if response.len() > RESPONSE_MAX {
+    } else if response.chars().count() > RESPONSE_MAX {
+        // BUNYIP-1055: previously `response.len()` (bytes) while the message
+        // says characters. Count characters so the enforced bound matches
+        // the copy.
         Some(format!(
             "Response must be {RESPONSE_MAX} characters or fewer"
         ))
     } else {
         match admin_api::respond_to_feedback(&st.api, c.forward.as_deref(), &id, response).await {
             Ok(()) => None,
-            Err(_) => Some("Could not send response".to_string()),
+            Err(e) => {
+                // BUNYIP-1055: previously `Err(_)` lost the cause. Log it
+                // naming the feedback id; toast text remains generic so a
+                // raw API error does not leak to the admin UI.
+                tracing::warn!(
+                    feedback_id = %id,
+                    status = e.status,
+                    code = %e.code,
+                    "admin/feedback: respond_to_feedback failed"
+                );
+                Some("Could not send response".to_string())
+            }
         }
     };
 
@@ -942,7 +1002,16 @@ pub async fn feedback_respond(
     let tab = FeedbackTab::Active;
     let detail = match admin_api::feedback_detail(&st.api, c.forward.as_deref(), &id).await {
         Ok(d) => d,
-        Err(_) => return redirect_cookies(tab.path(), &c.set_cookies),
+        Err(e) => {
+            // BUNYIP-1055: previously `Err(_)` lost the cause for the
+            // reload-after-failed-respond path. Log naming the id.
+            tracing::warn!(
+                feedback_id = %id,
+                status = e.status,
+                "admin/feedback: feedback_detail reload after failed respond failed; bouncing to list"
+            );
+            return redirect_cookies(tab.path(), &c.set_cookies);
+        }
     };
     let content = feedback_detail_view(&detail, tab, Some(response), Some(&error));
     admin_response(&c, &user, "/admin/feedback", "Feedback", content)
@@ -1143,7 +1212,18 @@ pub async fn feedback_restore(
     let target = match admin_api::restore_feedback(&st.api, c.forward.as_deref(), &archive_id).await
     {
         Ok(()) => "/admin/feedback/archive?toast_ok=Restored".to_string(),
-        Err(_) => "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: `Err(_)` previously dropped the cause; the toast
+            // text is deliberately generic (no API message leaked), but
+            // the operator log now names the id and status.
+            tracing::warn!(
+                archive_id = %archive_id,
+                status = e.status,
+                code = %e.code,
+                "admin/feedback: restore_feedback failed"
+            );
+            "/admin/feedback/archive?toast_err=Could%20not%20restore".to_string()
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }

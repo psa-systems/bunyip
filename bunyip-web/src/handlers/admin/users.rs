@@ -147,14 +147,23 @@ impl UsersQ {
         if self.status != "active" {
             p.push(format!("status={}", self.status));
         }
+        // BUNYIP-1056: `tier`, `verified` and `sort` are user-supplied and
+        // flowed through the href unvalidated and unencoded; a value
+        // containing `&` or `?` would corrupt the pagination link.
+        // Percent-encode each the same way `search` already is. The API
+        // itself validates the value shape.
         if !self.tier.is_empty() {
-            p.push(format!("tier={}", self.tier));
+            p.push(format!("tier={}", urlenc(&self.tier)));
         }
         if !self.verified.is_empty() {
-            p.push(format!("verified={}", self.verified));
+            p.push(format!("verified={}", urlenc(&self.verified)));
         }
         if !self.sort.is_empty() {
-            p.push(format!("sort={}&dir={}", self.sort, self.dir));
+            p.push(format!(
+                "sort={}&dir={}",
+                urlenc(&self.sort),
+                urlenc(&self.dir)
+            ));
         }
         if self.page > 1 {
             p.push(format!("page={}", self.page));
@@ -801,8 +810,19 @@ pub async fn user_role(
     // Only the known roles are accepted; reject anything else (the UI uses a
     // dropdown, so an arbitrary role string can only come from a crafted
     // request) before forwarding it to the API (BUNYIP-114).
+    // BUNYIP-1056: a role outside the dropdown's two values used to redirect
+    // to /admin/users with no indication the request was rejected. Log
+    // the attempt and surface it as a toast so the operator sees it.
     if !matches!(f.role.as_str(), "admin" | "subscriber") {
-        return redirect_cookies("/admin/users", &c.set_cookies);
+        tracing::warn!(
+            user_id = %id,
+            role = %f.role,
+            "admin update user role: rejected unknown role"
+        );
+        return redirect_cookies(
+            "/admin/users?toast_err=Unknown%20role%20value",
+            &c.set_cookies,
+        );
     }
     let target =
         match admin_api::update_user_role(&st.api, c.forward.as_deref(), &id, &f.role).await {
@@ -968,7 +988,17 @@ pub async fn user_email(
             .await
         {
             Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20updated"),
-            Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20update%20email"),
+            Err(e) => {
+                // BUNYIP-1056: log the id + status + code; toast text stays
+                // generic so no raw API message leaks to the admin UI.
+                tracing::warn!(
+                    user_id = %id,
+                    status = e.status,
+                    code = %e.code,
+                    "admin/users: update_user_email failed"
+                );
+                format!("/admin/users/{id}?toast_err=Could%20not%20update%20email")
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -990,7 +1020,16 @@ pub async fn user_verify_email(
     }
     let target = match admin_api::verify_user_email(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("/admin/users/{id}?toast_ok=Email%20verified"),
-        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email"),
+        Err(e) => {
+            // BUNYIP-1056: log the id + cause (toast text stays generic).
+            tracing::warn!(
+                user_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/users: verify_user_email failed"
+            );
+            format!("/admin/users/{id}?toast_err=Could%20not%20verify%20email")
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1012,7 +1051,16 @@ pub async fn user_reset_2fa(
     }
     let target = match admin_api::reset_user_two_factor(&st.api, c.forward.as_deref(), &id).await {
         Ok(()) => format!("/admin/users/{id}?toast_ok=Two-factor%20cleared"),
-        Err(_) => format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor"),
+        Err(e) => {
+            // BUNYIP-1056: log the id + cause (toast text stays generic).
+            tracing::warn!(
+                user_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/users: reset_user_two_factor failed"
+            );
+            format!("/admin/users/{id}?toast_err=Could%20not%20clear%20two-factor")
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -1130,13 +1178,24 @@ pub async fn user_set_tier(
     .await
     {
         Ok(()) => format!("/admin/users/{id}?toast_ok=Tier%20updated"),
-        Err(e) => format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1056: set_user_tier failures previously showed the API
+            // message in a toast but never logged here. Mirror the sibling
+            // revoke-lifetime-membership log (above) so operator logs carry
+            // a line for every tier-change failure.
+            tracing::warn!(
+                user_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/users: set_user_tier failed"
+            );
+            format!("/admin/users/{id}?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
 
 // SPEC-12.35.8: actions card, each prompt names the user
-/// GET /admin/users/{id} - single-user detail page with all admin actions in one place.
 /// BUNYIP-430: the per-user "Actions" card. Every state-changing control here
 /// routes through the one shared confirmation dialog - the `data-confirm`
 /// attribute, handled once in `assets/js/app.js`, which prompts on submit and
@@ -1144,6 +1203,9 @@ pub async fn user_set_tier(
 /// and the specific user (by email), so an admin who opened the wrong row is
 /// told who they are about to affect before anything happens. Extracted from
 /// `user_detail` so the confirmations are unit-testable.
+///
+/// BUNYIP-1056: the `GET /admin/users/{id}` doc line previously sat here;
+/// moved to `user_detail` below (the actual route handler).
 pub(super) fn user_actions_card(target: &AdminUser, is_admin_target: bool) -> Markup {
     let who = target.email.as_str();
     html! {
@@ -1230,6 +1292,8 @@ pub(super) fn tier_change_card(target: &AdminUser) -> Markup {
 }
 
 // SPEC-12.35.1, SPEC-12.35.5, SPEC-12.35.6, SPEC-12.35.7: user detail page
+/// GET /admin/users/{id} - single-user detail page with all admin actions in
+/// one place.
 pub async fn user_detail(
     State(st): State<AppState>,
     headers: HeaderMap,
@@ -1242,19 +1306,45 @@ pub async fn user_detail(
     };
     let target = match admin_api::get_user(&st.api, c.forward.as_deref(), &id).await {
         Ok(u) => u,
-        Err(_) => {
+        Err(e) => {
+            // BUNYIP-1056: previously `Err(_)` erased the cause and
+            // rendered "Could not load user" with no log, so a 404 was
+            // indistinguishable from a transport failure. Log the id
+            // and the status/code; render a message that names the
+            // condition when it is a 404 so admins can tell "user
+            // deleted" from "upstream broken".
+            tracing::warn!(
+                user_id = %id,
+                status = e.status,
+                code = %e.code,
+                "admin/users: get_user for detail page failed"
+            );
+            let (heading, body) = if e.status == 404 {
+                (
+                    "User not found",
+                    format!("No user with id {id} is in the system."),
+                )
+            } else {
+                (
+                    "Could not load user",
+                    format!(
+                        "The user record could not be loaded (upstream status {}). Try again, or check the operator log for details.",
+                        e.status
+                    ),
+                )
+            };
             return admin_response(
                 &c,
                 &user,
                 "/admin/users",
-                "User not found",
+                heading,
                 html! {
                     div class="rounded-lg border bg-card text-card-foreground shadow-sm p-6" {
-                        p { "Could not load user " (id) "." }
+                        p { (body) }
                         div class="mt-2" { (back_link("/admin/users", "Back to users")) }
                     }
                 },
-            )
+            );
         }
     };
     let is_admin_target = matches!(target.role, crate::api::types::UserRole::Admin);
@@ -1263,15 +1353,29 @@ pub async fn user_detail(
     // This user's currently-active throttles (BUNYIP-317). The active set is
     // small by design (the API builds it in memory), so a single page of the
     // API max (100) covers every realistic case; filter it to this user.
-    let user_throttles: Vec<AdminRateLimit> =
-        match admin_api::rate_limits(&st.api, c.forward.as_deref(), 1, 100).await {
-            Ok(p) => p
-                .items
-                .into_iter()
-                .filter(|rl| rl.user_id.as_deref() == Some(target.id.as_str()))
-                .collect(),
-            Err(_) => Vec::new(),
-        };
+    let user_throttles_result: Result<Vec<AdminRateLimit>, _> =
+        admin_api::rate_limits(&st.api, c.forward.as_deref(), 1, 100)
+            .await
+            .map(|p| {
+                p.items
+                    .into_iter()
+                    .filter(|rl| rl.user_id.as_deref() == Some(target.id.as_str()))
+                    .collect()
+            });
+    // BUNYIP-1056: a failed rate-limit fetch used to collapse to an empty
+    // list, so the "Active rate limits" card would silently disappear with
+    // no log. Log the cause before degrading; the handler below renders an
+    // inline error when `throttles_error` is Some.
+    let throttles_error = user_throttles_result.as_ref().err().cloned();
+    if let Err(e) = &user_throttles_result {
+        tracing::warn!(
+            user_id = %target.id,
+            status = e.status,
+            code = %e.code,
+            "admin/users: rate_limits fetch failed; active-throttles card will show an error"
+        );
+    }
+    let user_throttles: Vec<AdminRateLimit> = user_throttles_result.unwrap_or_default();
 
     // SPEC-12.35.3: newest 25 audit entries
     // BUNYIP-930: the user's own audit log, newest 25 entries. The Real User
@@ -1405,7 +1509,20 @@ pub async fn user_detail(
             // Rate limits card (BUNYIP-317): this user's currently-active
             // throttles, each resettable in place. Hidden when the user is not
             // throttled to keep the page uncluttered.
-            @if !user_throttles.is_empty() {
+            //
+            // BUNYIP-1056: when the throttles fetch itself failed, show an
+            // inline error box so the admin sees the fetch broke rather
+            // than silently assuming "no throttles."
+            @if let Some(err) = &throttles_error {
+                div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
+                    div class="flex flex-col space-y-1.5 p-6 pb-2" {
+                        div class="flex items-center gap-2" { (icon("gauge", "h-4 w-4 text-muted-foreground")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active rate limits" } }
+                    }
+                    div class="p-6 pt-0" {
+                        (error_box_for("Could not load active rate limits for this user.", err))
+                    }
+                }
+            } @else if !user_throttles.is_empty() {
                 div class="rounded-lg border bg-card text-card-foreground shadow-sm" {
                     div class="flex flex-col space-y-1.5 p-6 pb-2" {
                         div class="flex items-center gap-2" { (icon("gauge", "h-4 w-4 text-muted-foreground")) h3 class="text-2xl font-semibold leading-none tracking-tight" { "Active rate limits" } }

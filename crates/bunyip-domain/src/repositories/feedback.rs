@@ -46,11 +46,21 @@ pub async fn list_paginated_filtered(
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
     // SPEC-7.3.3
     let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
-    let bucket_predicate: Option<&'static str> = match bucket.unwrap_or("active") {
+    // BUNYIP-1046: `_ => None` used to silently drop the filter, returning
+    // ALL feedback rows (spam included) for a tampered or typo'd bucket. The
+    // caller validates against this closed set, so an unknown value here is a
+    // programming error, not a user-value branch; reject it loudly so the
+    // bug surfaces instead of leaking spam to an active-only list.
+    let bucket_name = bucket.unwrap_or("active");
+    let bucket_predicate: Option<&'static str> = match bucket_name {
         "active" => Some("is_spam = FALSE AND status <> 'closed'"),
         "closed" => Some("is_spam = FALSE AND status = 'closed'"),
         "spam" => Some("is_spam = TRUE"),
-        _ => None,
+        other => {
+            return Err(sqlx::Error::Protocol(format!(
+                "list_paginated_filtered: unknown feedback bucket `{other}`; expected one of active, closed, spam"
+            )));
+        }
     };
 
     fn push_where<'a>(

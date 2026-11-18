@@ -171,7 +171,28 @@ async fn mokosh_import(
         .send()
         .await
         .map_err(|e| AppError::upstream(format!("Mokosh import request failed: {e}")))?;
-    Ok(resp.status().is_success())
+    let status = resp.status();
+    if status.is_success() {
+        Ok(true)
+    } else {
+        // BUNYIP-1052: a non-2xx used to return Ok(false) silently, so an
+        // import failure left no record. Log the status and a truncated
+        // body at warn before returning false; the caller still handles
+        // the boolean.
+        let body_preview = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(500)
+            .collect::<String>();
+        tracing::warn!(
+            status = %status,
+            body_preview = %body_preview,
+            "Mokosh import returned a non-2xx status",
+        );
+        Ok(false)
+    }
 }
 
 #[cfg(test)]

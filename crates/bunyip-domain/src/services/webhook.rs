@@ -86,7 +86,14 @@ impl WebhookService {
         };
         // Serialize once so every retry attempt carries an identical body and
         // signature (a stable downstream idempotency key).
-        let body = serde_json::to_string(&account_deleted_payload(user_id)).unwrap_or_default();
+        //
+        // BUNYIP-1048: `unwrap_or_default()` would have sent and signed an
+        // EMPTY body on a serialization failure, which the receiver cannot
+        // disambiguate from a zero-length payload the sender intentionally
+        // chose. Propagate the error to the caller so the retrying dispatcher
+        // can record it as a replayable failure.
+        let body = serde_json::to_string(&account_deleted_payload(user_id))
+            .map_err(|e| format!("account_deleted payload serialization failed: {e}"))?;
         self.sender
             .dispatch_with_retries(url, &body, ACCOUNT_DELETE_MAX_ATTEMPTS)
             .await

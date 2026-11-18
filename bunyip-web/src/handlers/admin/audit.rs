@@ -193,7 +193,15 @@ pub async fn audit_logs(
     {
         Some(uid) => match admin_api::get_user(&st.api, c.forward.as_deref(), uid).await {
             Ok(u) => Some(u.email),
-            Err(_) => Some(uid.to_string()),
+            Err(e) => {
+                // BUNYIP-1055: `Err(_) => Some(uid)` used to drop the cause
+                // with no trace, so an audit chip rendering the raw id (not
+                // the email) read as "user not found" with no way to tell
+                // transport failure from a missing user. Log the cause
+                // naming the id, then fall back to the id as before.
+                tracing::warn!(user_id = %uid, status = e.status, "audit: get_user for chip failed; falling back to raw id");
+                Some(uid.to_string())
+            }
         },
         None => None,
     };

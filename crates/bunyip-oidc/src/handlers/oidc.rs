@@ -199,13 +199,20 @@ pub async fn discovery(provider: web::Data<Option<Arc<OidcProvider>>>) -> HttpRe
         "token_endpoint_auth_methods_supported": [
             "client_secret_basic", "none"
         ],
+        // BUNYIP-1043: discovery scopes and claims advertise what the
+        // authorize / id_token / userinfo paths actually honour. Earlier
+        // lists omitted `profile`, `phone`, `given_name`, `family_name`,
+        // `phone_number` and `sid`, which those paths already support.
         "scopes_supported": [
-            "openid", "email", "offline_access",
+            "openid", "email", "profile", "phone", "offline_access",
             "dmarc:read", "dmarc:write"
         ],
         "claims_supported": [
-            "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp",
-            "email", "email_verified", "membership_status", "has_member_access",
+            "iss", "sub", "aud", "exp", "iat", "auth_time", "nonce", "azp", "sid",
+            "email", "email_verified",
+            "given_name", "family_name",
+            "phone_number",
+            "membership_status", "has_member_access",
             "bunyip_role"
         ],
         "code_challenge_methods_supported": ["S256"],
@@ -492,6 +499,19 @@ pub async fn authorize(
         return Ok(oidc_error(
             "invalid_scope",
             "none of the requested scopes are permitted for this client",
+        ));
+    }
+
+    // BUNYIP-1043: the `openid` check at the top of this handler runs on the
+    // RAW `q.scope`, not the intersection; a client whose `allowed_scopes`
+    // did not include `openid` would pass the raw check (because the user
+    // requested it) but the intersection would strip it, leaving a code
+    // issued without `openid`. Re-check after the intersection so `openid`
+    // has to survive the client's allowed set too.
+    if !requested_scopes.iter().any(|s| s == "openid") {
+        return Ok(oidc_error(
+            "invalid_scope",
+            "openid is not in the intersection of the requested scopes and this client's allowed scopes",
         ));
     }
 
@@ -1034,7 +1054,16 @@ async fn handle_authorization_code_grant(
         &code_row.scope,
         code_row.auth_time,
         code_row.acr.as_deref().unwrap_or("urn:bunyip:loa:pwd"),
-        &code_row.amr.clone().unwrap_or_default(),
+        // BUNYIP-1043: the authorize path and the refresh family default amr
+        // to `["pwd"]` (see lines 658 and 1070 in this file). The code-grant
+        // path used to default to an EMPTY list via `unwrap_or_default()`,
+        // so an auth code from a session without a stored amr minted an
+        // at+jwt with no amr claim while the sibling paths carried one.
+        // Align to the same default.
+        &code_row
+            .amr
+            .clone()
+            .unwrap_or_else(|| vec!["pwd".to_string()]),
         code_row.selected_tenant_id,
         Some(&code_row.op_session_sid),
     )?;
@@ -1353,13 +1382,26 @@ pub async fn revoke(
         .ok_or_else(|| AppError::OidcInvalidClient("unknown client".into()))?;
     authenticate_client(&client, client_secret_opt.as_deref()).await?;
 
-    // RFC 7009 §2.2: respond 200 regardless of whether the token was found.
+    // BUNYIP-1043: RFC 7009 §2.1 requires 200 "whether or not the token
+    // was successfully revoked", but §2.2.1 explicitly allows 503 (and
+    // `error = temporarily_unavailable`) when the AS cannot perform the
+    // revocation. Previously the write failure answered 200, which the
+    // client reads as success while the token stayed live. Now a real
+    // revocation-side error (DB write, etc.) answers 503; §2.2's "token
+    // not found" path still falls through to 200 because `do_revoke`
+    // returns Ok(()) in that case.
     if let Err(e) = do_revoke(provider, client.client_id, &form.token).await {
         tracing::warn!(
             error = %e,
             client_id = %client.client_id,
-            "revoke: token revocation failed; still returning 200 per RFC 7009 §2.2"
+            "revoke: token revocation failed; answering 503 per RFC 7009 §2.2.1"
         );
+        return Ok(HttpResponse::ServiceUnavailable()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(serde_json::json!({
+                "error": "temporarily_unavailable",
+                "error_description": "token revocation failed; please retry",
+            })));
     }
     Ok(HttpResponse::Ok().finish())
 }
@@ -1547,7 +1589,15 @@ pub async fn logout(
             }
             Ok(_) => {} // no clients with backchannel URIs
             Err(e) => {
-                tracing::warn!(error = %e, "Failed to revoke sessions for backchannel logout");
+                // BUNYIP-1043: previously logged and still redirected with
+                // cleared cookies, so the user was told they are signed out
+                // while the OP session and refresh families stayed live on
+                // the server. Surface the failure as a 500 so the UI stays
+                // honest (CSRF / state are already checked upstream).
+                tracing::error!(error = %e, user_id = %user_id, "logout: revoke_sessions_for_backchannel failed; refusing to clear cookies");
+                return Err(AppError::internal(format!(
+                    "Failed to revoke sessions on logout: {e}"
+                )));
             }
         }
     }
@@ -1573,16 +1623,36 @@ fn extract_client_credentials(
     form_client_id: Option<&str>,
     form_client_secret: Option<&str>,
 ) -> Result<(String, Option<String>), AppError> {
-    // Try HTTP Basic auth first
+    // Try HTTP Basic auth first.
+    //
+    // BUNYIP-1043: an undecodable client_id or client_secret used to collapse
+    // to an empty string via `urlencoding::decode(...).unwrap_or_default()`,
+    // so a malformed Basic header silently authenticated as "empty id with
+    // empty secret" and then fell through to `authenticate_client` which
+    // mapped it to invalid_client with no cause. Fail at decode naming which
+    // half (id or secret) was malformed; machine_client::basic_credentials
+    // takes the same shape (None for the whole header).
     if let Some(auth_header) = req.headers().get("Authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
             if let Some(encoded) = auth_str.strip_prefix("Basic ") {
                 if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(encoded) {
                     if let Ok(cred_str) = String::from_utf8(decoded) {
                         if let Some((id, secret)) = cred_str.split_once(':') {
+                            let id_decoded = urlencoding::decode(id).map_err(|e| {
+                                tracing::warn!(error = %e, "extract_client_credentials: client_id in Basic header is not valid percent-encoding");
+                                AppError::OidcInvalidClient(
+                                    "client_id in Authorization header is not valid percent-encoding".into(),
+                                )
+                            })?;
+                            let secret_decoded = urlencoding::decode(secret).map_err(|e| {
+                                tracing::warn!(error = %e, "extract_client_credentials: client_secret in Basic header is not valid percent-encoding");
+                                AppError::OidcInvalidClient(
+                                    "client_secret in Authorization header is not valid percent-encoding".into(),
+                                )
+                            })?;
                             return Ok((
-                                urlencoding::decode(id).unwrap_or_default().into_owned(),
-                                Some(urlencoding::decode(secret).unwrap_or_default().into_owned()),
+                                id_decoded.into_owned(),
+                                Some(secret_decoded.into_owned()),
                             ));
                         }
                     }

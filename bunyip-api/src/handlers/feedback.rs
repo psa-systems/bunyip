@@ -741,9 +741,21 @@ pub async fn submit_feedback(
             }
 
             let admin_url = format!("{base_url}/admin/feedback?id={feedback_id}");
-            let admin_emails = UserRepository::find_admin_emails(&pool_bg)
-                .await
-                .unwrap_or_default();
+            // BUNYIP-1052: a database failure here used to vanish into an
+            // empty recipient list, so the admin-notification email went
+            // to nobody with no trace. Log the cause before falling back
+            // to the empty list so the operator sees the degraded state.
+            let admin_emails = match UserRepository::find_admin_emails(&pool_bg).await {
+                Ok(rows) => rows,
+                Err(e) => {
+                    tracing::error!(
+                        error = %e,
+                        feedback_id = %feedback_id,
+                        "Failed to load admin recipients for feedback notification",
+                    );
+                    Vec::new()
+                }
+            };
             if let Err(e) = email_svc_bg
                 .send_admin_feedback_notification(&admin_url, &admin_emails)
                 .await
@@ -797,7 +809,9 @@ pub async fn list_feedback(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    // BUNYIP-1052: clamp low AND high so a client passing 0 or a negative value
+    // does not reach the repository as LIMIT 0.
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     if let Some(b) = query.bucket.as_deref() {
         match b {
@@ -981,10 +995,11 @@ pub async fn respond_to_feedback(
             .send_feedback_response(&email, &updated)
             .await
         {
+            // BUNYIP-1052: log the feedback id only; never the raw email
+            // (BUNYIP-265).
             tracing::error!(
                 error = %e,
                 feedback_id = %updated.id,
-                recipient = %email,
                 "Failed to send feedback response email"
             );
         }
@@ -1221,7 +1236,9 @@ pub async fn list_feedback_archive(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    // BUNYIP-1052: clamp low AND high so a client passing 0 or a negative value
+    // does not reach the repository as LIMIT 0.
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     let (items, total) = FeedbackRepository::list_archived(&pool, page, per_page).await?;
 

@@ -50,6 +50,12 @@ pub struct Config {
     /// path (e.g. `https://chat.a8n.systems/auth/bunyip`) so the OIDC flow
     /// fires immediately rather than landing on Let's Chat's own login page.
     pub community_url: String,
+    /// BUNYIP-1077: URL of the product blog linked from the public header,
+    /// footer and the newsletter section (e.g. `https://blog.psa.systems` in
+    /// production, `https://blog.a8n.systems` on staging). Empty hides the
+    /// link entirely so a deploy without a blog never shows a dead link.
+    /// Read from `BUNYIP_BLOG_URL`.
+    pub blog_url: String,
     /// BUNYIP-311: CIDR ranges of the reverse proxies that front bunyip-web
     /// (typically Traefik). The inbound `X-Forwarded-For` / `X-Real-IP` is
     /// honoured (to resolve the end-user IP the BFF forwards to bunyip-api)
@@ -143,6 +149,9 @@ impl Config {
             api_public_origin,
             app_domain: var("BUNYIP_APP_DOMAIN").unwrap_or_default(),
             community_url: var("BUNYIP_COMMUNITY_URL").unwrap_or_default(),
+            // BUNYIP-1077: blog URL linked from the public chrome and
+            // newsletter section; empty hides every blog link.
+            blog_url: var("BUNYIP_BLOG_URL").unwrap_or_default(),
             // BUNYIP-311: the reverse proxies (Traefik) allowed to set the
             // inbound X-Forwarded-For the BFF trusts when resolving the
             // end-user IP. Same comma-separated CIDR form bunyip-api parses.
@@ -257,6 +266,7 @@ mod tests {
             oidc_issuer: "http://bunyip-api-app:4401".into(),
             app_domain: String::new(),
             community_url: String::new(),
+            blog_url: String::new(),
             trusted_proxies: trusted_proxies
                 .into_iter()
                 .map(|s| s.parse().unwrap())

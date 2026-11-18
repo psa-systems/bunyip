@@ -18,6 +18,18 @@ use super::types::{
 use super::{ok_data, parse, Api, ApiError};
 use crate::util::urlenc;
 
+// BUNYIP-1053: percent-encode a path segment for an upstream URL. Wraps
+// `urlencoding::encode` behind a `Display` input so Uuids, &str and &String
+// all pass through one shape. axum percent-decodes `Path` params on the
+// handler side, so an id containing `/` or `..` can otherwise re-target
+// another upstream endpoint with the admin's own session; encoding every
+// interpolated segment is defense in depth. The underlying encoder
+// percent-escapes everything outside the unreserved RFC 3986 set, which
+// is what path segments need.
+fn enc<T: std::fmt::Display>(v: T) -> String {
+    urlencoding::encode(&v.to_string()).into_owned()
+}
+
 // --- stats ------------------------------------------------------------------
 
 // SPEC-11.17.1
@@ -106,12 +118,28 @@ pub async fn users(
         path.push_str(&format!("&search={}", urlenc(search)));
     }
     // The API's `active` flag is tri-state: true = live only, false =
-    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it explicitly
-    // for active/suspended so the default page is not the "All" view.
+    // soft-deleted only (BUNYIP-120), omitted = both ("All"). Send it
+    // explicitly for active/suspended so the default page is not the "All"
+    // view. BUNYIP-1053: closed-set `{"active", "suspended", "all"}`; an
+    // unknown value used to fall through to `active=true`, silently hiding
+    // what the caller actually asked for. Now returns a decode-shaped
+    // error so the caller can surface the bad input.
     match status {
+        "active" => path.push_str("&active=true"),
         "suspended" => path.push_str("&active=false"),
         "all" => {}
-        _ => path.push_str("&active=true"),
+        other => {
+            return Err(ApiError {
+                status: 400,
+                code: "DECODE_ERROR".to_string(),
+                message: format!(
+                    "bunyip-web /admin/users: unknown status `{other}`; expected active / suspended / all"
+                ),
+                retry_after: None,
+                request_id: None,
+                bucket: None,
+            });
+        }
     }
     if !tier.is_empty() {
         path.push_str(&format!("&tier={}", urlenc(tier)));
@@ -134,7 +162,7 @@ pub async fn update_user_role(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/users/{user_id}/role"),
+            &format!("/admin/users/{}/role", enc(user_id)),
             cookie,
             Some(json!({ "role": role })),
         )
@@ -155,7 +183,7 @@ pub async fn update_user_email(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/users/{user_id}/email"),
+            &format!("/admin/users/{}/email", enc(user_id)),
             cookie,
             Some(json!({ "email": email, "verified": verified })),
         )
@@ -172,7 +200,7 @@ pub async fn verify_user_email(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/email/verify"),
+            &format!("/admin/users/{}/email/verify", enc(user_id)),
             cookie,
             None,
         )
@@ -190,7 +218,7 @@ pub async fn reset_user_two_factor(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/two-factor/reset"),
+            &format!("/admin/users/{}/two-factor/reset", enc(user_id)),
             cookie,
             None,
         )
@@ -201,7 +229,7 @@ pub async fn reset_user_two_factor(
 // SPEC-11.17.3
 pub async fn delete_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/users/{user_id}"), cookie, None)
+        .delete(&format!("/admin/users/{}", enc(user_id)), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -219,7 +247,7 @@ pub async fn delete_application(
 ) -> Result<(), ApiError> {
     let r = api
         .delete(
-            &format!("/admin/applications/{app_id}"),
+            &format!("/admin/applications/{}", enc(app_id)),
             cookie,
             Some(json!({ "password": password, "totp_code": totp_code })),
         )
@@ -234,7 +262,10 @@ pub async fn get_user(
     cookie: Option<&str>,
     user_id: &str,
 ) -> Result<AdminUser, ApiError> {
-    parse(api.get(&format!("/admin/users/{user_id}"), cookie).await?)
+    parse(
+        api.get(&format!("/admin/users/{}", enc(user_id)), cookie)
+            .await?,
+    )
 }
 
 // SPEC-11.17.3
@@ -242,7 +273,7 @@ pub async fn get_user(
 pub async fn suspend_user(api: &Api, cookie: Option<&str>, user_id: &str) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/users/{user_id}/status"),
+            &format!("/admin/users/{}/status", enc(user_id)),
             cookie,
             Some(json!({ "active": false })),
         )
@@ -261,7 +292,7 @@ pub async fn reactivate_user(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/users/{user_id}/status"),
+            &format!("/admin/users/{}/status", enc(user_id)),
             cookie,
             Some(json!({ "active": true })),
         )
@@ -278,7 +309,7 @@ pub async fn admin_reset_password(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/reset-password"),
+            &format!("/admin/users/{}/reset-password", enc(user_id)),
             cookie,
             None,
         )
@@ -299,7 +330,7 @@ pub async fn grant_lifetime(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/lifetime"),
+            &format!("/admin/users/{}/lifetime", enc(user_id)),
             cookie,
             Some(json!({ "totp_code": totp_code })),
         )
@@ -319,7 +350,7 @@ pub async fn revoke_lifetime(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/lifetime/revoke"),
+            &format!("/admin/users/{}/lifetime/revoke", enc(user_id)),
             cookie,
             Some(json!({ "totp_code": totp_code })),
         )
@@ -341,7 +372,7 @@ pub async fn set_user_tier(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/tier"),
+            &format!("/admin/users/{}/tier", enc(user_id)),
             cookie,
             Some(json!({ "tier": tier, "totp_code": totp_code })),
         )
@@ -412,7 +443,11 @@ pub async fn update_application(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api
-        .put(&format!("/admin/applications/{app_id}"), cookie, Some(body))
+        .put(
+            &format!("/admin/applications/{}", enc(app_id)),
+            cookie,
+            Some(body),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -456,7 +491,7 @@ pub async fn set_application_group(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/applications/{app_id}/group"),
+            &format!("/admin/applications/{}/group", enc(app_id)),
             cookie,
             Some(json!({ "group_id": group_id })),
         )
@@ -496,7 +531,7 @@ pub async fn update_application_group(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/application-groups/{group_id}"),
+            &format!("/admin/application-groups/{}", enc(group_id)),
             cookie,
             Some(body),
         )
@@ -512,7 +547,7 @@ pub async fn delete_application_group(
 ) -> Result<(), ApiError> {
     let r = api
         .delete(
-            &format!("/admin/application-groups/{group_id}"),
+            &format!("/admin/application-groups/{}", enc(group_id)),
             cookie,
             None,
         )
@@ -529,8 +564,11 @@ pub async fn list_user_entitlements(
     user_id: &str,
 ) -> Result<Vec<UserEntitlement>, ApiError> {
     parse(
-        api.get(&format!("/admin/users/{user_id}/entitlements"), cookie)
-            .await?,
+        api.get(
+            &format!("/admin/users/{}/entitlements", enc(user_id)),
+            cookie,
+        )
+        .await?,
     )
 }
 
@@ -543,7 +581,7 @@ pub async fn grant_user_entitlement(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/entitlements"),
+            &format!("/admin/users/{}/entitlements", enc(user_id)),
             cookie,
             Some(json!({ "slug": slug })),
         )
@@ -560,7 +598,7 @@ pub async fn revoke_user_entitlement(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/users/{user_id}/entitlements/revoke"),
+            &format!("/admin/users/{}/entitlements/revoke", enc(user_id)),
             cookie,
             Some(json!({ "slug": slug })),
         )
@@ -577,7 +615,7 @@ pub async fn set_application_restricted(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/applications/{slug}/restricted"),
+            &format!("/admin/applications/{}/restricted", enc(slug)),
             cookie,
             Some(json!({ "requires_entitlement": requires_entitlement })),
         )
@@ -945,13 +983,22 @@ pub async fn rate_limit_history(
     since: Option<&str>,
     limit: Option<u32>,
 ) -> Result<Vec<AdminRateLimitHistory>, ApiError> {
-    let mut path = String::from("/admin/rate-limits/history?");
+    // BUNYIP-1053: the earlier builder always started with `?` and appended
+    // `&` after each parameter, leaving a trailing `?` or `&` when all
+    // parameters were absent / the last one was present. Build the parts
+    // first and join cleanly so no trailing separator reaches the API.
+    let mut params: Vec<String> = Vec::new();
     if let Some(s) = since {
-        path.push_str(&format!("since={}&", urlenc(s)));
+        params.push(format!("since={}", urlenc(s)));
     }
     if let Some(l) = limit {
-        path.push_str(&format!("limit={l}&"));
+        params.push(format!("limit={l}"));
     }
+    let path = if params.is_empty() {
+        String::from("/admin/rate-limits/history")
+    } else {
+        format!("/admin/rate-limits/history?{}", params.join("&"))
+    };
     parse(api.get(&path, cookie).await?)
 }
 
@@ -1094,7 +1141,10 @@ pub async fn feedback(
     bucket: &str,
     filters: FeedbackFilters<'_>,
 ) -> Result<PaginatedResponse<AdminFeedbackSummary>, ApiError> {
-    let mut path = format!("/admin/feedback?page={page}&per_page={page_size}&bucket={bucket}");
+    let mut path = format!(
+        "/admin/feedback?page={page}&per_page={page_size}&bucket={}",
+        enc(bucket)
+    );
     if let Some(tag) = filters.tag {
         path.push_str(&format!("&tag={}", urlenc(tag)));
     }
@@ -1119,7 +1169,7 @@ pub async fn update_feedback_status(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/feedback/{id}/status"),
+            &format!("/admin/feedback/{}/status", enc(id)),
             cookie,
             Some(json!({ "status": status.as_str() })),
         )
@@ -1133,7 +1183,10 @@ pub async fn feedback_detail(
     cookie: Option<&str>,
     id: &str,
 ) -> Result<AdminFeedbackDetail, ApiError> {
-    parse(api.get(&format!("/admin/feedback/{id}"), cookie).await?)
+    parse(
+        api.get(&format!("/admin/feedback/{}", enc(id)), cookie)
+            .await?,
+    )
 }
 
 // SPEC-11.17.18
@@ -1149,7 +1202,7 @@ pub async fn respond_to_feedback(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/feedback/{id}/respond"),
+            &format!("/admin/feedback/{}/respond", enc(id)),
             cookie,
             Some(json!({
                 "response": response,
@@ -1184,7 +1237,7 @@ pub async fn restore_feedback(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/feedback/archive/{archive_id}/restore"),
+            &format!("/admin/feedback/archive/{}/restore", enc(archive_id)),
             cookie,
             None,
         )
@@ -1196,7 +1249,11 @@ pub async fn restore_feedback(
 /// BUNYIP-92: flip `is_spam` to TRUE.
 pub async fn mark_feedback_spam(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{id}/mark-spam"), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/mark-spam", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1209,7 +1266,11 @@ pub async fn unmark_feedback_spam(
     id: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{id}/unmark-spam"), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/unmark-spam", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1219,7 +1280,7 @@ pub async fn unmark_feedback_spam(
 /// API; the row is unrecoverable after this returns.
 pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/feedback/{id}"), cookie, None)
+        .delete(&format!("/admin/feedback/{}", enc(id)), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1229,7 +1290,11 @@ pub async fn delete_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Resul
 /// Reversible via the existing archive-restore endpoint.
 pub async fn archive_feedback(api: &Api, cookie: Option<&str>, id: &str) -> Result<(), ApiError> {
     let r = api
-        .post(&format!("/admin/feedback/{id}/archive"), cookie, None)
+        .post(
+            &format!("/admin/feedback/{}/archive", enc(id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1283,7 +1348,7 @@ pub async fn archive_stripe_product(
     id: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/stripe/products/{id}"), cookie, None)
+        .delete(&format!("/admin/stripe/products/{}", enc(id)), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1299,7 +1364,11 @@ pub async fn update_stripe_product(
     body: Value,
 ) -> Result<(), ApiError> {
     let r = api
-        .put(&format!("/admin/stripe/products/{id}"), cookie, Some(body))
+        .put(
+            &format!("/admin/stripe/products/{}", enc(id)),
+            cookie,
+            Some(body),
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1313,7 +1382,7 @@ pub async fn unarchive_stripe_product(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/stripe/products/{id}/unarchive"),
+            &format!("/admin/stripe/products/{}/unarchive", enc(id)),
             cookie,
             None,
         )
@@ -1346,7 +1415,7 @@ pub async fn archive_stripe_price(
     id: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/stripe/prices/{id}"), cookie, None)
+        .delete(&format!("/admin/stripe/prices/{}", enc(id)), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1360,7 +1429,7 @@ pub async fn unarchive_stripe_price(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/stripe/prices/{id}/unarchive"),
+            &format!("/admin/stripe/prices/{}/unarchive", enc(id)),
             cookie,
             None,
         )
@@ -1381,7 +1450,7 @@ pub async fn replace_stripe_price(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/stripe/prices/{id}/replace"),
+            &format!("/admin/stripe/prices/{}/replace", enc(id)),
             cookie,
             Some(body),
         )
@@ -1420,7 +1489,7 @@ pub async fn delete_stripe_webhook(
     id: &str,
 ) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/stripe/webhooks/{id}"), cookie, None)
+        .delete(&format!("/admin/stripe/webhooks/{}", enc(id)), cookie, None)
         .await?;
     ok_data(&r).map(|_| ())
 }
@@ -1622,7 +1691,7 @@ pub async fn app_docs(
     app_id: &str,
 ) -> Result<Vec<AppDoc>, ApiError> {
     parse(
-        api.get(&format!("/admin/applications/{app_id}/docs"), cookie)
+        api.get(&format!("/admin/applications/{}/docs", enc(app_id)), cookie)
             .await?,
     )
 }
@@ -1640,7 +1709,7 @@ pub async fn create_app_doc(
 ) -> Result<(), ApiError> {
     let r = api
         .post(
-            &format!("/admin/applications/{app_id}/docs"),
+            &format!("/admin/applications/{}/docs", enc(app_id)),
             cookie,
             Some(json!({ "slug": slug, "title": title, "body": body, "sort_order": sort_order })),
         )
@@ -1661,7 +1730,7 @@ pub async fn update_app_doc(
 ) -> Result<(), ApiError> {
     let r = api
         .put(
-            &format!("/admin/application-docs/{doc_id}"),
+            &format!("/admin/application-docs/{}", enc(doc_id)),
             cookie,
             Some(json!({ "slug": slug, "title": title, "body": body, "sort_order": sort_order })),
         )
@@ -1673,7 +1742,11 @@ pub async fn update_app_doc(
 /// Admin: delete a documentation page.
 pub async fn delete_app_doc(api: &Api, cookie: Option<&str>, doc_id: &str) -> Result<(), ApiError> {
     let r = api
-        .delete(&format!("/admin/application-docs/{doc_id}"), cookie, None)
+        .delete(
+            &format!("/admin/application-docs/{}", enc(doc_id)),
+            cookie,
+            None,
+        )
         .await?;
     ok_data(&r).map(|_| ())
 }

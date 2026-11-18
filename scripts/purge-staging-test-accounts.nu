@@ -23,8 +23,11 @@
 #     match "everything".
 #   - role = 'admin' rows are always excluded.
 #   - --commit additionally requires you to type the confirmation phrase, and
-#     refuses to run against a database whose URL does not opt in via
-#     --i-know-this-is-not-prod (guard against pointing it at prod by mistake).
+#     refuses to run unless the --i-know-this-is-not-prod flag is also passed
+#     (guard against pointing it at prod by mistake). BUNYIP-1041 note: the
+#     flag is a declarative opt-in; the script does NOT inspect the --database-url
+#     to verify it is non-prod. Pass the flag only when you know the URL is a
+#     staging/dev database.
 #
 # USAGE
 #   # 1. Preview what a pattern matches (safe, read-only):

@@ -224,7 +224,12 @@ async function readLoginError(page: Page): Promise<string | null> {
     if ((await box.count()) === 0) return null;
     const text = (await box.innerText()).trim().replace(/\s+/g, ' ');
     return text.length > 0 ? text : null;
-  } catch {
+  } catch (err) {
+    // BUNYIP-1041: a thrown error here used to return null, which callers
+    // then reported as "no error message rendered", hiding whether the
+    // login path actually raised or just had no visible error. Log the
+    // underlying cause so the spec report names it.
+    console.warn(`[login] readLoginError failed, reporting null: ${String(err)}`);
     return null;
   }
 }

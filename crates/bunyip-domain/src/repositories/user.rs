@@ -613,16 +613,22 @@ impl UserRepository {
     }
 
     /// Lock a user row `FOR UPDATE` to serialize concurrent mutations within a
-    /// transaction. Returns whether a (non-deleted) row was locked.
+    /// transaction. Returns whether a non-deleted row was locked.
+    ///
+    /// BUNYIP-1046: the earlier SQL had no `deleted_at IS NULL` filter, so a
+    /// soft-deleted row was also locked and returned `true`, contradicting
+    /// the doc. Sibling `find_by_id_for_update` already filters. Now
+    /// consistent: a soft-deleted row returns `false`.
     // SPEC-7.3.314
     pub async fn lock_for_update<'e, E>(executor: E, user_id: Uuid) -> Result<bool, AppError>
     where
         E: sqlx::Executor<'e, Database = Postgres>,
     {
-        let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(executor)
-            .await?;
+        let row: Option<(Uuid,)> =
+            sqlx::query_as("SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL FOR UPDATE")
+                .bind(user_id)
+                .fetch_optional(executor)
+                .await?;
 
         Ok(row.is_some())
     }

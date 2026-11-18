@@ -1,7 +1,10 @@
 //! Public pricing route configuration (BUNYIP-487).
 //!
-//! Unauthenticated and deliberately NOT in `rate_limit_floor::EXEMPT_PATHS`, so
-//! the default per-IP cap applies like it does to every other route.
+//! Unauthenticated. `/v1/pricing` is in `rate_limit_floor::EXEMPT_PATHS`
+//! (BUNYIP-518) because the BFF fetches this payload on every page render;
+//! the default per-IP cap otherwise swallowed the 429 into a cache miss that
+//! silently 404'd /pricing after a few page loads. The per-IP cap still
+//! applies at other routes.
 
 use actix_web::web;
 

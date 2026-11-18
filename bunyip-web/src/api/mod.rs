@@ -82,7 +82,14 @@ pub fn humanize_retry_after(secs: u64) -> String {
     } else if secs < 60 {
         "in about a minute".to_string()
     } else {
-        format!("in about {} minutes", secs.div_ceil(60))
+        // BUNYIP-1053: 60..119 seconds used to render "in about 1 minutes".
+        // Singularize the one-minute bucket; everything else stays plural.
+        let minutes = secs.div_ceil(60);
+        if minutes == 1 {
+            "in about a minute".to_string()
+        } else {
+            format!("in about {minutes} minutes")
+        }
     }
 }
 
@@ -213,11 +220,20 @@ impl Api {
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
+        // BUNYIP-1053: body-read and body-parse failures used to collapse to
+        // Value::Null with no log, so a non-JSON 5xx surfaced to the user as
+        // REQUEST_FAILED with no operator trace. Log both now.
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api body read failed");
+            String::new()
+        });
         let body = if text.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&text).unwrap_or(Value::Null)
+            serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, %url, status, "bunyip-api body parse failed");
+                Value::Null
+            })
         };
         Ok(Resp {
             path: path.to_string(),
@@ -251,22 +267,36 @@ impl Api {
             .header(ACCEPT, "application/json")
             .send()
             .await
-            .map_err(|e| ApiError {
-                status: 0,
-                code: "FETCH_FAILED".into(),
-                message: format!("GET {url}: {e}"),
-                retry_after: None,
-                request_id: None,
-                bucket: None,
+            .map_err(|e| {
+                // BUNYIP-1053: get_root used to bypass server-status
+                // classification, so /version left no trace on an outage.
+                tracing::warn!(error = %e, %url, "bunyip-api root request failed (transport)");
+                crate::server_status::note_transport_error();
+                ApiError {
+                    status: 0,
+                    code: "FETCH_FAILED".into(),
+                    message: format!("GET {url}: {e}"),
+                    retry_after: None,
+                    request_id: None,
+                    bucket: None,
+                }
             })?;
         let status = resp.status().as_u16();
+        // BUNYIP-1053: mirror send(): any response clears the down state.
+        crate::server_status::note_status(status);
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api root body read failed");
+            String::new()
+        });
         let body = if text.trim().is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(&text).unwrap_or(Value::Null)
+            serde_json::from_str(&text).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, %url, status, "bunyip-api root body parse failed");
+                Value::Null
+            })
         };
         Ok(Resp {
             path: path.to_string(),
@@ -370,8 +400,14 @@ impl Api {
             .collect();
         let retry_after_header = retry_after_from_headers(resp.headers());
         let request_id = request_id_from_headers(resp.headers());
-        let text = resp.text().await.unwrap_or_default();
-        let body = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let text = resp.text().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api form body read failed");
+            String::new()
+        });
+        let body = serde_json::from_str(&text).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, %url, status, "bunyip-api form body parse failed");
+            Value::Null
+        });
         Ok(Resp {
             path: path.to_string(),
             status,
@@ -408,10 +444,6 @@ fn forward_client_ip(rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
 }
 
 // SPEC-11.13.5
-/// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
-/// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
-/// the HTTP-date form is not produced by the API, so only the delta-seconds
-/// form is honoured here.
 /// BUNYIP-516: bunyip-api's `X-Request-Id` for this response. The dunite
 /// request-id middleware sets it from the same `RequestId` the api's own log
 /// lines record, so quoting this value locates the failure in the api log. The
@@ -427,6 +459,10 @@ fn request_id_from_headers(headers: &reqwest::header::HeaderMap) -> Option<Strin
 }
 
 // SPEC-11.13.5
+/// Parse the `Retry-After` header as whole seconds (BUNYIP-314). bunyip-api
+/// emits it as an integer count of seconds (dunite-core `AppError::RateLimited`);
+/// the HTTP-date form is not produced by the API, so only the delta-seconds
+/// form is honoured here.
 fn retry_after_from_headers(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     headers
         .get(RETRY_AFTER)
@@ -588,8 +624,10 @@ mod tests {
 
     #[test]
     fn humanize_sixty_seconds_crosses_into_minutes() {
-        // 60s is the first value past the "a minute" boundary; ceil(60/60) = 1.
-        assert_eq!(humanize_retry_after(60), "in about 1 minutes");
+        // BUNYIP-1053: 60s bucket renders as singular "a minute", not the
+        // ungrammatical "1 minutes" the previous `format!("in about {n} minutes")`
+        // produced. ceil(60/60) = 1, so the one-minute branch fires.
+        assert_eq!(humanize_retry_after(60), "in about a minute");
     }
 
     #[test]

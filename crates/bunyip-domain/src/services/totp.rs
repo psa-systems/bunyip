@@ -633,8 +633,14 @@ impl TotpService {
     /// Verify a code against a stored hash, supporting both legacy SHA-256 and Argon2id
     fn verify_code_against_hash(code: &str, stored_hash: &str) -> Result<bool, AppError> {
         if Self::is_legacy_hash(stored_hash) {
+            // BUNYIP-1048: legacy path previously compared with `==`, which
+            // byte-compares in short-circuit order. Use constant-time
+            // comparison like the setup-token path above (`stored.ct_eq(...)`)
+            // to match the existing convention and avoid a timing side channel
+            // on the legacy hash prefix.
             let computed = Self::hash_code(code);
-            Ok(computed == stored_hash)
+            let matches: bool = computed.as_bytes().ct_eq(stored_hash.as_bytes()).into();
+            Ok(matches)
         } else {
             let parsed = PasswordHash::new(stored_hash)
                 .map_err(|e| AppError::internal(format!("Invalid hash format: {}", e)))?;

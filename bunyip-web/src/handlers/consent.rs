@@ -155,9 +155,24 @@ pub async fn consent_get(
     // not accepted as input at all. A lookup failure (unknown client_id,
     // API unreachable) falls back to the generic "An application" card rather
     // than failing the whole page.
-    let identity = crate::api::calls::client_identity(&st.api, c.forward.as_deref(), &q.client_id)
-        .await
-        .ok();
+    // BUNYIP-1057: the `.ok()` discarded both "unknown client_id" and "API
+    // unreachable" without a log, so the "An application" fallback card was
+    // the first and only trace. Log cause + client_id at warn and keep the
+    // fallback so the page still renders.
+    let identity =
+        match crate::api::calls::client_identity(&st.api, c.forward.as_deref(), &q.client_id).await
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e.user_message(),
+                    request_id = ?e.request_id,
+                    client_id = %q.client_id,
+                    "consent_get: client_identity lookup failed; rendering generic app card"
+                );
+                None
+            }
+        };
     let client_name = identity.as_ref().and_then(|i| i.name.as_deref());
     let logo_uri = identity.as_ref().and_then(|i| i.logo_uri.as_deref());
 
@@ -244,11 +259,27 @@ pub async fn consent_post(
         .await
     {
         Ok(r) => r,
-        Err(_) => {
+        Err(e) => {
+            // BUNYIP-1057: the Err(_) arm used to drop the transport cause;
+            // the user sees a generic banner and the operator had no trace.
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                client_id = %f.client_id,
+                "consent_post: /users/me/consents failed"
+            );
             return redirect_cookies("/dashboard?error=Could+not+save+consent.", &c.set_cookies);
         }
     };
     if !r.ok() {
+        // BUNYIP-1057: a non-2xx envelope (validation, upstream error) also
+        // needs to leave a trace; same banner, extra signal for the operator.
+        tracing::warn!(
+            status = r.status,
+            request_id = ?r.request_id,
+            client_id = %f.client_id,
+            "consent_post: /users/me/consents returned non-OK envelope"
+        );
         return redirect_cookies("/dashboard?error=Could+not+save+consent.", &c.set_cookies);
     }
 

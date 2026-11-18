@@ -16,15 +16,11 @@ workspace = true
 # Pinned by rev, not branch, so a dunite bump is an explicit reviewable diff
 # instead of whatever `main` happened to point at when the lock was refreshed
 # (BUNYIP-426 F6). dunite publishes no tags; switch to `tag` when it does.
-# DEV-526/529: dunite-core and its dependents (download/oci/oidc) are at 82f9baa
-# for the CSRF guard, the error-log ring, and the trusted-proxy client-IP
-# resolver in dunite-core; they move as one rev to keep a single dunite-core.
-# The leaf crates below (stripe*, feedback, user-core, geoip, ipenrich, and
-# hibp/webhook) are independent and pin separately.
-# Wave 1 bump: dunite-core itself was not touched between 82f9baa and 8617fc8
-# (A1/A3/A6/A7 only moved into dunite-oci, dunite-webhook, and a new leaf), but
-# the whole graph pins one rev so dunite-oci's `AppError` and bunyip-domain's
-# `AppError` are the same type after the bump.
+# BUNYIP-1044: comment was stale (named 82f9baa / 8617fc8, with a cross-ref to
+# c5730bc); the dunite-core / dunite-download / dunite-oidc-op subgraph now
+# pins at 10e90faf and still moves as one rev so bunyip-domain, bunyip-oci and
+# bunyip-oidc share one `AppError` type. The leaf crates below (stripe*,
+# feedback) are independent and pin separately.
 # SPEC-7.1.4, SPEC-7.1.5: rev pin, shared by the whole dunite graph
 dunite-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # Generic Forgejo binary-distribution engine (artifact metadata, asset cache,
@@ -39,19 +35,15 @@ dunite-download = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90
 # SPEC-7.1.4, SPEC-7.1.5: same rev as dunite-core
 dunite-oidc-op = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "10e90faf9c7c4dbc0142bbc49d2a287f9940958d" }
 # Shared Stripe primitives (DEV-495 / DEV-514): the constant-time webhook
-# signature verifier, shared with a8n-tools and mokosh. Pinned to the branch rev
-# that introduced the crate; the dunite-core/download pins stay at c5730bc since
-# dunite main advanced dunite-oidc in between (unrelated). Collapse all three to
-# the single merged rev once dunite PR #27 lands.
-# BUNYIP-513/516: bumped to 5dab94d, moving in lock-step with dunite-stripe
-# below (its path dep) so there is one dunite-stripe-core in the tree. 5dab94d is
-# a descendant of the DUNITE-10 merge, so it carries the classified
-# `StripeServiceError::Stripe` variant BUNYIP-516 maps as well as the
-# `unarchive_price` BUNYIP-513 uses.
-# BUNYIP-822/823: bumped to 91e27f2 to pick up DUNITE-16 (deterministic ranking
+# signature verifier, shared with a8n-tools and mokosh.
+# BUNYIP-513/516: carries the classified `StripeServiceError::Stripe` variant
+# BUNYIP-516 maps and the `unarchive_price` BUNYIP-513 uses (both from the
+# DUNITE-10 merge).
+# BUNYIP-822/823: current rev 91e27f2 picks up DUNITE-16 (deterministic ranking
 # in `get_customer_subscription`, so a canceled+active customer resolves to
 # active) and DUNITE-17 (`list_products`/`list_prices` walk `has_more` instead
 # of silently truncating to the first 100 rows).
+# Moves in lock-step with dunite-stripe (its path dep below).
 # SPEC-7.1.4, SPEC-7.1.6: moves in lock-step with dunite-stripe
 dunite-stripe-core = { git = "https://dev.a8n.run/psa-systems/dunite", rev = "91e27f2b798128aa2cf54f742df8248564888bf0" }
 # Shared feedback domain (DEV-495 / DEV-516): models + FeedbackRepository, lifted

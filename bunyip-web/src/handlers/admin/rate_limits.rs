@@ -468,6 +468,27 @@ fn sparkline(points: &[(String, i64)], limit: i32) -> Markup {
 /// Returns the shared `ApiError` if every entry in `traffic` failed (the
 /// whole-card fetch failure case, where every row carries a clone of the
 /// same error), or `None` if `traffic` is empty or at least one row is `Ok`.
+// BUNYIP-1055: shared render for the two per-action traffic Err arms so the
+// tracing::warn! can live in Rust (maud blocks are expression-only). The
+// screen text stays terse; the operator log names the action, status and
+// code, and the DOM carries a tooltip with the client-visible message.
+fn render_traffic_error(action: &str, e: &ApiError, label: &'static str) -> Markup {
+    tracing::warn!(
+        action = %action,
+        status = e.status,
+        code = %e.code,
+        "admin/rate_limits: traffic fetch failed; rendering `{label}`"
+    );
+    let class = if label == "Traffic unavailable." {
+        "text-xs text-amber-800 dark:text-amber-400"
+    } else {
+        "text-xs text-muted-foreground"
+    };
+    html! {
+        p class=(class) title=(e.user_message()) { (label) }
+    }
+}
+
 fn all_err(traffic: &[(String, Result<AdminRateLimitTraffic, ApiError>)]) -> Option<&ApiError> {
     if traffic.is_empty() || traffic.iter().any(|(_, res)| res.is_ok()) {
         return None;
@@ -530,8 +551,13 @@ fn traffic_card(
                                             (fmt_window_seconds(t.window_seconds))
                                         }
                                     }
-                                    Err(_) => {
-                                        p class="text-xs text-muted-foreground" { "Limit unavailable." }
+                                    // BUNYIP-1055: previously `Err(_)` erased
+                                    // the cause. Render the cause in a title
+                                    // tooltip and emit a warn log (both via a
+                                    // sibling helper so the maud block stays
+                                    // expression-only).
+                                    Err(e) => {
+                                        (render_traffic_error(action, e, "Limit unavailable."))
                                     }
                                 }
                             }
@@ -549,10 +575,8 @@ fn traffic_card(
                                             (sparkline(&points, t.max_requests))
                                         }
                                     }
-                                    Err(_) => {
-                                        p class="text-xs text-amber-800 dark:text-amber-400" {
-                                            "Traffic unavailable."
-                                        }
+                                    Err(e) => {
+                                        (render_traffic_error(action, e, "Traffic unavailable."))
                                     }
                                 }
                             }
@@ -623,7 +647,16 @@ pub async fn rate_limit_reset(
     let target =
         match admin_api::reset_rate_limit(&st.api, c.forward.as_deref(), &f.action, &f.key).await {
             Ok(()) => format!("{base}?toast_ok=Rate%20limit%20reset"),
-            Err(_) => format!("{base}?toast_err=Could%20not%20reset%20rate%20limit"),
+            Err(e) => {
+                // BUNYIP-1055: log the cause so the toast ties to a log line.
+                tracing::warn!(
+                    error = ?e,
+                    action = %f.action,
+                    key = %f.key,
+                    "reset_rate_limit failed"
+                );
+                format!("{base}?toast_err=Could%20not%20reset%20rate%20limit")
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -673,7 +706,17 @@ pub async fn rate_limit_config_save(
     .await
     {
         Ok(()) => "/admin/rate-limits?toast_ok=Rate%20limit%20updated".to_string(),
-        Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: log the identifying value (action) with the
+            // cause; toast text unchanged (carries the user_message).
+            tracing::warn!(
+                action = %f.action.trim(),
+                status = e.status,
+                code = %e.code,
+                "admin/rate-limits: rate_limit_config save failed"
+            );
+            format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -706,7 +749,16 @@ pub async fn rate_limit_config_reset(
             Ok(()) => {
                 "/admin/rate-limits?toast_ok=Reverted%20to%20the%20default%20limit".to_string()
             }
-            Err(e) => format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message())),
+            Err(e) => {
+                // BUNYIP-1055: log the action; toast carries user_message.
+                tracing::warn!(
+                    action = %f.action.trim(),
+                    status = e.status,
+                    code = %e.code,
+                    "admin/rate-limits: delete_rate_limit_config failed"
+                );
+                format!("/admin/rate-limits?toast_err={}", urlenc(&e.user_message()))
+            }
         };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -875,7 +927,7 @@ pub async fn rate_limit_whitelist_add(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let target = match admin_api::add_rate_limit_whitelist(
+    let target: String = match admin_api::add_rate_limit_whitelist(
         &st.api,
         c.forward.as_deref(),
         f.kind.trim(),
@@ -884,10 +936,19 @@ pub async fn rate_limit_whitelist_add(
     )
     .await
     {
-        Ok(()) => "/admin/rate-limits?toast_ok=Added%20to%20whitelist",
-        Err(_) => "/admin/rate-limits?toast_err=Could%20not%20add%20to%20whitelist",
+        Ok(()) => "/admin/rate-limits?toast_ok=Added%20to%20whitelist".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(
+                error = ?e,
+                kind = %f.kind.trim(),
+                value = %f.value.trim(),
+                "rate_limit_whitelist_add failed"
+            );
+            "/admin/rate-limits?toast_err=Could%20not%20add%20to%20whitelist".to_string()
+        }
     };
-    redirect_cookies(target, &c.set_cookies)
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 /// Form body for removing a whitelist entry.
@@ -908,14 +969,18 @@ pub async fn rate_limit_whitelist_remove(
         Ok(v) => v,
         Err(r) => return r,
     };
-    let target =
+    let target: String =
         match admin_api::delete_rate_limit_whitelist(&st.api, c.forward.as_deref(), f.id.trim())
             .await
         {
-            Ok(()) => "/admin/rate-limits?toast_ok=Removed%20from%20whitelist",
-            Err(_) => "/admin/rate-limits?toast_err=Could%20not%20remove%20from%20whitelist",
+            Ok(()) => "/admin/rate-limits?toast_ok=Removed%20from%20whitelist".to_string(),
+            Err(e) => {
+                // BUNYIP-1055: log the cause so the toast ties to a log line.
+                tracing::warn!(error = ?e, id = %f.id.trim(), "rate_limit_whitelist_remove failed");
+                "/admin/rate-limits?toast_err=Could%20not%20remove%20from%20whitelist".to_string()
+            }
         };
-    redirect_cookies(target, &c.set_cookies)
+    redirect_cookies(&target, &c.set_cookies)
 }
 
 #[cfg(test)]

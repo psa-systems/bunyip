@@ -659,10 +659,8 @@ impl EmailConfig {
                 .get("SUPPORT_IMAP_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            imap_poll_secs: env::var("SUPPORT_IMAP_POLL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(60),
+            // BUNYIP-1044: warn on malformed values (see `env_parse_or_default`).
+            imap_poll_secs: env_parse_or_default("SUPPORT_IMAP_POLL_SECS", 60),
         }
     }
 
@@ -768,10 +766,28 @@ impl EmailConfig {
 /// The SMTP TLS mode a provider's raw value names. Anything but `starttls`
 /// (case-insensitively) is implicit TLS, which is what the environment read has
 /// always done; the database provider only ever holds one of the two spellings.
+///
+/// BUNYIP-1044: a typo or whitespace-mangled value (e.g. `start tls`,
+/// `implict`) silently fell through to implicit TLS, so an operator who
+/// typed `SMTP_TLS=starttls ` with a trailing space sent plaintext on the
+/// SMTPS port. The set is still closed to the two canonical spellings; a
+/// third value now warns naming the raw input, so the operator can see the
+/// typo without changing the fallback shape.
 fn smtp_tls_from(raw: Option<&str>) -> SmtpTls {
-    match raw.unwrap_or_default().to_lowercase().as_str() {
+    let Some(raw) = raw else {
+        return SmtpTls::Implicit;
+    };
+    let trimmed = raw.trim();
+    match trimmed.to_lowercase().as_str() {
         "starttls" => SmtpTls::Starttls,
-        _ => SmtpTls::Implicit,
+        "implicit" | "tls" | "" => SmtpTls::Implicit,
+        _ => {
+            tracing::warn!(
+                raw = %raw,
+                "SMTP_TLS: unrecognised value; falling back to implicit TLS. Expected `starttls` or `implicit`."
+            );
+            SmtpTls::Implicit
+        }
     }
 }
 
@@ -791,10 +807,19 @@ fn client_id_from_host(host: &str) -> ClientId {
 // SPEC-7.1.72: address half of SMTP_FROM
 /// Parse email address from SMTP_FROM.
 /// Supports "Display Name <email>" or plain "email" format.
+///
+/// BUNYIP-1044: the earlier `smtp_from[start+1..end]` slice panicked when
+/// the first `>` preceded the first `<` (e.g. `a> <b`), hitting
+/// index-out-of-bounds at startup. A malformed value now falls through to
+/// the plain-string branch (trim and return) rather than panicking;
+/// `check_smtp_from` on the typed config path still surfaces the
+/// misconfiguration as a startup ConfigFailure.
 pub(crate) fn parse_smtp_from_email(smtp_from: &str) -> String {
     if let Some(start) = smtp_from.find('<') {
         if let Some(end) = smtp_from.find('>') {
-            return smtp_from[start + 1..end].trim().to_string();
+            if end > start {
+                return smtp_from[start + 1..end].trim().to_string();
+            }
         }
     }
     smtp_from.trim().to_string()
@@ -817,6 +842,34 @@ pub(crate) fn parse_smtp_from_name(smtp_from: &str) -> String {
 /// Parse a comma-separated list of CIDR ranges into trusted-proxy networks.
 /// Invalid entries are logged and skipped rather than aborting startup, so a
 /// single typo cannot take the whole service down; an empty or all-invalid
+/// BUNYIP-1044: parse `env::var(name)` as `T`, falling back to `default` on
+/// unset or malformed values. Unset is quiet (the documented case); a value
+/// that is set but does not parse now warns naming the key, the raw value
+/// and the fallback, so an operator can see why the default kicked in. Used
+/// by the `Download`/`OCI`/`OIDC` and `SUPPORT_IMAP_POLL_SECS` readers.
+fn env_parse_or_default<T>(name: &str, default: T) -> T
+where
+    T: std::str::FromStr + std::fmt::Display,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    match env::var(name) {
+        Err(_) => default,
+        Ok(raw) => match raw.parse::<T>() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    key = name,
+                    raw = %raw,
+                    error = %e,
+                    default = %default,
+                    "config: environment value does not parse; falling back to the default"
+                );
+                default
+            }
+        },
+    }
+}
+
 /// list means no proxy is trusted and forwarding headers are ignored.
 fn parse_trusted_proxies(raw: &str) -> Vec<ipnetwork::IpNetwork> {
     raw.split(',')
@@ -1048,22 +1101,12 @@ impl DownloadConfig {
             forgejo_api_token: secret_env("FORGEJO_API_TOKEN"),
             cache_dir: env::var("DOWNLOAD_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-downloads".to_string()),
-            cache_max_bytes: env::var("DOWNLOAD_CACHE_MAX_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(10_737_418_240),
-            concurrency_per_user: env::var("DOWNLOAD_CONCURRENCY_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
-            daily_limit_per_user: env::var("DOWNLOAD_DAILY_LIMIT_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(50),
-            release_cache_ttl_secs: env::var("FORGEJO_RELEASE_CACHE_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
+            // BUNYIP-1044: unset falls back quietly; a set-but-malformed
+            // value now warns via `env_parse_or_default` naming the key.
+            cache_max_bytes: env_parse_or_default("DOWNLOAD_CACHE_MAX_BYTES", 10_737_418_240),
+            concurrency_per_user: env_parse_or_default("DOWNLOAD_CONCURRENCY_PER_USER", 2),
+            daily_limit_per_user: env_parse_or_default("DOWNLOAD_DAILY_LIMIT_PER_USER", 50),
+            release_cache_ttl_secs: env_parse_or_default("FORGEJO_RELEASE_CACHE_TTL_SECS", 300),
         }
     }
 
@@ -1163,10 +1206,9 @@ impl OciConfig {
             enabled: env::var("OCI_REGISTRY_ENABLED")
                 .map(|v| v == "true" || v == "1")
                 .unwrap_or(false),
-            port: env::var("OCI_REGISTRY_PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(18081),
+            // BUNYIP-1044: set-but-malformed values warn via
+            // `env_parse_or_default` instead of silently taking the default.
+            port: env_parse_or_default("OCI_REGISTRY_PORT", 18081),
             service: env::var("OCI_REGISTRY_SERVICE")
                 .unwrap_or_else(|_| "oci.example.com".to_string()),
             realm: env::var("OCI_REGISTRY_REALM")
@@ -1174,26 +1216,18 @@ impl OciConfig {
                 .filter(|s| !s.is_empty()),
             blob_cache_dir: env::var("OCI_BLOB_CACHE_DIR")
                 .unwrap_or_else(|_| "/var/cache/bunyip-oci".to_string()),
-            blob_cache_max_bytes: env::var("OCI_BLOB_CACHE_MAX_BYTES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(53_687_091_200), // 50 GiB
-            manifest_cache_ttl_secs: env::var("OCI_MANIFEST_CACHE_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(300),
-            concurrent_manifests_per_user: env::var("OCI_CONCURRENT_MANIFESTS_PER_USER")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2),
-            pulls_per_user_per_day: env::var("OCI_PULLS_PER_USER_PER_DAY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(50),
-            token_ttl_secs: env::var("OCI_TOKEN_TTL_SECS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(900),
+            // 50 GiB default
+            blob_cache_max_bytes: env_parse_or_default::<u64>(
+                "OCI_BLOB_CACHE_MAX_BYTES",
+                53_687_091_200,
+            ),
+            manifest_cache_ttl_secs: env_parse_or_default("OCI_MANIFEST_CACHE_TTL_SECS", 300),
+            concurrent_manifests_per_user: env_parse_or_default(
+                "OCI_CONCURRENT_MANIFESTS_PER_USER",
+                2,
+            ),
+            pulls_per_user_per_day: env_parse_or_default("OCI_PULLS_PER_USER_PER_DAY", 50),
+            token_ttl_secs: env_parse_or_default("OCI_TOKEN_TTL_SECS", 900),
         }
     }
 }
@@ -1260,34 +1294,23 @@ impl OidcConfig {
                 .unwrap_or_else(|_| "dev-key".to_string()),
             jwt_public_keys_dir: env::var("OIDC_JWT_PUBLIC_KEYS_DIR")
                 .unwrap_or_else(|_| "secrets".to_string()),
+            // BUNYIP-1044: set-but-malformed values warn via
+            // `env_parse_or_default` instead of silently taking the default.
             // SPEC-7.1.82: clamped to 60..=900
-            access_token_ttl_secs: env::var("OIDC_ACCESS_TOKEN_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(600)
+            access_token_ttl_secs: env_parse_or_default("OIDC_ACCESS_TOKEN_TTL_SECONDS", 600)
                 .clamp(60, 900),
-            refresh_token_ttl_secs: env::var("OIDC_REFRESH_TOKEN_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(2_592_000),
-            refresh_idle_ttl_secs: env::var("OIDC_REFRESH_IDLE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1_209_600),
+            refresh_token_ttl_secs: env_parse_or_default(
+                "OIDC_REFRESH_TOKEN_TTL_SECONDS",
+                2_592_000,
+            ),
+            refresh_idle_ttl_secs: env_parse_or_default("OIDC_REFRESH_IDLE_TTL_SECONDS", 1_209_600),
             // SPEC-7.1.82: capped at 120
-            code_ttl_secs: env::var("OIDC_CODE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(60)
-                .min(120),
-            session_idle_ttl_secs: env::var("SESSION_IDLE_TTL_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(28_800),
-            session_idle_ttl_remember_secs: env::var("SESSION_IDLE_TTL_REMEMBER_SECONDS")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(1_209_600),
+            code_ttl_secs: env_parse_or_default("OIDC_CODE_TTL_SECONDS", 60).min(120),
+            session_idle_ttl_secs: env_parse_or_default("SESSION_IDLE_TTL_SECONDS", 28_800),
+            session_idle_ttl_remember_secs: env_parse_or_default(
+                "SESSION_IDLE_TTL_REMEMBER_SECONDS",
+                1_209_600,
+            ),
             lifecycle_event_key: env::var("OIDC_LIFECYCLE_EVENT_KEY")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -1316,7 +1339,18 @@ impl Config {
         // the resulting process env. The load is kept separate from parsing so
         // tests can exercise `from_env_inner` against a controlled process env
         // without a repo-root `.env` re-injecting values mid-test (BUNYIP-102).
-        let _ = dotenvy::dotenv();
+        //
+        // BUNYIP-1044: a malformed `.env` (or any failure other than
+        // not-found) used to be discarded silently with `let _ = ...`. File-
+        // not-found is the normal production case so it stays quiet; every
+        // other dotenvy error now warns naming the cause, matching the
+        // bunyip-api BUNYIP-1049 fix.
+        match dotenvy::dotenv() {
+            Ok(_) | Err(dotenvy::Error::Io(_)) => {}
+            Err(e) => {
+                tracing::warn!(error = %e, "config: dotenvy::dotenv load failed; continuing with the process env only");
+            }
+        }
         Self::from_env_inner()
     }
 
@@ -1505,11 +1539,28 @@ impl Config {
                     Vec::new()
                 }
             };
-        // SPEC-7.1.38: version stamped on newly written rows
-        let app_key_version: i16 = env::var("APP_KEY_VERSION")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(1);
+        // SPEC-7.1.38: version stamped on newly written rows.
+        //
+        // BUNYIP-1044: a set but unparseable `APP_KEY_VERSION` used to silently
+        // become `1`, stamping new rows with the wrong key version and
+        // breaking re-encryption. Report it as a startup `ConfigFailure`
+        // so the operator fixes it before any row is written.
+        let app_key_version: i16 = match env::var("APP_KEY_VERSION") {
+            Err(_) => 1,
+            Ok(raw) => match raw.parse() {
+                Ok(v) => v,
+                Err(e) => {
+                    failures.push(ConfigFailure {
+                        var: "APP_KEY_VERSION",
+                        reason: format!("the value `{raw}` is not a valid i16 ({e})"),
+                        remedy: "Set it to the small positive integer stamped on the matching \
+                             APP_ENCRYPTION_KEY (same value used when the key was created)."
+                            .to_string(),
+                    });
+                    1
+                }
+            },
+        };
 
         let tier = TierConfig::resolve(&deployment, None);
         let download = DownloadConfig::from_env();
@@ -2509,6 +2560,10 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted(
         "BUNYIP_COMMUNITY_URL",
         "Let's Chat instance URL; empty hides the Community button (BUNYIP-329)",
+    ),
+    EnvVarSpec::defaulted(
+        "BUNYIP_BLOG_URL",
+        "product blog URL linked from the public header, footer and newsletter section; empty hides every blog link (BUNYIP-1077)",
     ),
     EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",

@@ -54,18 +54,14 @@ fn document_title(page_title: &str, branding: &Branding) -> String {
 }
 
 // SPEC-11.22.8: committed image is a fallback, never an override
-/// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
-/// is empty, so an unbranded deployment emits none of them rather than
-/// advertising a placeholder. There is deliberately no `og:url`: `document()`
-/// has no request context, and a wrong canonical URL is worse than none.
-///
-/// `twitter:card` is `summary_large_image` only when an image URL is set;
-/// without one the large-image card renders as a blank rectangle.
 /// The image the sharing card carries. The record's uploaded image wins;
 /// without one the committed product image stands in, so a deployment that has
 /// branded nothing still shares as a card with a picture rather than as a bare
 /// link. `None` only when neither exists, which is what keeps the tags omitted
 /// rather than pointing at nothing.
+///
+/// BUNYIP-1054: this doc used to be fused under `social_meta`'s block; moved
+/// to its real item.
 fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
     if branding.og_image_url.is_empty() {
         fallback.map(str::to_string)
@@ -76,6 +72,13 @@ fn share_image(branding: &Branding, fallback: Option<&str>) -> Option<String> {
 
 // SPEC-11.22.2, SPEC-11.22.3, SPEC-11.22.4, SPEC-11.22.5, SPEC-11.22.6, SPEC-11.22.7, SPEC-11.22.9:
 // every tag omitted when its source is empty
+/// BUNYIP-561: the sharing metadata. Every tag is omitted when its source value
+/// is empty, so an unbranded deployment emits none of them rather than
+/// advertising a placeholder. There is deliberately no `og:url`: `document()`
+/// has no request context, and a wrong canonical URL is worse than none.
+///
+/// `twitter:card` is `summary_large_image` only when an image URL is set;
+/// without one the large-image card renders as a blank rectangle.
 fn social_meta(page_title: &str, branding: &Branding) -> Markup {
     let share_image = share_image(branding, default_share_image());
     let has_any = !branding.brand_name.is_empty()
@@ -426,7 +429,7 @@ fn feedback_launcher() -> Markup {
 /// than `user.is_some()`, so an unverified user does not see a link that
 /// would immediately redirect them to `/onboarding`.
 fn header(
-    _cfg: &Config,
+    cfg: &Config,
     user: Option<&User>,
     pricing: bool,
     app_links_allowed: bool,
@@ -450,6 +453,12 @@ fn header(
                         // same working entry when the documented-application
                         // list cannot be read at all.
                         a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
+                        // BUNYIP-1077: the external product blog. Empty
+                        // BUNYIP_BLOG_URL hides the link entirely so a deploy
+                        // without a blog never shows a dead link.
+                        @if !cfg.blog_url.is_empty() {
+                            a href=(cfg.blog_url) class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Blog" }
+                        }
                         // BUNYIP-667: ONE link to the list page, never a menu
                         // of per-application entries. This is the same rule
                         // BUNYIP-635 states for Documentation two lines above,
@@ -516,6 +525,11 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             // BUNYIP-635: same plain hub link as the header.
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
+                            // BUNYIP-1077: same configured blog link as the
+                            // header, absent when BUNYIP_BLOG_URL is unset.
+                            @if !cfg.blog_url.is_empty() {
+                                li { a href=(cfg.blog_url) class="text-muted-foreground hover:text-foreground transition-colors" { "Blog" } }
+                            }
                             // BUNYIP-682: one signed-in link, like the header
                             // (BUNYIP-667), never an entry per application.
                             // same gate as the header - the link

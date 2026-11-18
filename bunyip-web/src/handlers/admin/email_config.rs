@@ -296,8 +296,14 @@ pub(super) fn email_update_body(f: &EmailSettingsForm) -> Result<serde_json::Val
         body.insert("imap_port".into(), json!(n));
     }
 
+    // BUNYIP-1055: an unknown smtp_tls used to be silently omitted from the
+    // update. Accept the empty string as "leave unchanged" and reject
+    // anything that is not one of the two known modes.
     let tls = f.smtp_tls.trim();
-    if tls == "implicit" || tls == "starttls" {
+    if !tls.is_empty() {
+        if tls != "implicit" && tls != "starttls" {
+            return Err("TLS mode must be 'implicit' or 'starttls'.".to_string());
+        }
         body.insert("smtp_tls".into(), json!(tls));
     }
 

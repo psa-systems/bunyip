@@ -324,9 +324,17 @@ fn membership_status(user: &User, pricing: &PricingResponse) -> Markup {
 
 // SPEC-12.54.20: date format
 fn fmt_ts(ts: i64) -> String {
-    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-        .map(|d| d.format("%B %-d, %Y").to_string())
-        .unwrap_or_default()
+    // BUNYIP-1057: an unparseable timestamp used to render as an empty
+    // string with no trace; a visible `"unknown date"` plus a warn log
+    // surfaces the bad value so neither the operator nor the viewer
+    // sees a silent missing date.
+    match chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0) {
+        Some(d) => d.format("%B %-d, %Y").to_string(),
+        None => {
+            tracing::warn!(ts, "fmt_ts: invalid unix timestamp; rendering placeholder");
+            "unknown date".to_string()
+        }
+    }
 }
 // SPEC-12.54.20: date format
 fn fmt_date_iso(iso: &str) -> String {
@@ -631,14 +639,46 @@ pub async fn download_asset(
             }
             builder
                 .body(Body::from_stream(resp.bytes_stream()))
-                .unwrap_or_else(|_| redirect_cookies("/downloads", &c.set_cookies))
+                .unwrap_or_else(|e| {
+                    // BUNYIP-1057: a response-build failure used to redirect
+                    // with no trace; the user saw the Downloads page again
+                    // for no visible reason. Log the cause before the bounce.
+                    tracing::warn!(
+                        error = %e,
+                        slug = %slug,
+                        asset = %asset_name,
+                        "download_asset: could not build streaming response; redirecting to /downloads"
+                    );
+                    redirect_cookies("/downloads", &c.set_cookies)
+                })
         }
         // Any non-2xx (expired session, lost entitlement, upstream outage) must
         // NOT be saved as the asset. The anchor carries no `download` attribute,
         // so navigating the browser back renders HTML instead of downloading it:
         // sign-in on 401, the downloads page otherwise.
         Ok(resp) if resp.status().as_u16() == 401 => redirect_cookies("/login", &c.set_cookies),
-        _ => redirect_cookies("/downloads", &c.set_cookies),
+        // BUNYIP-1057: every other non-2xx used to silently redirect, so an
+        // upstream outage was invisible to operators while users saw the
+        // Downloads page. Log status and the slug/asset for correlation.
+        Ok(resp) => {
+            tracing::warn!(
+                status = resp.status().as_u16(),
+                slug = %slug,
+                asset = %asset_name,
+                "download_asset: upstream returned non-success; redirecting to /downloads"
+            );
+            redirect_cookies("/downloads", &c.set_cookies)
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                slug = %slug,
+                asset = %asset_name,
+                "download_asset: transport failure; redirecting to /downloads"
+            );
+            redirect_cookies("/downloads", &c.set_cookies)
+        }
     }
 }
 
@@ -899,7 +939,21 @@ pub async fn checkout_success(State(st): State<AppState>, headers: HeaderMap) ->
     // until the webhook lands. Lifetime members and any user already
     // Active see the celebration unchanged.
     let fwd = c.forward.as_deref();
-    let membership = calls::membership(&st.api, fwd).await.unwrap_or(None);
+    // BUNYIP-1057: checkout_success used to swallow a membership-fetch failure
+    // to None, so the "Finalizing your membership" card persisted indefinitely
+    // without any operator trace on API outage. Log cause + request_id.
+    let membership = match calls::membership(&st.api, fwd).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "checkout_success: membership fetch failed; rendering finalizing card"
+            );
+            None
+        }
+    };
     let is_active = user.lifetime_member
         || membership
             .as_ref()
@@ -1121,7 +1175,22 @@ pub async fn membership(
         st.stripe_enabled(),
         st.pricing(),
     );
-    let current: Option<Membership> = membership_data.unwrap_or(None);
+    // BUNYIP-1057: a membership-fetch failure used to collapse to None with
+    // no log, so the page rendered "No Active Membership" + Subscribe silently
+    // on API outage. Log the cause and keep the None fallback so the rest of
+    // the join still renders.
+    let current: Option<Membership> = match membership_data {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership page: membership fetch failed; rendering no-active"
+            );
+            None
+        }
+    };
     let payments_error = payments_data.as_ref().err().cloned();
     let payments = payments_data.unwrap_or_default();
     let invoices_error = invoices_data.as_ref().err().cloned();
@@ -1389,39 +1458,73 @@ fn humanise_checkout_error(raw: &str) -> String {
 }
 // SPEC-12.55.10: cancel at period end
 pub async fn membership_cancel(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::cancel(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: `.unwrap_or_default()` used to turn a failed cancel into
+    // an empty cookie list, so a Membership redirect looked like success to
+    // the user. Log the cause so the operator can trace the silent fail; the
+    // bounce back to /membership re-reads the real membership state so the
+    // user ends up seeing the still-Active card if nothing changed.
+    let extra = match calls::cancel(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_cancel: cancel failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 // SPEC-12.55.10: cancel immediately
 pub async fn membership_cancel_now(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::cancel_now(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: same silent-fail pattern as membership_cancel.
+    let extra = match calls::cancel_now(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_cancel_now: cancel_now failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
 }
 // SPEC-12.55.10: undo pending cancellation
 pub async fn membership_reactivate(State(st): State<AppState>, headers: HeaderMap) -> Response {
-    let (_, c) = match guard(&st, &headers, "/membership").await {
+    let (user, c) = match guard(&st, &headers, "/membership").await {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let extra = calls::reactivate(&st.api, c.forward.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: same silent-fail pattern as membership_cancel.
+    let extra = match calls::reactivate(&st.api, c.forward.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = %e.user_message(),
+                request_id = ?e.request_id,
+                user_id = %user.id,
+                "membership_reactivate: reactivate failed; redirecting to /membership"
+            );
+            Vec::new()
+        }
+    };
     let mut cookies = c.set_cookies.clone();
     cookies.extend(extra);
     redirect_cookies("/membership", &cookies)
@@ -1514,7 +1617,23 @@ pub async fn settings(
     // join and runs alongside the independent sessions fetch.
     let ((twofa_enabled, trusted_devices), sessions_data) = tokio::join!(
         async {
-            let twofa = auth_api::status_2fa(&st.api, fwd).await.ok();
+            // BUNYIP-1057: a failed `/users/me/2fa/status` fetch used to fall
+            // back to the claim flag with no log; the user's trusted-device
+            // section could silently render or hide based on a stale value.
+            // Log the cause so the operator can trace flaps; keep the user's
+            // flag as the fallback so the card still renders coherently.
+            let twofa = match auth_api::status_2fa(&st.api, fwd).await {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e.user_message(),
+                        request_id = ?e.request_id,
+                        user_id = %user.id,
+                        "settings: 2FA status fetch failed; falling back to claim flag"
+                    );
+                    None
+                }
+            };
             let twofa_enabled = twofa
                 .as_ref()
                 .map(|s| s.enabled)
@@ -2323,14 +2442,20 @@ pub async fn settings_delete(
 
 // SPEC-12.57.4: QR for the authenticator setup
 fn qr_svg(uri: &str) -> String {
-    qrcode::QrCode::new(uri.as_bytes())
-        .map(|code| {
-            code.render::<qrcode::render::svg::Color>()
-                .min_dimensions(200, 200)
-                .quiet_zone(false)
-                .build()
-        })
-        .unwrap_or_default()
+    // BUNYIP-1057: a QR encode failure used to render as an empty string
+    // with no trace, so the setup card showed a blank panel. Log the
+    // cause; the caller still handles the empty string gracefully.
+    match qrcode::QrCode::new(uri.as_bytes()) {
+        Ok(code) => code
+            .render::<qrcode::render::svg::Color>()
+            .min_dimensions(200, 200)
+            .quiet_zone(false)
+            .build(),
+        Err(e) => {
+            tracing::warn!(error = ?e, "qr_svg: encode failed; rendering an empty panel");
+            String::new()
+        }
+    }
 }
 
 // SPEC-12.57.6: shared by enrollment and regeneration
@@ -2693,13 +2818,23 @@ pub async fn twofa_setup_confirm_post(
                     "/settings/2fa/setup/confirm",
                     "Verify & Enable",
                 ),
-                Err(_) => html! {
-                    div class="mx-auto max-w-lg space-y-6" {
-                        h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) }
-                        (error_box(&err_msg))
-                        a href="/settings/2fa/setup" class=(button_class("default", "default", "")) { "Start again" }
+                Err(e2) => {
+                    // BUNYIP-1057: the resume_2fa_setup failure used to be
+                    // dropped by `Err(_)`. Log the cause so a chronic
+                    // backend issue shows up alongside the original
+                    // setup failure.
+                    tracing::warn!(
+                        error = ?e2,
+                        "2fa_setup_confirm: resume_2fa_setup failed after the confirm error",
+                    );
+                    html! {
+                        div class="mx-auto max-w-lg space-y-6" {
+                            h1 class="text-3xl font-bold" { (TWOFA_SETUP_HEADING) }
+                            (error_box(&err_msg))
+                            a href="/settings/2fa/setup" class=(button_class("default", "default", "")) { "Start again" }
+                        }
                     }
-                },
+                }
             }
         }
     };

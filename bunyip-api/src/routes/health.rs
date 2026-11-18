@@ -95,10 +95,18 @@ pub async fn e2e_bootstrapped(pool: web::Data<PgPool>, config: web::Data<Config>
         .iter()
         .map(|s| s.to_string())
         .collect();
+    // SPEC-9.21.5: log the cause and do NOT answer 200 {bootstrapped:false};
+    // "could not evaluate" is not "not bootstrapped", so a count failure
+    // surfaces as 500 so the e2e workflow does not skip silently.
     let bootstrapped = match UserRepository::count_active_by_emails(&pool, &emails).await {
         Ok(n) => n as usize == crate::E2E_ACCOUNT_EMAILS.len(),
-        // SPEC-9.21.5: violation: a failed count reads as not bootstrapped, unlogged
-        Err(_) => false,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "e2e-bootstrapped: count_active_by_emails failed"
+            );
+            return HttpResponse::InternalServerError().finish();
+        }
     };
 
     HttpResponse::Ok().json(E2eBootstrappedResponse { bootstrapped })

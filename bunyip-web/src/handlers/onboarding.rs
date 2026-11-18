@@ -74,8 +74,14 @@ pub async fn onboarding_get(
     if !needs_onboarding(&st, &user).await {
         let mut cookies = c.set_cookies.clone();
         if let Some(cookie) = c.forward.as_deref() {
-            if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
-                cookies.extend(rotated);
+            // BUNYIP-1057: refresh failure is non-fatal here but used to
+            // vanish silently; log it so a chronic refresh outage shows up.
+            match auth_api::refresh(&st.api, Some(cookie)).await {
+                Ok(rotated) => cookies.extend(rotated),
+                Err(e) => tracing::warn!(
+                    error = ?e,
+                    "onboarding: post-visit refresh failed; keeping original cookies",
+                ),
             }
         }
         return redirect_cookies("/dashboard", &cookies);
@@ -92,6 +98,19 @@ pub async fn onboarding_get(
         if let Err(e) = auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
             if e.status == 429 {
                 send_error = Some(e.verification_message());
+            } else {
+                // BUNYIP-1057: every non-429 error used to drop with no log or
+                // on-screen message; the user just never got the verify email
+                // and the page silently reused the page's generic error slot.
+                // The user-facing silence is deliberate (the Resend control is
+                // present), but the operator trace was not.
+                tracing::warn!(
+                    error = %e.user_message(),
+                    request_id = ?e.request_id,
+                    status = e.status,
+                    user_id = %user.id,
+                    "onboarding: automatic verification-send failed (non-429); keeping page quiet"
+                );
             }
         }
         c.set_cookies.push(format!(
@@ -155,8 +174,14 @@ pub async fn onboarding_post(
         Ok(()) => {
             let mut cookies = c.set_cookies.clone();
             if let Some(cookie) = c.forward.as_deref() {
-                if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
-                    cookies.extend(rotated);
+                // BUNYIP-1057: same refresh-is-non-fatal case; log the
+                // failure instead of dropping it silently.
+                match auth_api::refresh(&st.api, Some(cookie)).await {
+                    Ok(rotated) => cookies.extend(rotated),
+                    Err(e) => tracing::warn!(
+                        error = ?e,
+                        "onboarding: post-save refresh failed; keeping original cookies",
+                    ),
                 }
             }
             redirect_cookies("/onboarding", &cookies)

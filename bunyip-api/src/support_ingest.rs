@@ -123,7 +123,9 @@ pub async fn poll_once(
 
     let unseen = session.search("UNSEEN").await?;
     if unseen.is_empty() {
-        let _ = session.logout().await;
+        if let Err(e) = session.logout().await {
+            tracing::warn!(error = %e, "support ingest: imap logout failed after empty poll");
+        }
         return Ok(0);
     }
 
@@ -169,7 +171,13 @@ pub async fn poll_once(
         }
     }
 
-    let _ = session.logout().await;
+    if let Err(e) = session.logout().await {
+        tracing::warn!(
+            error = %e,
+            ingested,
+            "support ingest: imap logout failed after ingest"
+        );
+    }
     Ok(ingested)
 }
 

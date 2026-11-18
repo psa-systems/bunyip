@@ -1022,7 +1022,7 @@ async fn read_oauth_clients(pool: &PgPool) -> Result<Vec<OauthClientRow>, AppErr
 
 // SPEC-9.36.6: deployment name is a guessable input
 /// The zxcvbn `user_inputs` for a passphrase check: the resolved brand name and
-/// the host of `APP_URL`.
+/// the host of `config.email.base_url`.
 ///
 /// A passphrase built out of the deployment's own name is exactly the one an
 /// attacker holding the archive guesses first, and zxcvbn only knows that if it
@@ -1036,11 +1036,22 @@ pub fn passphrase_inputs(snapshot: &SettingsSnapshot, config: &Config) -> Vec<St
         brand.to_string()
     };
     let mut inputs = vec![brand];
-    if let Some(host) = url::Url::parse(&config.email.base_url)
-        .ok()
-        .and_then(|u| u.host_str().map(str::to_string))
-    {
-        inputs.push(host);
+    // BUNYIP-1050: a malformed `email.base_url` used to be silently skipped,
+    // leaving zxcvbn without the deployment host it should refuse as an
+    // input. Log at warn so the misconfiguration is visible; the passphrase
+    // check still falls through to the brand-only guard rather than failing.
+    match url::Url::parse(&config.email.base_url) {
+        Ok(u) => {
+            if let Some(host) = u.host_str().map(str::to_string) {
+                inputs.push(host);
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "passphrase_inputs: email.base_url is not parseable; zxcvbn input will miss the deployment host"
+            );
+        }
     }
     inputs.retain(|i| !i.trim().is_empty());
     inputs
@@ -1370,10 +1381,23 @@ impl ImportPlan {
 /// Diff one singleton section. Pure: both sides are already JSON objects, so
 /// the changed-column list is the set of keys whose values differ.
 fn plan_singleton<T: Serialize>(section: &str, target: &T, archive: &T) -> SingletonPlan {
+    // BUNYIP-1050: the earlier silent fallback to an empty map made any
+    // non-object serialization look like a no-op change. Every `T` here is
+    // one of the archive section types (`BrandingSection`, `TierConfig`,
+    // ...), which always serialize to a JSON object, so a non-object or
+    // failed serialization is a code invariant violation and must fail
+    // loudly rather than hide a real diff.
     let to_map = |value: &T| -> serde_json::Map<String, serde_json::Value> {
         match serde_json::to_value(value) {
             Ok(serde_json::Value::Object(map)) => map,
-            _ => serde_json::Map::new(),
+            Ok(other) => panic!(
+                "plan_singleton: section `{section}` serialized to a non-object: {other:?}; \
+                 archive section types must serialize to JSON objects",
+            ),
+            Err(e) => panic!(
+                "plan_singleton: section `{section}` failed to serialize: {e}; \
+                 archive section types must always serialize",
+            ),
         }
     };
     let (target, archive) = (to_map(target), to_map(archive));
@@ -1456,8 +1480,17 @@ fn plan_secret(
 
 /// Fingerprint a row for the diff: its JSON, which changes exactly when one of
 /// its archived columns does.
+///
+/// BUNYIP-1050: the earlier `.unwrap_or_default()` collapsed every
+/// serialization failure to the empty string, so two unserializable rows
+/// compared equal and the plan reported "unchanged" against a real change.
+/// Every `T` passed here is one of the archive section types (all built from
+/// DB rows and `#[derive(Serialize)]`), so a failure is a code invariant
+/// violation, not a runtime input the operator can act on. Panic loudly
+/// rather than producing a wrong diff.
 fn fingerprint<T: Serialize>(row: &T) -> String {
-    serde_json::to_string(row).unwrap_or_default()
+    serde_json::to_string(row)
+        .expect("fingerprint: archive row types must serialize; invariant violation")
 }
 
 fn keyed<T: Serialize, F: Fn(&T) -> String>(rows: &[T], key: F) -> BTreeMap<String, String> {
@@ -2444,12 +2477,21 @@ async fn write_governed_secrets(
 ) -> Result<(), AppError> {
     let provider = config.secrets_provider;
     for secret in GovernedSecret::ALL {
+        // BUNYIP-1050: a plan the caller built always carries one entry per
+        // `GovernedSecret::ALL` (see `plan` in this file), so a missing
+        // entry here is an internal bug: silently defaulting to `Unchanged`
+        // would skip a real write. Surface it instead.
         let outcome = plan
             .secrets
             .iter()
             .find(|s| s.name == secret.name())
             .map(|s| s.outcome)
-            .unwrap_or(SecretOutcome::Unchanged);
+            .ok_or_else(|| {
+                AppError::internal(format!(
+                    "write_governed_secrets: plan is missing `{}`; every GovernedSecret must be planned",
+                    secret.name()
+                ))
+            })?;
         if outcome == SecretOutcome::Unchanged {
             continue;
         }

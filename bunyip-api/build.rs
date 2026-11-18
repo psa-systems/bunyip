@@ -68,13 +68,27 @@ fn resolve(env_var: &str, cmd: &[&str]) -> String {
             return value;
         }
     }
-    Command::new(cmd[0])
+    let resolved = Command::new(cmd[0])
         .args(&cmd[1..])
         .output()
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string())
+        .filter(|s| !s.is_empty());
+    match resolved {
+        Some(v) => v,
+        None => {
+            // BUNYIP-1052: a build whose git/date command silently failed
+            // used to produce a binary labelled "unknown" with no record
+            // in the build log. Emit a cargo:warning so an operator can
+            // spot the fallback at build time.
+            println!(
+                "cargo:warning=build.rs: {} unresolved (command `{}` failed); falling back to \"unknown\"",
+                env_var,
+                cmd.join(" ")
+            );
+            "unknown".to_string()
+        }
+    }
 }

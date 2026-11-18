@@ -192,6 +192,10 @@ pub enum UnpublishedReason {
         price_id: String,
         detail: PriceUnresolved,
     },
+    /// BUNYIP-1052: the tier-assignment count query failed, so Lifetime /
+    /// Early-adopter availability is rendered optimistically on the public
+    /// page. Admin needs to see this; the public page does not.
+    UsageCountFailed { detail: String },
 }
 
 impl UnpublishedReason {
@@ -204,6 +208,7 @@ impl UnpublishedReason {
             Self::StripeNotConfigured => "stripe_not_configured",
             Self::StripeListFailed { .. } => "stripe_list_failed",
             Self::PriceUnresolved { .. } => "price_unresolved",
+            Self::UsageCountFailed { .. } => "usage_count_failed",
         }
     }
 
@@ -247,6 +252,12 @@ impl UnpublishedReason {
                     ),
                 }
             }
+            Self::UsageCountFailed { detail } => {
+                format!(
+                    "Tier-assignment count query failed ({detail}); Lifetime and Early-adopter \
+                     show as available on the public page until this clears."
+                )
+            }
         }
     }
 
@@ -276,6 +287,9 @@ impl UnpublishedReason {
                 "/pricing publishes nothing: {}",
                 self.message()
             ),
+            // BUNYIP-1052: UsageCountFailed is already warned at the count
+            // site, so admin surfacing does not double-log.
+            Self::UsageCountFailed { .. } => {}
             _ => tracing::warn!(
                 reason = self.code(),
                 tier = self.tier().unwrap_or("-"),
@@ -502,7 +516,8 @@ fn snapshot(tier_config: &web::Data<Arc<RwLock<TierConfig>>>) -> TierConfig {
         .clone()
 }
 
-/// `GET /v1/pricing` - public, unauthenticated, under the rate-limit floor.
+/// `GET /v1/pricing` - public, unauthenticated, exempt from the rate-limit
+/// floor (listed in `rate_limit_floor::EXEMPT_PATHS`).
 // SPEC-10.30.1, SPEC-10.30.8: public body carries no reasons
 pub async fn public_pricing(
     tier_config: web::Data<Arc<RwLock<TierConfig>>>,
@@ -519,7 +534,9 @@ pub async fn public_pricing(
     // refresh on the same TTL as the prices rather than per request.
     let body = cache
         .get_or_resolve(|| async move {
-            let usage = slot_usage(&pool).await;
+            // BUNYIP-1052: public body drops the usage-count reason; admin
+            // status surfaces it at `/v1/admin/pricing/status`.
+            let (usage, _usage_reason) = slot_usage(&pool).await;
             resolve(cfg, stripe, usage).await.0
         })
         .await;
@@ -528,15 +545,27 @@ pub async fn public_pricing(
 
 /// BUNYIP-526: live `(lifetime_used, early_adopter_used)` for the availability
 /// computation. A count failure degrades to `(0, 0)` - it must not 500 the
-/// public page - which reads as "not sold out" and is logged.
+/// public page - which reads as "not sold out" and is logged. BUNYIP-1052: a
+/// failure now also carries a `UsageCountFailed` reason so the admin pricing
+/// status surfaces the degraded state instead of seeing the same optimistic
+/// output as the public page.
 // SPEC-10.30.11: count failure is logged
-async fn slot_usage(pool: &PgPool) -> (i64, i64) {
-    UserRepository::count_tier_assignments(pool)
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "pricing: tier-assignment count failed; treating tiers as available");
-            (0, 0)
-        })
+async fn slot_usage(pool: &PgPool) -> ((i64, i64), Option<UnpublishedReason>) {
+    match UserRepository::count_tier_assignments(pool).await {
+        Ok(usage) => (usage, None),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "pricing: tier-assignment count failed; treating tiers as available"
+            );
+            (
+                (0, 0),
+                Some(UnpublishedReason::UsageCountFailed {
+                    detail: e.to_string(),
+                }),
+            )
+        }
+    }
 }
 
 /// `GET /v1/admin/pricing/status` - the same resolve the public page runs, with
@@ -554,8 +583,13 @@ pub async fn admin_pricing_status(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let cfg = snapshot(&tier_config);
-    let usage = slot_usage(pool.get_ref()).await;
-    let (payload, reasons) = resolve(cfg, stripe.get_ref().clone(), usage).await;
+    let (usage, usage_reason) = slot_usage(pool.get_ref()).await;
+    let (payload, mut reasons) = resolve(cfg, stripe.get_ref().clone(), usage).await;
+    // BUNYIP-1052: surface the degraded count state to admin.
+    if let Some(r) = usage_reason {
+        r.log();
+        reasons.push(r);
+    }
     Ok(success(
         AdminPricingStatus {
             published: payload.enabled && !payload.tiers.is_empty(),
@@ -851,6 +885,9 @@ mod tests {
                 detail: PriceUnresolved::NotVisible {
                     app_tag: "bunyip".into(),
                 },
+            },
+            UnpublishedReason::UsageCountFailed {
+                detail: "connection refused".into(),
             },
         ];
         let mut codes: Vec<&str> = all.iter().map(UnpublishedReason::code).collect();

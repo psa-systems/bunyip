@@ -141,7 +141,17 @@ pub async fn feature_toggle_save(
     .await
     {
         Ok(()) => "/admin/features?toast_ok=Feature%20toggle%20saved".to_string(),
-        Err(e) => format!("/admin/features?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: log the key + cause; toast text unchanged.
+            tracing::warn!(
+                key = %f.key.trim(),
+                enabled = f.enabled.is_some(),
+                status = e.status,
+                code = %e.code,
+                "admin/features: set_feature_toggle failed"
+            );
+            format!("/admin/features?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }

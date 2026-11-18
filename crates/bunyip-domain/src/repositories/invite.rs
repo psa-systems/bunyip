@@ -76,19 +76,23 @@ impl InviteRepository {
         Ok(invite)
     }
 
-    /// Mark an invite as accepted
+    /// Mark an invite as accepted. BUNYIP-1046: guarded single-use claim.
+    /// Returns `true` when this caller is the one that transitioned the row
+    /// from pending to accepted, `false` when the row was already accepted
+    /// (so a racing accept can be refused by the caller).
     // SPEC-7.3.119
-    pub async fn mark_accepted(pool: &PgPool, invite_id: Uuid) -> Result<(), AppError> {
-        sqlx::query(
+    pub async fn mark_accepted(pool: &PgPool, invite_id: Uuid) -> Result<bool, AppError> {
+        let result = sqlx::query(
             r#"
-            UPDATE admin_invites SET accepted_at = NOW() WHERE id = $1
+            UPDATE admin_invites SET accepted_at = NOW()
+            WHERE id = $1 AND accepted_at IS NULL
             "#,
         )
         .bind(invite_id)
         .execute(pool)
         .await?;
 
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     /// Mark an invite as revoked
@@ -156,20 +160,35 @@ impl InviteRepository {
         let offset = (page as i64 - 1).saturating_mul(per_page as i64).max(0);
 
         // Derived-state SQL mirrors the web renderer's classification:
-        //   pending  = not used, not revoked, not expired
-        //   accepted = used
+        //   pending  = not accepted, not revoked, not expired
+        //   accepted = accepted
         //   revoked  = revoked
-        //   expired  = not used, not revoked, past expires_at
+        //   expired  = not accepted, not revoked, past expires_at
+        //
+        // BUNYIP-1046: the predicates referenced a non-existent column
+        // `used_at`; the `admin_invites` table uses `accepted_at` (migration
+        // 20260318000023), so pending/accepted/expired all failed at runtime
+        // with a DB error. Only `revoked` worked. Column name is now
+        // `accepted_at` everywhere; unknown status is now rejected (closed
+        // set) rather than silently falling through to "all rows".
         let status_predicate: Option<&'static str> = match status {
+            None => None,
             Some("pending") => {
-                Some("used_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()")
+                Some("accepted_at IS NULL AND revoked_at IS NULL AND expires_at > NOW()")
             }
-            Some("accepted") => Some("used_at IS NOT NULL"),
+            Some("accepted") => Some("accepted_at IS NOT NULL"),
             Some("revoked") => Some("revoked_at IS NOT NULL"),
             Some("expired") => {
-                Some("used_at IS NULL AND revoked_at IS NULL AND expires_at <= NOW()")
+                Some("accepted_at IS NULL AND revoked_at IS NULL AND expires_at <= NOW()")
             }
-            _ => None,
+            Some(other) => {
+                return Err(AppError::validation(
+                    "status",
+                    format!(
+                        "Unknown invite status `{other}`; expected one of pending, accepted, revoked, expired"
+                    ),
+                ));
+            }
         };
 
         fn push_where<'a>(

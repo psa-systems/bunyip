@@ -415,9 +415,13 @@ async fn main() {
 
     // SPEC-2.3.2, SPEC-11.1.19: bunyip-web runs exactly one listener, bound here.
     // SPEC-2.4.2: web listener bind
+    //
+    // BUNYIP-1053: the previous `.expect("bind")` panic message lost both
+    // the bind address and the underlying I/O cause; the operator saw
+    // "bind" with no clue which port was already in use. Include both.
     let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect("bind");
+        .unwrap_or_else(|e| panic!("bunyip-web: failed to bind {bind_addr}: {e}"));
 
     // Startup banner (the listener is already bound at this point).
     // BUNYIP-561: the brand line comes from the record fetched above, and is
@@ -449,7 +453,7 @@ async fn main() {
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
-    .expect("serve");
+    .unwrap_or_else(|e| panic!("bunyip-web: serve loop on {bind_addr} ended with an error: {e}"));
 }
 
 #[cfg(test)]

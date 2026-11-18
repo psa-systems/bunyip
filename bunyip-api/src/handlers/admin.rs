@@ -134,7 +134,7 @@ pub async fn list_users(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     let status_filter = query
         .status
         .as_ref()
@@ -327,6 +327,12 @@ pub async fn delete_user(
     }
 
     UserRepository::soft_delete(&pool, user_id).await?;
+
+    // BUNYIP-1051: revoke every refresh-token family for the deleted user so
+    // existing sessions cannot keep minting access tokens against the
+    // now-tombstoned row. Matches the sibling `update_user_status` deactivation
+    // path (line 415), which already does this.
+    TokenRepository::revoke_all_user_refresh_tokens(pool.get_ref(), user_id).await?;
 
     // BUNYIP-998: leave Mirzam's two lists, with the address read above.
     crate::mirzam_sync::notify(
@@ -791,7 +797,7 @@ pub async fn list_memberships(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
     // BUNYIP-995: compute the offset in i64 and saturate, mirroring
     // BUNYIP-946 F14, so a page value large enough to overflow an i32
     // multiply cannot panic (debug) or wrap to a negative OFFSET (release).
@@ -1200,11 +1206,22 @@ pub async fn delete_application(
         return Err(AppError::validation("password", "Invalid password"));
     }
 
-    // Verify TOTP code (2FA must be enabled)
+    // Verify TOTP code (2FA must be enabled).
+    //
+    // BUNYIP-1051: `.map_err(|_|)` discarded the cause and reported every
+    // error as "2FA must be enabled" - a DB failure looked indistinguishable
+    // from a missing enrolment. Log the real cause at warn and still return
+    // the validation error, so an admin sees a sensible message while the
+    // operator sees why in the logs.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, &body.totp_code)
         .await
-        .map_err(|_| {
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "delete application: totp verify_code failed"
+            );
             AppError::validation("totp_code", "2FA must be enabled to delete applications")
         })?;
     if !totp_valid {
@@ -1432,7 +1449,7 @@ pub async fn list_audit_logs(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(50).min(100);
+    let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
 
     // BUNYIP-936: severity is validated against the enum before touching
     // the repository, so a stored row with an unknown value never masks a
@@ -1589,11 +1606,25 @@ pub async fn list_seed_templates(
     req: HttpRequest,
     _admin: AdminUser,
 ) -> Result<HttpResponse, AppError> {
+    // A malformed embedded template is skipped rather than 500-ing the list
+    // (a test asserts every one parses, so this never drops one in practice).
+    // BUNYIP-1052: the previous `filter_map(.ok())` swallowed the parse
+    // error entirely, so a bad template would silently vanish. Log at
+    // error with the template name before the skip; the list stays
+    // partial so a broken template does not take the picker offline.
     let templates: Vec<SeedTemplateInfo> = crate::seed::SEED_TEMPLATES
         .iter()
-        // A malformed embedded template is skipped rather than 500-ing the list
-        // (a test asserts every one parses, so this never drops one in practice).
-        .filter_map(|t| crate::seed::parse(t.json).ok().map(|f| (t, f)))
+        .filter_map(|t| match crate::seed::parse(t.json) {
+            Ok(f) => Some((t, f)),
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    template = %t.name,
+                    "list_seed_templates: embedded template failed to parse; skipped"
+                );
+                None
+            }
+        })
         .map(|(t, f)| SeedTemplateInfo {
             name: t.name,
             description: t.description,
@@ -1652,8 +1683,12 @@ pub async fn import_seed_data(
 // Dashboard Stats
 // =============================================================================
 
-/// Dashboard statistics response
-#[derive(Debug, Serialize)]
+/// Dashboard statistics response. `Default` yields an all-zero snapshot the
+/// system-health endpoint surfaces when the DB sub-query behind
+/// `collect_dashboard_stats` fails, so the health report can still ship as
+/// `degraded` instead of failing the whole endpoint (BUNYIP-1051 /
+/// SPEC-10.9.4).
+#[derive(Debug, Serialize, Default)]
 pub struct DashboardStats {
     pub total_users: i64,
     pub active_members: i64,
@@ -1884,7 +1919,7 @@ pub async fn list_notifications(
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-946 F17: honour page/per_page on the unread branch too. The
     // previous shape fetched every unread row, truncated to the first
@@ -2091,12 +2126,18 @@ pub async fn create_admin_invite(
         )
         .await?;
 
-    // Send invite email (in background)
+    // Send invite email (in background per SPEC-10.8.5); BUNYIP-265: no raw
+    // email in logs, correlate via the initiating admin id.
     let email = body.email.clone();
     let email_svc = email_service.get_ref().clone();
+    let initiator = admin.0.sub;
     tokio::spawn(async move {
         if let Err(e) = email_svc.send_admin_invite(&email, &token).await {
-            tracing::error!(error = %e, email = %email, "Failed to send admin invite email");
+            tracing::error!(
+                error = %e,
+                admin_id = %initiator,
+                "Failed to send admin invite email"
+            );
         }
     });
 
@@ -2118,7 +2159,7 @@ pub async fn list_admin_invites(
     let request_id = get_request_id(&req);
 
     let page = query.page.unwrap_or(1).max(1);
-    let per_page = query.per_page.unwrap_or(20).min(100);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // BUNYIP-939: validate `status` against the closed set so an unknown
     // value is a per-field 400 rather than silently returning the full
@@ -2206,21 +2247,41 @@ pub async fn get_system_health(
     };
 
     // Reuse the dashboard counts (no duplicated SQL) and surface the recent
-    // audit-log volume. Errors propagate rather than being swallowed by
-    // `.ok().flatten()`, so a failing stats query degrades the health report
-    // honestly instead of silently dropping the stats block.
-    let stats = collect_dashboard_stats(pool.get_ref()).await?;
-    let recent_logs: (i64,) = sqlx::query_as(
+    // audit-log volume.
+    //
+    // BUNYIP-1051 / SPEC-10.9.4: the stats and recent-logs queries used to
+    // propagate with `?`, which meant an unhealthy database made the whole
+    // endpoint fail first and the `degraded`/`unhealthy` branch never
+    // shipped. Surface those failures into the degraded report instead:
+    // the stats block carries zeros (plus a log line), and `overall_status`
+    // degrades whenever any sub-query failed, not only when `SELECT 1`
+    // did.
+    let (stats, stats_ok) = match collect_dashboard_stats(pool.get_ref()).await {
+        Ok(s) => (s, true),
+        Err(e) => {
+            tracing::warn!(error = %e, "system_health: collect_dashboard_stats failed; reporting zeros under `degraded`");
+            (DashboardStats::default(), false)
+        }
+    };
+    let (recent_logs_count, recent_logs_ok) = match sqlx::query_as::<_, (i64,)>(
         "SELECT COUNT(*) FROM audit_logs WHERE created_at > NOW() - INTERVAL '1 hour'",
     )
     .fetch_one(pool.get_ref())
-    .await?;
+    .await
+    {
+        Ok((n,)) => (n, true),
+        Err(e) => {
+            tracing::warn!(error = %e, "system_health: recent audit-log count failed; reporting 0 under `degraded`");
+            (0, false)
+        }
+    };
 
-    let overall_status = if db_health.status == "healthy" {
+    let overall_status = if db_health.status == "healthy" && stats_ok && recent_logs_ok {
         "healthy"
     } else {
         "degraded"
     };
+    let recent_logs = (recent_logs_count,);
 
     // BUNYIP-474: dataset freshness. Read-only (the .BIN is refreshed out of
     // band by scripts/refresh-ip2-datasets.nu); this just reports the on-disk age.
@@ -2658,10 +2719,19 @@ pub async fn grant_lifetime_membership(
     // BUNYIP-943: 2FA gate, BEFORE any mutation, mirroring set_user_tier so a
     // cancelled or wrong code leaves lifetime_member and the $0 invoice
     // subscription untouched.
+    // BUNYIP-1051: log the swallowed cause before mapping to the generic
+    // "2FA must be enabled" message so a DB failure is attributable.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "grant lifetime membership: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     if !totp_valid {
         return Err(AppError::validation("totp_code", "Invalid 2FA code"));
     }
@@ -2733,10 +2803,18 @@ pub async fn revoke_lifetime_membership(
     let user_id = path.into_inner();
 
     // BUNYIP-943: same 2FA gate as grant_lifetime_membership, before any mutation.
+    // BUNYIP-1051: log the underlying cause before mapping to the generic message.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "revoke lifetime membership: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     if !totp_valid {
         return Err(AppError::validation("totp_code", "Invalid 2FA code"));
     }
@@ -2854,10 +2932,18 @@ pub async fn set_user_tier(
 
     // 2FA gate. A missing/invalid code yields Err here, BEFORE any mutation, so
     // a cancelled or wrong code leaves the tier and every slot count unchanged.
+    // BUNYIP-1051: log the underlying cause before mapping to the generic message.
     let totp_valid = totp_service
         .verify_code(admin.0.sub, body.totp_code.trim())
         .await
-        .map_err(|_| AppError::validation("totp_code", "2FA must be enabled to change a tier"))?;
+        .map_err(|e| {
+            tracing::warn!(
+                user_id = %admin.0.sub,
+                error = %e,
+                "set_user_tier: totp verify_code failed"
+            );
+            AppError::validation("totp_code", "2FA must be enabled to change a tier")
+        })?;
     let plan = plan_admin_tier_move(totp_valid, &from_tier, &to_tier)?;
 
     // Trial windows come from the resolved tier settings.
@@ -3067,6 +3153,17 @@ pub async fn update_email_config(
     use crate::repositories::EmailConfigRepository;
 
     let request_id = get_request_id(&req);
+
+    // BUNYIP-1052: refuse a production attempt to disable email BEFORE the
+    // repository write, not after; the previous order let the disabled
+    // row land on disk even when the request was about to be rejected.
+    // (The post-write check still runs so a stack-resolved flip is caught
+    // too.) Narrow pre-check: only an explicit `enabled: false` in the
+    // body triggers the refusal here, mirroring the semantics of
+    // `refuse_disabled_email_in_production`.
+    if let Some(false) = body.enabled {
+        refuse_disabled_email_in_production(config.is_production(), false)?;
+    }
 
     // Validate the enumerated / bounded fields when provided.
     if let Some(tls) = body.smtp_tls.as_deref().filter(|s| !s.is_empty()) {
@@ -4734,26 +4831,54 @@ pub(crate) async fn dispatch_lifecycle_event(
         return;
     }
 
-    let http = reqwest::Client::builder()
+    // BUNYIP-1051: previously `.unwrap_or_default()` silently fell back to
+    // a default reqwest client (no 5s timeout) on a client build failure,
+    // and a non-2xx response was treated as delivered. Log the build
+    // failure and bail out rather than send with the wrong client; also
+    // branch on the response status so an HTTP error is not invisible.
+    let http = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
-        .unwrap_or_default();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                event_type,
+                "dispatch_lifecycle_event: reqwest client build failed; skipping this fire-and-forget pass"
+            );
+            return;
+        }
+    };
 
     for (client_id, uri) in targets {
         match provider.mint_lifecycle_token(user_id, event_type, client_id) {
             Ok(token) => {
-                if let Err(e) = http
+                match http
                     .post(&uri)
                     .form(&[("lifecycle_event", &token)])
                     .send()
                     .await
                 {
-                    tracing::warn!(
-                        error = %e,
-                        client_id = %client_id,
-                        event_type,
-                        "lifecycle event POST failed"
-                    );
+                    Ok(resp) => {
+                        let status = resp.status();
+                        if !status.is_success() {
+                            tracing::warn!(
+                                %client_id,
+                                %status,
+                                event_type,
+                                "lifecycle event POST returned non-2xx"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            client_id = %client_id,
+                            event_type,
+                            "lifecycle event POST failed"
+                        );
+                    }
                 }
             }
             Err(e) => {

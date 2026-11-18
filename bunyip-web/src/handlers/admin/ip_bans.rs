@@ -228,10 +228,23 @@ pub async fn ip_bans(
     let looked_up_ip = q.ip.as_deref().map(str::trim).filter(|s| !s.is_empty());
     let enrichment = match looked_up_ip {
         Some(ip) => Some(
-            admin_api::ip_enrichment(&st.api, c.forward.as_deref(), ip)
-                .await
-                .ok()
-                .flatten(),
+            match admin_api::ip_enrichment(&st.api, c.forward.as_deref(), ip).await {
+                Ok(opt) => opt,
+                Err(e) => {
+                    // BUNYIP-1055: `.ok().flatten()` previously turned a failed
+                    // enrichment lookup into "no enrichment available", which
+                    // read identically to an unlisted address with no log.
+                    // Warn-log the cause so a dataset outage is visible; page
+                    // still renders the "no enrichment available" panel.
+                    tracing::warn!(
+                        ip = %ip,
+                        status = e.status,
+                        code = %e.code,
+                        "admin/ip_bans: ip_enrichment lookup failed; rendering no-enrichment panel"
+                    );
+                    None
+                }
+            },
         ),
         None => None,
     };
@@ -337,7 +350,16 @@ pub async fn ip_ban_create(
     .await
     {
         Ok(()) => format!("/admin/ip-bans?toast_ok=Banned%20{}", urlenc(f.ip.trim())),
-        Err(e) => format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message())),
+        Err(e) => {
+            // BUNYIP-1055: log the identifying value (IP); toast unchanged.
+            tracing::warn!(
+                ip = %f.ip.trim(),
+                status = e.status,
+                code = %e.code,
+                "admin/ip-bans: create_ip_ban failed"
+            );
+            format!("/admin/ip-bans?toast_err={}", urlenc(&e.user_message()))
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }
@@ -366,7 +388,11 @@ pub async fn ip_unban(
             "/admin/ip-bans?toast_ok=Ban%20lifted%20for%20{}",
             urlenc(&f.ip)
         ),
-        Err(_) => "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string(),
+        Err(e) => {
+            // BUNYIP-1055: log the cause so the toast ties to a log line.
+            tracing::warn!(error = ?e, ip = %f.ip, "unban_ip failed");
+            "/admin/ip-bans?toast_err=Could%20not%20lift%20ban".to_string()
+        }
     };
     redirect_cookies(&target, &c.set_cookies)
 }

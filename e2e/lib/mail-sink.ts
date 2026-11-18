@@ -21,7 +21,7 @@ import { env } from './env';
 
 // Absolute-URL matchers for each flow's token-link. The token is base64url /
 // hex (`[\w.-]`); the host is whatever APP_URL the deployment renders into the
-// email body (staging `https://a8n.systems`). `match[0]` is the full URL, from
+// email body (the hub-web host). `match[0]` is the full URL, from
 // which the caller pulls `?token=` via `new URL(...)`.
 export const MAGIC_LINK_RE = /https?:\/\/[^\s"'<>]+\/magic-link\?token=[\w.-]+/;
 export const PASSWORD_RESET_RE = /https?:\/\/[^\s"'<>]+\/password-reset\/confirm\?token=[\w.-]+/;
@@ -216,9 +216,14 @@ export async function waitForLink(
           const match = linkRe.exec(bodyText(email));
           if (match) {
             // Best-effort cleanup so the shared mailbox does not accumulate.
+            // BUNYIP-1041: a failed destroy used to be swallowed by
+            // `.catch(() => {})`; log at warn so a mailbox that stops
+            // draining is not invisible.
             await jmapCall(ctx, apiUrl, [
               ['Email/set', { accountId, destroy: [email.id] }, 'd'],
-            ]).catch(() => {});
+            ]).catch((err) => {
+              console.warn(`[mail-sink] JMAP destroy of ${email.id} failed: ${String(err)}`);
+            });
             return match[0];
           }
         }

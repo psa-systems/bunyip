@@ -463,9 +463,19 @@ pub async fn logout(
     // browser signed in because bunyip-web emitted no clears of its own.
     // Merge in a local defensive clear set unconditionally so `Set-Cookie`
     // headers reach the browser even when the API call failed entirely.
-    let mut cleared = auth_api::logout(&st.api, cookie.as_deref())
-        .await
-        .unwrap_or_default();
+    // BUNYIP-1057: previously `.unwrap_or_default()` silently dropped an
+    // API logout failure, so an unreachable upstream left no trace. The
+    // local defensive clear set still runs below regardless of outcome.
+    let mut cleared = match auth_api::logout(&st.api, cookie.as_deref()).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                error = ?e,
+                "logout: upstream /v1/auth/logout failed; local defensive clears still sent",
+            );
+            Vec::new()
+        }
+    };
     for defensive in bunyip_auth_cookie_clears(&st.cfg, secure) {
         cleared.push(defensive);
     }
@@ -478,8 +488,13 @@ pub async fn logout(
     // chain (e.g. session-timeout banners) can still pass ?redirect=
     // and bunyip routes them to /login with that path as the next
     // destination.
+    //
+    // BUNYIP-1057: URL-encode the redirect value so `&` in it does not
+    // inject extra query parameters into /login.
     let target = match q.redirect {
-        Some(r) if r.starts_with('/') && !r.starts_with("//") => format!("/login?redirect={r}"),
+        Some(r) if r.starts_with('/') && !r.starts_with("//") => {
+            format!("/login?redirect={}", crate::util::urlenc(&r))
+        }
         _ => "/".to_string(),
     };
     redirect_cookies(&target, &cleared)
@@ -651,6 +666,11 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     // BUNYIP-590: the price the card quotes comes from the cached pricing
     // payload; the two fetches are independent, so they run concurrently.
     let (signup_token, pricing) = tokio::join!(auth_api::register_challenge(&st.api), st.pricing());
+    // BUNYIP-1057: register_challenge already logs its own fetch / parse
+    // failures at warn (BUNYIP-1053), so the caller just folds the None
+    // back into the empty-token fallback without a duplicate log. The
+    // form embeds an empty token; when the bot guard is on, the user
+    // just reloads for a fresh one.
     let signup_token = signup_token.unwrap_or_default();
     auth_page(
         &st,
@@ -1486,8 +1506,20 @@ pub async fn verify_email(
                 // until the next refresh trigger.
                 let mut cookies = Vec::new();
                 if let Some(cookie) = session_cookie.as_deref() {
-                    if let Ok(rotated) = auth_api::refresh(&st.api, Some(cookie)).await {
-                        cookies = rotated;
+                    // BUNYIP-1057: a refresh failure here is non-fatal (the
+                    // verify already succeeded), but it used to vanish
+                    // silently so a chronic refresh outage left no trace.
+                    // Log it at warn; the user keeps the stale JWT until
+                    // the next refresh trigger, as the surrounding comment
+                    // describes.
+                    match auth_api::refresh(&st.api, Some(cookie)).await {
+                        Ok(rotated) => cookies = rotated,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = ?e,
+                                "verify_email: post-verify refresh failed; keeping stale JWT",
+                            );
+                        }
                     }
                 }
                 (card, cookies)
@@ -1742,6 +1774,7 @@ mod logout_clear_tests {
             oidc_issuer: "http://localhost:4401".into(),
             app_domain: app_domain.into(),
             community_url: String::new(),
+            blog_url: String::new(),
             trusted_proxies: Vec::new(),
             csp: crate::config::CspConfig::default(),
         }
