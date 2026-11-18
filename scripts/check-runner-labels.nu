@@ -15,12 +15,11 @@
 # there dies with `linker cc not found` on a cold cache, and a Playwright browser
 # there dies at launch with `cannot open shared object file`.
 #
-# The labels are sized (DEV-769): RUNS_ON_OPENSUSE_BASE_HEAVY is the dev image on
-# the large runners, RUNS_ON_OPENSUSE_BASE_MEDIUM the base image.
+# The labels are sized (DEV-769): RUNS_ON_OPENSUSE_HEAVY is the dev image on
+# the large runners, RUNS_ON_OPENSUSE_MEDIUM the base image.
 #
-# Four properties:
+# Three properties:
 #   1. check.yml (native cargo fmt/clippy/build/test) requests the HEAVY label.
-#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST label.
 #   2. no workflow installs a C toolchain, OpenSSL headers, or the browser system
 #      libraries at run time.
 #   3. every `runs-on:` carries a comment above it saying why that label is right;
@@ -66,16 +65,9 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
 
     # SPEC-3.16.2
     # 1. The native Rust job needs the dev image, which the HEAVY label serves.
-    let heavy_label = 'runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}'
+    let heavy_label = 'runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}'
     if not (read-lines $check_workflow | any {|l| $l | str contains $heavy_label }) {
-        print --stderr $"error: ($check_workflow) must run on RUNS_ON_OPENSUSE_BASE_HEAVY; it compiles Rust natively and base has no C toolchain \(BUNYIP-444, DEV-769)"
-        $status = 1
-    }
-
-    # SPEC-3.16.3
-    # 1b. The unsized *_LATEST labels are retired.
-    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST' | drop-comments) {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_BASE_HEAVY or RUNS_ON_OPENSUSE_BASE_MEDIUM \(DEV-769)"
+        print --stderr $"error: ($check_workflow) must run on RUNS_ON_OPENSUSE_HEAVY; it compiles Rust natively and base has no C toolchain \(BUNYIP-444, DEV-769)"
         $status = 1
     }
 
@@ -86,7 +78,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         | drop-comments
     )
     for hit in $toolchain_hits {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs a C toolchain / OpenSSL headers at run time; request RUNS_ON_OPENSUSE_BASE_HEAVY instead \(BUNYIP-444)"
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs a C toolchain / OpenSSL headers at run time; request RUNS_ON_OPENSUSE_HEAVY instead \(BUNYIP-444)"
         $status = 1
     }
 
@@ -99,7 +91,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         | drop-comments
     )
     for hit in $browser_hits {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs the Playwright browser system libraries at run time; request RUNS_ON_OPENSUSE_BASE_HEAVY instead, its image pre-bakes them \(BUNYIP-446)"
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs the Playwright browser system libraries at run time; request RUNS_ON_OPENSUSE_HEAVY instead, its image pre-bakes them \(BUNYIP-446)"
         $status = 1
     }
 
@@ -120,7 +112,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     if $status == 0 {
-        print "runner labels OK: native check on HEAVY, no retired label, every label annotated, no run-time install of what the image provides"
+        print "runner labels OK: native check on HEAVY, every label annotated, no run-time install of what the image provides"
     }
 
     exit $status

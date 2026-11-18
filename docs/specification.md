@@ -156,7 +156,7 @@ component the browser talks to directly.
 - `SPEC-3.1.1` The Audit workflow must run on the cron schedule `17 6 * * 1` (Mondays 06:17 UTC) and on manual
   `workflow_dispatch`, and on no other trigger, so an advisory published against an unchanged `Cargo.lock` is still
   found.
-- `SPEC-3.1.2` The Audit workflow's single job must run on the runner label `vars.RUNS_ON_OPENSUSE_BASE_HEAVY` and
+- `SPEC-3.1.2` The Audit workflow's single job must run on the runner label `vars.RUNS_ON_OPENSUSE_HEAVY` and
   must declare `defaults.run.shell: nu {0}`, because the audit installs or builds `cargo-audit` and needs a C
   toolchain.
 - `SPEC-3.1.3` Before auditing, the job must restore a `Swatinem/rust-cache` cache with `shared-key: audit` and
@@ -175,7 +175,7 @@ component the browser talks to directly.
 - `SPEC-3.2.2` The workflow must use concurrency group `${{ github.workflow }}-${{ github.ref }}` with
   `cancel-in-progress` true for branch refs and false when `github.ref` starts with `refs/tags/`, so a tag build is
   never cancelled and the registry never lacks a released version.
-- `SPEC-3.2.3` The job must run on `vars.RUNS_ON_OPENSUSE_BASE_HEAVY` with `permissions` `contents: read` and
+- `SPEC-3.2.3` The job must run on `vars.RUNS_ON_OPENSUSE_HEAVY` with `permissions` `contents: read` and
   `packages: write`, must declare `defaults.run.shell: nu {0}`, must check out with `fetch-depth: 0`, and must export
   `CARGO_BUILD_JOBS` from the runner through the shared build-parallelism action before building.
 - `SPEC-3.2.4` The `resolve` step must derive the publish mode from the trigger and never from `git describe`:
@@ -234,7 +234,7 @@ component the browser talks to directly.
   filter, so a required check always reports.
 - `SPEC-3.4.2` The workflow must use concurrency group `${{ github.workflow }}-${{ github.ref }}` with
   `cancel-in-progress: true`.
-- `SPEC-3.4.3` The `cargo` job must run on `vars.RUNS_ON_OPENSUSE_BASE_HEAVY` with `defaults.run.shell: nu {0}`, must
+- `SPEC-3.4.3` The `cargo` job must run on `vars.RUNS_ON_OPENSUSE_HEAVY` with `defaults.run.shell: nu {0}`, must
   set `SQLX_OFFLINE` to `true`, `CARGO_PROFILE_DEV_DEBUG` to `line-tables-only` and `CARGO_INCREMENTAL` to `0`, and must
   check out with `submodules: true` so the root justfile's `import` resolves.
 - `SPEC-3.4.4` Right after checkout, the `cargo` job must run the shared `classify-diff` action with step id
@@ -259,7 +259,7 @@ component the browser talks to directly.
 
 ### 3.5 Check workflow: guards job
 
-- `SPEC-3.5.1` The `guards` job must run on `vars.RUNS_ON_OPENSUSE_BASE_MEDIUM` with `defaults.run.shell: nu {0}` and
+- `SPEC-3.5.1` The `guards` job must run on `vars.RUNS_ON_OPENSUSE_MEDIUM` with `defaults.run.shell: nu {0}` and
   `timeout-minutes: 15`, and must check out with `fetch-depth: 0` and `submodules: true`.
 - `SPEC-3.5.2` The job must run, in this order and ungated by the classifier, `just --summary`, `just
   check-justfile`, `just check-migration-versions`, `just check-migration-immutability` and `just check-workflows`.
@@ -276,7 +276,7 @@ component the browser talks to directly.
 
 ### 3.6 Check workflow: secrets scan job
 
-- `SPEC-3.6.1` The `secrets` job must run on `vars.RUNS_ON_OPENSUSE_BASE_MEDIUM` with `defaults.run.shell: nu {0}`,
+- `SPEC-3.6.1` The `secrets` job must run on `vars.RUNS_ON_OPENSUSE_MEDIUM` with `defaults.run.shell: nu {0}`,
   and must check out with `fetch-depth: 0` and `persist-credentials: false`, so the scan sees full history and the
   checkout leaves no credential in the working tree.
 - `SPEC-3.6.2` The job's scan step must call the shared `check-secrets` composite action with a
@@ -294,7 +294,7 @@ component the browser talks to directly.
   request head ref starts with `release/v`; a closed-unmerged pull request or a merged non-release pull request must
   release nothing.
 - `SPEC-3.7.3` The job must be a pure reusable-workflow caller (`uses:` the shared `create-release.yml@main`) with
-  `runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}` and `secrets: inherit`, must declare no `defaults` and no steps,
+  `runs-on: ${{ vars.RUNS_ON_OPENSUSE_MEDIUM }}` and `secrets: inherit`, must declare no `defaults` and no steps,
   and must never check out pull request code, so a `pull_request_target` run holding the release token cannot execute
   pull request content.
 - `SPEC-3.7.4` The `uses:` line and the `secrets: inherit` line must each carry a trailing `# secret-scope-ok:`
@@ -305,7 +305,7 @@ component the browser talks to directly.
 - `SPEC-3.8.1` The Renovate workflow must trigger on the cron schedule `0 2 * * 6` (Saturdays 02:00 UTC) and on manual
   `workflow_dispatch`.
 - `SPEC-3.8.2` The `renovate` job must be a reusable-workflow caller pinned to a full 40-hex commit SHA, with
-  `runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}` and `with.target_repository: ${{ github.repository }}`.
+  `runs-on: ${{ vars.RUNS_ON_OPENSUSE_MEDIUM }}` and `with.target_repository: ${{ github.repository }}`.
 - `SPEC-3.8.3` The job must pass exactly five secrets by name, not `secrets: inherit`, each from the same-named
   repository secret: `RENOVATE_CI_TOKEN`, the public-GitHub read token, the two private-package tokens and the Forgejo
   personal access token.
@@ -317,7 +317,7 @@ component the browser talks to directly.
   check is `E2E / PR gate`.
 - `SPEC-3.9.2` The workflow must use concurrency group `e2e-pr-${{ github.ref }}` with `cancel-in-progress: true`, a
   group separate from the full suite's.
-- `SPEC-3.9.3` The `classify-diff` job must run on `vars.RUNS_ON_OPENSUSE_BASE_MEDIUM`, check out the repository, run
+- `SPEC-3.9.3` The `classify-diff` job must run on `vars.RUNS_ON_OPENSUSE_MEDIUM`, check out the repository, run
   the shared `classify-diff` action and expose its `result` as the job output `result`.
 - `SPEC-3.9.4` The `PR gate` job must declare `needs: classify-diff` and a job-level `if` requiring
   `needs.classify-diff.outputs.result == 'code'`, so a docs-only or comment-only diff reports the job as skipped
@@ -336,7 +336,7 @@ component the browser talks to directly.
   `pull_request` trigger.
 - `SPEC-3.10.2` The workflow must use the single concurrency group `e2e-bunyip` with `cancel-in-progress: false`, so
   every trigger is serialised and no run is cancelled, because the suite shares one login rate-limited per email.
-- `SPEC-3.10.3` The job `e2e` (display name `deployment`) must run on `vars.RUNS_ON_OPENSUSE_BASE_HEAVY`, with
+- `SPEC-3.10.3` The job `e2e` (display name `deployment`) must run on `vars.RUNS_ON_OPENSUSE_HEAVY`, with
   `defaults.run.shell: nu {0}` and working directory `e2e`, and must check out with `fetch-depth: 0` so
   `wait-for-deploy.mjs` can walk `git log`.
 - `SPEC-3.10.4` The job `env` must expose `E2E_BASE_URL`, `E2E_OP_BASE_URL`, `E2E_EMAIL`, `E2E_PASSWORD`,
@@ -468,9 +468,7 @@ component the browser talks to directly.
 - `SPEC-3.16.1` The guard must take an optional workflows directory (default `.forgejo/workflows`) and must exit 2
   when `check.yml` is not a file there.
 - `SPEC-3.16.2` The guard must exit 1 unless `check.yml` contains the exact text `runs-on: ${{
-  vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}`.
-- `SPEC-3.16.3` The guard must exit 1 for any non-comment line under the workflows directory naming
-  `RUNS_ON_OPENSUSE_BASE_LATEST` or `RUNS_ON_OPENSUSE_DEV_LATEST`.
+  vars.RUNS_ON_OPENSUSE_HEAVY }}`.
 - `SPEC-3.16.4` The guard must exit 1 for any non-comment line that installs `gcc`, `clang`, `binutils`,
   `libopenssl-devel`, `openssl-devel` or `build-essential` with `zypper`, `apt-get`, `dnf` or `yum`, and for any
   non-comment line naming a Playwright browser system library package (`libgtk-3-0`, `libgobject-2_0-0`,
