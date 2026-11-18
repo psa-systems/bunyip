@@ -453,6 +453,12 @@ fn header(
                         // same working entry when the documented-application
                         // list cannot be read at all.
                         a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
+                        // BUNYIP-1077: optional external product-docs site,
+                        // additive next to the in-product `/docs` hub above.
+                        // Empty BUNYIP_DOCS_URL hides this entry.
+                        @if !cfg.docs_url.is_empty() {
+                            a href=(cfg.docs_url) class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Docs" }
+                        }
                         // BUNYIP-1077: the external product blog. Empty
                         // BUNYIP_BLOG_URL hides the link entirely so a deploy
                         // without a blog never shows a dead link.
@@ -525,6 +531,12 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             // BUNYIP-635: same plain hub link as the header.
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
+                            // BUNYIP-1077: same optional external docs link
+                            // as the header, absent when BUNYIP_DOCS_URL
+                            // is unset.
+                            @if !cfg.docs_url.is_empty() {
+                                li { a href=(cfg.docs_url) class="text-muted-foreground hover:text-foreground transition-colors" { "Docs" } }
+                            }
                             // BUNYIP-1077: same configured blog link as the
                             // header, absent when BUNYIP_BLOG_URL is unset.
                             @if !cfg.blog_url.is_empty() {

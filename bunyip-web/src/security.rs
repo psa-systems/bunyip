@@ -150,6 +150,7 @@ mod tests {
             app_domain: String::new(),
             community_url: String::new(),
             blog_url: String::new(),
+            docs_url: String::new(),
             trusted_proxies: Vec::new(),
             csp: crate::config::CspConfig::default(),
         }
