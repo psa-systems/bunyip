@@ -165,8 +165,9 @@ function resolveBuildSha(headSha) {
   );
 }
 
-// Required: no domain is hardcoded as a fallback. Inject the per-environment
-// hub host (see docs/self-hosting.md for the operator-facing staging/prod map).
+// Required: no domain is hardcoded as a fallback. The per-environment hub host
+// is operator-supplied (${BUNYIP_HOST} in docs/self-hosting.md's Topology
+// section); set E2E_BASE_URL to that deployment's actual hub origin.
 // SPEC-3.37.1
 const hubBaseURL = pick(process.env.E2E_BASE_URL);
 if (!hubBaseURL) {
