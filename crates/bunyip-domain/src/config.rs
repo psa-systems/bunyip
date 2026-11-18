@@ -2566,6 +2566,14 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "product blog URL linked from the public header, footer and newsletter section; empty hides every blog link (BUNYIP-1077)",
     ),
     EnvVarSpec::defaulted(
+        "MOKOSH_RELEASE_NOTES_URL",
+        "optional override for `applications.release_notes_url` on the mokosh row at boot; empty leaves the migration-seeded Forgejo URL in place (BUNYIP-862)",
+    ),
+    EnvVarSpec::defaulted(
+        "DRILLMARK_RELEASE_NOTES_URL",
+        "optional override for `applications.release_notes_url` on the drillmark row at boot; empty leaves the migration-seeded Forgejo URL in place (BUNYIP-862)",
+    ),
+    EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",
         "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),
