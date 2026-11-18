@@ -666,6 +666,11 @@ pub async fn register_get(State(st): State<AppState>, headers: HeaderMap) -> Res
     // BUNYIP-590: the price the card quotes comes from the cached pricing
     // payload; the two fetches are independent, so they run concurrently.
     let (signup_token, pricing) = tokio::join!(auth_api::register_challenge(&st.api), st.pricing());
+    // BUNYIP-1057: register_challenge already logs its own fetch / parse
+    // failures at warn (BUNYIP-1053), so the caller just folds the None
+    // back into the empty-token fallback without a duplicate log. The
+    // form embeds an empty token; when the bot guard is on, the user
+    // just reloads for a fresh one.
     let signup_token = signup_token.unwrap_or_default();
     auth_page(
         &st,
@@ -1769,6 +1774,7 @@ mod logout_clear_tests {
             oidc_issuer: "http://localhost:4401".into(),
             app_domain: app_domain.into(),
             community_url: String::new(),
+            blog_url: String::new(),
             trusted_proxies: Vec::new(),
             csp: crate::config::CspConfig::default(),
         }

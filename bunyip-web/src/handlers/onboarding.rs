@@ -98,6 +98,19 @@ pub async fn onboarding_get(
         if let Err(e) = auth_api::request_email_verification(&st.api, c.forward.as_deref()).await {
             if e.status == 429 {
                 send_error = Some(e.verification_message());
+            } else {
+                // BUNYIP-1057: every non-429 error used to drop with no log or
+                // on-screen message; the user just never got the verify email
+                // and the page silently reused the page's generic error slot.
+                // The user-facing silence is deliberate (the Resend control is
+                // present), but the operator trace was not.
+                tracing::warn!(
+                    error = %e.user_message(),
+                    request_id = ?e.request_id,
+                    status = e.status,
+                    user_id = %user.id,
+                    "onboarding: automatic verification-send failed (non-429); keeping page quiet"
+                );
             }
         }
         c.set_cookies.push(format!(

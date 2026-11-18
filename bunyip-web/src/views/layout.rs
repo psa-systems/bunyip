@@ -429,7 +429,7 @@ fn feedback_launcher() -> Markup {
 /// than `user.is_some()`, so an unverified user does not see a link that
 /// would immediately redirect them to `/onboarding`.
 fn header(
-    _cfg: &Config,
+    cfg: &Config,
     user: Option<&User>,
     pricing: bool,
     app_links_allowed: bool,
@@ -453,6 +453,12 @@ fn header(
                         // same working entry when the documented-application
                         // list cannot be read at all.
                         a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
+                        // BUNYIP-1077: the external product blog. Empty
+                        // BUNYIP_BLOG_URL hides the link entirely so a deploy
+                        // without a blog never shows a dead link.
+                        @if !cfg.blog_url.is_empty() {
+                            a href=(cfg.blog_url) class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Blog" }
+                        }
                         // BUNYIP-667: ONE link to the list page, never a menu
                         // of per-application entries. This is the same rule
                         // BUNYIP-635 states for Documentation two lines above,
@@ -519,6 +525,11 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             // BUNYIP-635: same plain hub link as the header.
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
+                            // BUNYIP-1077: same configured blog link as the
+                            // header, absent when BUNYIP_BLOG_URL is unset.
+                            @if !cfg.blog_url.is_empty() {
+                                li { a href=(cfg.blog_url) class="text-muted-foreground hover:text-foreground transition-colors" { "Blog" } }
+                            }
                             // BUNYIP-682: one signed-in link, like the header
                             // (BUNYIP-667), never an entry per application.
                             // same gate as the header - the link

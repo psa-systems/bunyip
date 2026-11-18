@@ -2562,6 +2562,10 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "Let's Chat instance URL; empty hides the Community button (BUNYIP-329)",
     ),
     EnvVarSpec::defaulted(
+        "BUNYIP_BLOG_URL",
+        "product blog URL linked from the public header, footer and newsletter section; empty hides every blog link (BUNYIP-1077)",
+    ),
+    EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",
         "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),

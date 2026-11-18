@@ -577,7 +577,16 @@ verify-oci slug="bunyip-api" owner="psa-systems-private" image="bunyip-api" tag=
         | parse '{name}={value}'
         | transpose --header-row --as-record
     )
-    let port = (try { $env_vars | get BUNYIP_OCI_PORT } catch { "18081" })
+    # BUNYIP-1058: a missing BUNYIP_OCI_PORT used to silently default to
+    # "18081", hiding a mis-rendered .env from the operator. Fail fast with
+    # the actual cause so the verification does not pretend to pass against
+    # whatever is on 18081.
+    let port = (
+        try { $env_vars | get BUNYIP_OCI_PORT } catch {
+            print "FAIL: BUNYIP_OCI_PORT missing from .env (OCI registry verification cannot guess a port)"
+            exit 1
+        }
+    )
     let registry = $"localhost:($port)"
     let admin = (
         try { $env_vars | get SETUP_DEFAULT_ADMIN } catch {
@@ -809,5 +818,11 @@ dev-clean-all: dev-clean
             docker image rm $img
         }
     }
+    # BUNYIP-1058: `docker buildx prune` has no --yes equivalent, only
+    # --force. The recipe is explicit-destructive by name ("dev-clean-all"
+    # is the from-scratch rebuild path), so pass --force to skip the TTY
+    # prompt the recipe cannot answer. The surrounding image rm + volume
+    # rm are intentionally not forced, so any unexpected failure there
+    # still surfaces.
     docker buildx prune --force
     print "dev-clean-all: done"

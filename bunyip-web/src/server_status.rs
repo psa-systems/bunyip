@@ -91,9 +91,23 @@ pub fn spawn_recovery_poll(api_url: String) {
             if is_reachable() {
                 continue;
             }
-            if let Ok(resp) = client.get(&health_url).send().await {
-                if resp.status().is_success() {
-                    set_reachable(true);
+            // BUNYIP-1053: send errors and non-2xx used to be swallowed; log
+            // both at debug so the poll leaves a trace during an outage without
+            // flooding steady-state.
+            match client.get(&health_url).send().await {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        set_reachable(true);
+                    } else {
+                        tracing::debug!(
+                            status = resp.status().as_u16(),
+                            url = %health_url,
+                            "recovery poll: non-success"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, url = %health_url, "recovery poll: transport failure");
                 }
             }
         }
