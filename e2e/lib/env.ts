@@ -33,9 +33,10 @@ function optional(name: string): string | undefined {
 // canonical deploys serve the hub at the top-level host and the API/OP at
 // the `api.` subdomain (e.g. hub `example.com` -> API `api.example.com`).
 // Returns null when the hub host is already prefixed or the URL cannot be
-// parsed. BUNYIP-1041: internal staging/prod hostnames previously named in
-// this comment are tracked only in the operator-facing docs under
-// `docs/self-hosting.md`, not in the e2e library source.
+// parsed. BUNYIP-1041: internal hostnames previously named in this comment
+// were removed; the per-environment hub host is operator-supplied
+// (`${BUNYIP_HOST}` in `docs/self-hosting.md`'s Topology section), not a
+// fixed pair tracked here or in the docs.
 // SPEC-3.36.3
 function deriveApiBase(hubUrl: string): string | null {
   try {
@@ -51,10 +52,10 @@ function deriveApiBase(hubUrl: string): string | null {
   }
 }
 
-// Required: no domain is ever hardcoded as a fallback. The hub host differs
-// per environment (see `docs/self-hosting.md` for the operator-facing map
-// of staging and production apices), so the operator must inject it
-// explicitly. Strip a trailing slash so `${base}${route}` (e.g. in
+// Required: no domain is ever hardcoded as a fallback. The per-environment
+// hub host is operator-supplied (`${BUNYIP_HOST}` in `docs/self-hosting.md`'s
+// Topology section); set `E2E_BASE_URL` to that deployment's actual hub
+// origin. Strip a trailing slash so `${base}${route}` (e.g. in
 // discoverOidc) never produces a double slash like
 // `https://api.example.com//v1/...`, mirroring the gate scripts' own
 // normalisation.
