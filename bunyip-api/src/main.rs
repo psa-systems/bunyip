@@ -388,6 +388,12 @@ async fn main() -> anyhow::Result<()> {
     // same pattern the OIDC-client upserts above use for their per-env values.
     upsert_mokosh_webhook_url(&pool).await?;
 
+    // BUNYIP-862 first slice: let the per-deployment release-notes URLs for
+    // the two hosted applications be set from env, so the seeded Forgejo
+    // links in migration 20260713000020 do not force a fork of that
+    // migration for a self-hoster whose releases live elsewhere.
+    upsert_application_release_notes_urls(&pool).await?;
+
     // Test database connection
     // SPEC-9.4.14: post-reconcile health check
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
@@ -2192,6 +2198,56 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
 /// the mokosh row is missing (probably an incomplete migration state);
 /// does not fail boot on that either, so an operator does not lose the
 /// hub on a bad seed.
+// SPEC-9.5.15: env-driven override of the applications table's release-notes URLs
+/// BUNYIP-862 first slice: overwrite `applications.release_notes_url` on the
+/// hosted `mokosh` and `drillmark` rows from env, so the seeded Forgejo URLs
+/// in migration `20260713000020_add_application_release_notes_url.sql` are
+/// not forced on a self-hoster whose releases live elsewhere. Each env var
+/// unset leaves the migration's seeded value alone (admin can clear via the
+/// admin UI); each env var set replaces the value in place.
+async fn upsert_application_release_notes_urls(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    for (slug, env_var) in [
+        ("mokosh", "MOKOSH_RELEASE_NOTES_URL"),
+        ("drillmark", "DRILLMARK_RELEASE_NOTES_URL"),
+    ] {
+        let Some(url) = secret_env(env_var) else {
+            // Silent here: the env inventory warns once at boot
+            // (BUNYIP-537), and these are optional per-deployment overrides.
+            continue;
+        };
+
+        let rows = sqlx::query(
+            r#"
+            UPDATE applications
+               SET release_notes_url = $1
+             WHERE slug = $2
+            "#,
+        )
+        .bind(&url)
+        .bind(slug)
+        .execute(pool)
+        .await?
+        .rows_affected();
+
+        if rows == 0 {
+            tracing::warn!(
+                slug,
+                env_var,
+                "no applications row matched; release_notes_url left at its \
+                 migration-seeded default. Expected the hosted-application seed \
+                 migration to have run first."
+            );
+        } else {
+            info!(
+                slug,
+                release_notes_url = %url,
+                "applications.release_notes_url reconciled from environment"
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn upsert_mokosh_webhook_url(pool: &sqlx::PgPool) -> anyhow::Result<()> {
     let Some(url) = secret_env("MOKOSH_WEBHOOK_URL") else {
         // Silent here: the env inventory warns once at boot (BUNYIP-537).
