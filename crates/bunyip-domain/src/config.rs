@@ -1742,12 +1742,20 @@ impl Config {
     }
 
     // SPEC-7.1.47: host-scoped unless sharing is opted in
-    /// BUNYIP-266: cookie `Domain` applied to the OP session cookie.
-    /// Returns the configured `cookie_domain` only when the operator has
-    /// explicitly enabled cross-subdomain sharing via
-    /// `BUNYIP_COOKIE_SHARED_DOMAIN=true`; otherwise the cookie is
+    /// BUNYIP-266, BUNYIP-793: cookie `Domain` applied to every cookie that
+    /// may cross subdomains (the OP session cookie, the hub access/refresh
+    /// token pair, the CSRF cookie). Returns the configured `cookie_domain`
+    /// only when the operator has explicitly enabled cross-subdomain sharing
+    /// via `BUNYIP_COOKIE_SHARED_DOMAIN=true`; otherwise every cookie is
     /// host-scoped and siblings never receive it.
-    pub fn op_session_cookie_domain(&self) -> Option<&str> {
+    ///
+    /// Previously named `op_session_cookie_domain` because only the OP
+    /// session cookie passed through the gate; BUNYIP-793 found the hub
+    /// access/refresh cookies passed `config.cookie_domain.as_deref()`
+    /// directly, bypassing the opt-in. Renamed when every cookie set was
+    /// moved behind this one method so a reader does not assume only the
+    /// OP session honours the gate.
+    pub fn shared_cookie_domain(&self) -> Option<&str> {
         if self.cookie_shared_domain {
             self.cookie_domain.as_deref()
         } else {
