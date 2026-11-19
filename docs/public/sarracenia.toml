@@ -1,0 +1,15 @@
+# Publishes bunyip's user-facing docs to docs.a8n.systems/docs/bunyip.
+# Walk root is docs/public/ (the Publish docs workflow cd's here before
+# running sarracenia). Only files under this directory are published; the
+# rest of docs/ (invariants/, dev-docs/, specification.md, ROADMAP.md,
+# runbooks like dev-sso-three-repo-runbook.md) is internal engineering
+# material and is NOT published.
+source = "bunyip"
+base_path = "/docs/bunyip"
+title = "Bunyip"
+include = ["**/*.md"]
+exclude = []
+
+[storefront]
+url = "https://docs.a8n.systems"
+site = "docs"
