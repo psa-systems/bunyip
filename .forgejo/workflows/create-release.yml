@@ -61,5 +61,5 @@ jobs:
     # SPEC-3.7.4
     uses: https://dev.a8n.run/psa-systems/common/.forgejo/workflows/create-release.yml@main  # secret-scope-ok: same-org shared workflow repo, tracked separately for SHA pinning
     # MEDIUM: git and API calls, nothing compiles (see governance CI.md "Runner labels").
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_MEDIUM }}
     secrets: inherit  # secret-scope-ok: reusable workflow needs FORGEJO_PAT (write:repository) to call the releases endpoint; this caller job runs no step and reads no secret itself

@@ -1000,7 +1000,7 @@ pub async fn delete_account(
         );
 
         let secure = config.cookies_secure(&req);
-        let cookie_domain = config.cookie_domain.as_deref();
+        let cookie_domain = config.shared_cookie_domain();
         let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
             success: true,
             data: None,
@@ -1104,7 +1104,7 @@ pub async fn delete_account(
 
     // Clear auth cookies and return success
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
         success: true,

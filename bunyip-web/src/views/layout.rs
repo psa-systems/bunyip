@@ -428,12 +428,52 @@ fn feedback_launcher() -> Markup {
 /// the Applications link is gated on `app_links_allowed` rather
 /// than `user.is_some()`, so an unverified user does not see a link that
 /// would immediately redirect them to `/onboarding`.
-fn header(
+// SPEC-11.24.1, SPEC-11.26.1 unified: both the public shell's top bar and
+// the authenticated shell's app_topbar route through `topbar(ctx)`, so there
+// is a single `<header>` definition in this crate (BUNYIP-369). The two
+// variants carry different `<header>` classes on purpose: the public variant
+// uses `sticky top-0 z-50 w-full` so the marketing nav floats above long
+// scrolling content, while the authenticated variant uses `relative z-40`
+// to preserve the stacking context BUNYIP-408 pinned for the profile-menu
+// dropdown next to the scrolling `<main>` and the fixed sidebar. The styling
+// difference is a stated decision, not an accident of which function survived.
+pub(crate) enum TopbarContext<'a> {
+    /// Marketing / public pages: primary nav baked in, sign-in buttons on
+    /// the right. User is the already-signed-in visitor on a marketing page,
+    /// which triggers Dashboard / Admin shortcuts beside the profile menu.
+    Public {
+        user: Option<&'a User>,
+        pricing: bool,
+        app_links_allowed: bool,
+    },
+    /// Authenticated shells (dashboard / admin): mobile-nav disclosure + page
+    /// title on the left, destination link row + theme controls + profile
+    /// menu on the right. `nav` is the below-`md` disclosure built by
+    /// `mobile_nav` since BUNYIP-547 collapsed the sidebar below that
+    /// breakpoint.
+    App {
+        user: &'a User,
+        title: &'a str,
+        nav: Markup,
+    },
+}
+
+pub(crate) fn topbar(cfg: &Config, ctx: TopbarContext<'_>) -> Markup {
+    match ctx {
+        TopbarContext::Public {
+            user,
+            pricing,
+            app_links_allowed,
+        } => public_topbar(cfg, user, pricing, app_links_allowed),
+        TopbarContext::App { user, title, nav } => app_topbar(user, title, nav),
+    }
+}
+
+fn public_topbar(
     cfg: &Config,
     user: Option<&User>,
     pricing: bool,
     app_links_allowed: bool,
-    _show_feedback: bool,
 ) -> Markup {
     let is_admin = user.map(|u| u.role == UserRole::Admin).unwrap_or(false);
     html! {
@@ -453,6 +493,12 @@ fn header(
                         // same working entry when the documented-application
                         // list cannot be read at all.
                         a href="/docs" class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Documentation" }
+                        // BUNYIP-1077: optional external product-docs site,
+                        // additive next to the in-product `/docs` hub above.
+                        // Empty BUNYIP_DOCS_URL hides this entry.
+                        @if !cfg.docs_url.is_empty() {
+                            a href=(cfg.docs_url) class="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" { "Docs" }
+                        }
                         // BUNYIP-1077: the external product blog. Empty
                         // BUNYIP_BLOG_URL hides the link entirely so a deploy
                         // without a blog never shows a dead link.
@@ -525,6 +571,12 @@ fn footer(cfg: &Config, _user: Option<&User>, pricing: bool, app_links_allowed: 
                             li { a href="/roadmap" class="text-muted-foreground hover:text-foreground transition-colors" { "Roadmap" } }
                             // BUNYIP-635: same plain hub link as the header.
                             li { a href="/docs" class="text-muted-foreground hover:text-foreground transition-colors" { "Documentation" } }
+                            // BUNYIP-1077: same optional external docs link
+                            // as the header, absent when BUNYIP_DOCS_URL
+                            // is unset.
+                            @if !cfg.docs_url.is_empty() {
+                                li { a href=(cfg.docs_url) class="text-muted-foreground hover:text-foreground transition-colors" { "Docs" } }
+                            }
                             // BUNYIP-1077: same configured blog link as the
                             // header, absent when BUNYIP_BLOG_URL is unset.
                             @if !cfg.blog_url.is_empty() {
@@ -578,9 +630,15 @@ pub fn public_shell(
     show_feedback: bool,
     content: Markup,
 ) -> Markup {
+    // BUNYIP-369: `show_feedback` previously gated the top-bar feedback
+    // button, which is gone (the launcher lives below the page content and is
+    // mounted here). The parameter stays so call sites keep their
+    // "marketing-shell vs minimal-chrome" distinction, but the top bar
+    // itself no longer reads it.
+    let _ = show_feedback;
     html! {
         div class="flex min-h-screen flex-col" {
-            (header(cfg, user, pricing, app_links_allowed, show_feedback))
+            (topbar(cfg, TopbarContext::Public { user, pricing, app_links_allowed }))
             main class="flex-1" { (content) }
             (footer(cfg, user, pricing, app_links_allowed))
             @if show_feedback { (feedback_launcher()) }
@@ -1047,7 +1105,12 @@ fn topbar_link(href: &str, label: &str, glyph: &str) -> Markup {
 /// `nav` is the below-`md` navigation disclosure ([`mobile_nav`]), rendered left
 /// of the page title. It is the only nav an authenticated shell has under 768px,
 /// where [`sidebar`] is `hidden` (BUNYIP-547).
-fn app_topbar(title: &str, user: &User, nav: Markup) -> Markup {
+///
+/// BUNYIP-369: the parameter order is `(user, title, nav)` so the enum
+/// variant `TopbarContext::App { user, title, nav }` in `topbar()` can
+/// forward positionally. The call sites are inside this crate and were
+/// rewritten alongside the rename.
+fn app_topbar(user: &User, title: &str, nav: Markup) -> Markup {
     html! {
         // BUNYIP-408: `relative z-40` gives the topbar a stacking context that
         // sits above the scrolling `<main>` content. Without it the profile-menu
@@ -1084,7 +1147,7 @@ pub fn dashboard_shell(user: &User, active: &str, topbar_title: &str, content: M
         div class=(APP_SHELL_CLASS) {
             (sidebar(false, is_admin, active, is_member, None))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user, mobile_nav(false, is_admin, active, is_member, None)))
+                (app_topbar(user, topbar_title, mobile_nav(false, is_admin, active, is_member, None)))
                 main class=(APP_MAIN_CLASS) {
                     div class="pointer-events-none absolute inset-0 bg-gradient-to-br from-indigo-500/[0.02] via-transparent to-teal-500/[0.02]" {}
                     div class="relative" { (content) }
@@ -1111,7 +1174,7 @@ pub fn admin_shell(
         div class=(APP_SHELL_CLASS) {
             (sidebar(true, true, active, true, feedback_badge))
             div class=(APP_COLUMN_CLASS) {
-                (app_topbar(topbar_title, user, mobile_nav(true, true, active, true, feedback_badge)))
+                (app_topbar(user, topbar_title, mobile_nav(true, true, active, true, feedback_badge)))
                 main class=(APP_MAIN_CLASS) {
                     div class="relative" { (content) }
                 }
@@ -2406,17 +2469,35 @@ mod tests {
             TOAST_ROOT_CLASS.contains("fixed top-20 "),
             "{TOAST_ROOT_CLASS}"
         );
+        // BUNYIP-369: both top-bar variants now route through `topbar(ctx)`,
+        // so the test exercises the merged entry point for each.
         let user = test_user(UserRole::Admin);
-        let topbar = app_topbar("T", &user, html! {}).into_string();
-        assert!(
-            topbar.contains("flex h-16 "),
-            "the topbar height moved: {topbar}"
-        );
         let cfg = Config::from_env();
-        let public = header(&cfg, None, false, false, false).into_string();
+        let app = topbar(
+            &cfg,
+            TopbarContext::App {
+                user: &user,
+                title: "T",
+                nav: html! {},
+            },
+        )
+        .into_string();
+        assert!(
+            app.contains("flex h-16 "),
+            "the app topbar height moved: {app}"
+        );
+        let public = topbar(
+            &cfg,
+            TopbarContext::Public {
+                user: None,
+                pricing: false,
+                app_links_allowed: false,
+            },
+        )
+        .into_string();
         assert!(
             public.contains("flex h-16 "),
-            "the header height moved: {public}"
+            "the public topbar height moved: {public}"
         );
     }
 

@@ -399,7 +399,7 @@ pub async fn authorize(
                     // `cookie_domain` (not the host-only-helper) so the clear
                     // covers the worst-case stale cookie shape regardless of
                     // the current `BUNYIP_COOKIE_SHARED_DOMAIN` setting.
-                    let cookie_domain = config.cookie_domain.as_deref();
+                    let cookie_domain = config.shared_cookie_domain();
                     for clear_cookie in crate::middleware::auth::AuthCookies::clear_op_session_only(
                         secure,
                         cookie_domain,
@@ -756,12 +756,12 @@ async fn try_silent_sso(
     let ip = crate::middleware::auth::extract_client_ip(req);
     let device_info = crate::middleware::auth::extract_device_info(req);
     let secure = config.cookies_secure(req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
     // BUNYIP-266: op_session cookie is host-only unless the operator
     // explicitly opted into cross-subdomain sharing. access/refresh
     // cookies continue to honour `cookie_domain` (tightening those is a
     // separate ticket).
-    let op_cookie_domain = config.op_session_cookie_domain();
+    let op_cookie_domain = config.shared_cookie_domain();
 
     // Path 1: valid access_token cookie.
     if let Some(access_token) = req.cookie("access_token") {
@@ -1603,7 +1603,7 @@ pub async fn logout(
     }
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
     let mut response = HttpResponse::Found();
     response.append_header(("Location", redirect));
     for cookie in crate::middleware::auth::AuthCookies::clear(secure, cookie_domain) {

@@ -62,7 +62,7 @@ jobs:
     # HEAVY: runs `docker buildx build` of the release image, a full cargo
     # compile inside BuildKit (DEV-769).
     # SPEC-3.2.3
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}
     permissions:
       contents: read
       packages: write

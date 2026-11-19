@@ -332,7 +332,7 @@ pub async fn verify_2fa(
         .await?;
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     // BUNYIP-257: TOTP-verified login. The second factor satisfies the
     // MFA assurance; amr reflects both factors that participated.
@@ -343,7 +343,7 @@ pub async fn verify_2fa(
         &req,
         user_response.id,
         secure,
-        config.op_session_cookie_domain(),
+        config.shared_cookie_domain(),
         crate::handlers::auth::ACR_MFA,
         &["pwd".to_string(), "mfa".to_string()],
         remember,
