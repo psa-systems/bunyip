@@ -116,6 +116,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 
 ### Build, CI and repo tooling
 
+- Public docs: `docs/public/` is the user-facing docs tree published to docs.a8n.systems/docs/bunyip on every main push via sarracenia; `docs/` outside `public/` (invariants/, dev-docs/, specification.md, ROADMAP.md, runbooks) is internal engineering material and is NOT published. The sarracenia walk root is `docs/public/` (the workflow cd's there before running sarracenia).
 - [sqlx](docs/invariants/build-ci.md#sqlx): Only bunyip-oidc uses `sqlx::query!`; build with `SQLX_OFFLINE=true` and commit a regenerated `.sqlx/`.
 - [Migrations](docs/invariants/build-ci.md#migrations-bunyip-293) (BUNYIP-293): Committed migrations are immutable: fix forward with a new file, never edit one on `main`.
 - [Images](docs/invariants/build-ci.md#images-bunyip-389-bunyip-558-bunyip-426-bunyip-534) (BUNYIP-389/558/426/534/519): Pinned per-binary cargo-chef images, locked cache mounts.
