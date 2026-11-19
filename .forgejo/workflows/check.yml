@@ -82,7 +82,7 @@ jobs:
     name: fmt + clippy + check + tests + docker + audit
     # HEAVY: native cargo build/test plus a docker build; the dev image carries the
     # C toolchain and OpenSSL headers crate build scripts need (BUNYIP-444, DEV-769).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}
     env:
       SQLX_OFFLINE: "true"
       # Disk-footprint controls. CI doesn't need full DWARF debug info -
@@ -311,7 +311,7 @@ jobs:
     # build. check-runner-labels.nu greps check.yml for the HEAVY string
     # (the cargo job above carries it) and audits the no-run-time-install
     # rule, both of which this split preserves.
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_MEDIUM }}
 
     # Every run: step in this repo executes under Nushell (BUNYIP-489).
     # Declared once per job so a new step cannot silently inherit Bash;
@@ -522,6 +522,21 @@ jobs:
           ./scripts/check-brand-literals.nu --self-test
           ./scripts/check-brand-literals.nu
 
+      - name: Check no new hard-coded hostname is seeded by a migration
+        # BUNYIP-858 slipped a staging hostname into a migration unnoticed;
+        # BUNYIP-861 gates every new .sql file in bunyip-api/migrations for a
+        # quoted hostname literal. The six migrations already carrying
+        # hostnames on main are allowlisted by filename because BUNYIP-293
+        # forbids editing their bytes (sqlx checksums each file; BUNYIP-862
+        # separately teaches startup to overwrite the seeded values from
+        # configuration). An inline `-- domain-literal-ok: <reason>` marker
+        # exempts a line case-by-case.
+        # --self-test first, so a gate that stopped detecting anything fails
+        # the build instead of passing vacuously.
+        run: |
+          ./scripts/check-domain-literals.nu --self-test
+          ./scripts/check-domain-literals.nu
+
       - name: Check every surface is painted from the theme tokens
         # No unmapped stock Tailwind scale in the client-side scripts (the toast
         # pills were emerald / red / slate, the only surfaces that ignored dark
@@ -600,7 +615,7 @@ jobs:
   secrets:
     # Base image, medium size: the scanners read the tree and compile nothing, so
     # the dev image's C toolchain is not needed (BUNYIP-786).
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_MEDIUM }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_MEDIUM }}
     # A reusable-workflow caller cannot carry `defaults`, so the shared composite
     # runs as steps of this job and each scanner reports as its own step.
     defaults:

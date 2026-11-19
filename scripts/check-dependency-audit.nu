@@ -75,7 +75,7 @@ const EXCEPTIONS = [
         package: "h2"
         issue: "BUNYIP-1066"
         review_by: "2026-12-06"
-        reason: "A fixed version (>=0.4.16) exists but actix-http 3.20.5, the latest on crates.io after BUNYIP-1064's `cargo update --package actix-http`, still depends on h2 ^0.3, so h2 0.3.27 stays in Cargo.lock until actix-http itself moves off it or a workspace patch forces the bump."
+        reason: "A fixed version (>=0.4.16) exists but actix-http 3.22.0 (the latest on crates.io after the 2026-11-18 RUSTSEC-2026-0552/0553/0554 bump) still depends on h2 ^0.3, so h2 0.3.27 stays in Cargo.lock until actix-http itself moves off it or a workspace patch forces the bump. h2 0.4.20 is also present for the newer transitive consumers."
     }
     {
         id: "RUSTSEC-2024-0421"

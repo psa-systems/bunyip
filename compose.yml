@@ -478,6 +478,10 @@ services:
       # BUNYIP-1077: empty hides the Blog link in the public header and footer
       # and the "Read past posts on the blog" line in the newsletter section.
       BUNYIP_BLOG_URL: ${BUNYIP_BLOG_URL:-}
+      # BUNYIP-1077: optional external docs URL in the public header and
+      # footer, additive next to the in-product `/docs` hub. Empty hides
+      # the entry.
+      BUNYIP_DOCS_URL: ${BUNYIP_DOCS_URL:-}
     expose:
       - "4400"
     ports:
