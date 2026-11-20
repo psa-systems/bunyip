@@ -231,6 +231,14 @@ pub enum AuditAction {
     SystemConfigUpdated,
     /// A super admin flipped a feature toggle (BUNYIP-840). Metadata carries `key` and `enabled`.
     AdminFeatureToggleUpdated,
+    /// A super admin exported the settings archive (BUNYIP-714 / BUNYIP-715).
+    /// Metadata carries the archive's section names, never any value, secret,
+    /// hash or passphrase.
+    AdminSettingsArchiveExported,
+    /// A super admin applied (not previewed) a settings archive
+    /// (BUNYIP-714 / BUNYIP-715). Metadata carries the section names plus the
+    /// per-section insert/update/delete counts, never values.
+    AdminSettingsArchiveImported,
 }
 
 impl AuditAction {
@@ -345,6 +353,8 @@ impl AuditAction {
             AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
             AuditAction::SystemConfigUpdated => "system_config_updated",
             AuditAction::AdminFeatureToggleUpdated => "admin_feature_toggle_updated",
+            AuditAction::AdminSettingsArchiveExported => "admin_settings_archive_exported",
+            AuditAction::AdminSettingsArchiveImported => "admin_settings_archive_imported",
         }
     }
 
@@ -408,6 +418,8 @@ impl AuditAction {
                 | AuditAction::AdminMailerSuppressionDeleted
                 | AuditAction::SystemConfigUpdated
                 | AuditAction::AdminFeatureToggleUpdated
+                | AuditAction::AdminSettingsArchiveExported
+                | AuditAction::AdminSettingsArchiveImported
         )
     }
 }

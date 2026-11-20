@@ -172,6 +172,7 @@ pub mod admin_mokosh;
 pub mod admin_oauth_tenants;
 pub mod admin_provider_status;
 pub mod admin_rate_limits;
+pub mod admin_settings_archive;
 pub mod admin_stripe;
 pub mod application;
 pub mod application_doc;

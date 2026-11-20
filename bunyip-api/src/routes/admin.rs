@@ -396,6 +396,24 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
                 "/feature-toggles/{key}",
                 web::put().to(handlers::update_feature_toggle),
             )
+            // BUNYIP-715: settings archive (export + import) backed by the
+            // BUNYIP-714 core module. Super-admin only; the import's JSON body
+            // carries the full archive, so the route widens its own JSON cap
+            // from the global 32 KiB up to 34 MiB per the ticket.
+            .service(
+                web::resource("/settings-archive/export")
+                    .app_data(web::JsonConfig::default().limit(64 * 1024))
+                    .route(
+                        web::post().to(handlers::admin_settings_archive::export_settings_archive),
+                    ),
+            )
+            .service(
+                web::resource("/settings-archive/import")
+                    .app_data(web::JsonConfig::default().limit(34 * 1024 * 1024))
+                    .route(
+                        web::post().to(handlers::admin_settings_archive::import_settings_archive),
+                    ),
+            )
             // SPEC-9.28.11: branding routes
             // Branding (BUNYIP-561): the product name, tagline, meta
             // description and Open Graph image, admin-managed rather than

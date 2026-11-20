@@ -1926,6 +1926,53 @@ pub struct DocumentedApp {
     pub display_name: String,
 }
 
+// BUNYIP-715: Settings-archive wire types. Every field defaults per the
+// `check-serde-compat` rule; the api carries fuller shapes but these cover
+// what the admin page renders.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsArchiveSectionDiff {
+    #[serde(default)]
+    pub section: String,
+    #[serde(default)]
+    pub unchanged: bool,
+    #[serde(default)]
+    pub inserted: Vec<String>,
+    #[serde(default)]
+    pub updated: Vec<String>,
+    #[serde(default)]
+    pub deleted: Vec<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SettingsArchiveImportPlan {
+    #[serde(default)]
+    pub sections: Vec<SettingsArchiveSectionDiff>,
+    #[serde(default)]
+    pub secret_outcomes: Vec<String>,
+    #[serde(default)]
+    pub notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsArchiveStepOutcome {
+    #[serde(default)]
+    pub step: String,
+    #[serde(default)]
+    pub applied: bool,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettingsArchiveImportReport {
+    #[serde(default)]
+    pub plan: SettingsArchiveImportPlan,
+    #[serde(default)]
+    pub steps: Vec<SettingsArchiveStepOutcome>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

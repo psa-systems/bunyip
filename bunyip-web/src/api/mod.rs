@@ -364,6 +364,41 @@ impl Api {
         }
     }
 
+    // SPEC-11.13.9, SPEC-11.13.3, SPEC-11.13.4, SPEC-11.13.7
+    /// POST returning the raw `reqwest::Response` for streaming a binary body
+    /// back (BUNYIP-715: the settings-archive export). Cookie is forwarded
+    /// verbatim; body is a JSON `Value` serialised inline, which keeps the
+    /// payload path identical to `post` while skipping the json-decode step
+    /// that would buffer a large response.
+    pub async fn post_stream(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        body: &Value,
+    ) -> Result<reqwest::Response, ApiError> {
+        let url = format!("{}{}", self.base_v1, path);
+        let mut rb = self
+            .http
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::to_vec(body).unwrap_or_default());
+        if let Some(c) = cookie {
+            rb = rb.header(COOKIE, c);
+        }
+        rb = forward_client_ip(rb);
+        match rb.send().await {
+            Ok(resp) => {
+                crate::server_status::note_status(resp.status().as_u16());
+                Ok(resp)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, %url, "bunyip-api stream post failed (transport)");
+                crate::server_status::note_transport_error();
+                Err(ApiError::network(e.to_string()))
+            }
+        }
+    }
+
     // SPEC-11.13.10, SPEC-11.13.3, SPEC-11.13.4, SPEC-11.13.6
     /// POST a multipart form (feedback submission).
     pub async fn post_form(

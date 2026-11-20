@@ -1750,3 +1750,40 @@ pub async fn delete_app_doc(api: &Api, cookie: Option<&str>, doc_id: &str) -> Re
         .await?;
     ok_data(&r).map(|_| ())
 }
+
+// BUNYIP-715: Settings-archive import (preview/apply).
+pub async fn settings_archive_import(
+    api: &Api,
+    cookie: Option<&str>,
+    archive: &Value,
+    passphrase: &str,
+    dry_run: bool,
+) -> Result<Value, ApiError> {
+    let body = json!({
+        "archive": archive,
+        "passphrase": passphrase,
+        "dry_run": dry_run,
+    });
+    let r = api
+        .post("/admin/settings-archive/import", cookie, Some(body))
+        .await?;
+    if r.ok() {
+        return ok_data(&r).cloned();
+    }
+    // Partial-apply 500 carries the ImportReport body; surface it to the caller
+    // so the admin page can render it under an error-box rather than the
+    // generic 5xx line.
+    if r.status == 500 {
+        if let Some(data) = r.body.get("data") {
+            return Err(ApiError {
+                status: 500,
+                code: "PARTIAL_APPLY".to_string(),
+                message: serde_json::to_string(data).unwrap_or_else(|_| r.body.to_string()),
+                retry_after: None,
+                request_id: r.request_id.clone(),
+                bucket: None,
+            });
+        }
+    }
+    Err(super::error_from(&r))
+}

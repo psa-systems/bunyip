@@ -256,6 +256,15 @@ fn cache() -> &'static RateLimitConfigCache {
 pub struct RateLimitConfigRepository;
 
 impl RateLimitConfigRepository {
+    /// Drop the shared snapshot so the next enforcement site reloads it.
+    /// External callers (e.g. the BUNYIP-715 settings-archive apply, which
+    /// writes rows outside `upsert`/`delete`) use this to flush the cache
+    /// without needing a repository write.
+    // SPEC-7.3.198: public invalidation surface for bulk writers
+    pub fn invalidate_cache() {
+        cache().invalidate();
+    }
+
     /// Every persisted override, action-ordered.
     // SPEC-7.3.201
     pub async fn list(pool: &PgPool) -> Result<Vec<RateLimitConfigRow>, AppError> {

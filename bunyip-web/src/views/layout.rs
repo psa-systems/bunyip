@@ -873,6 +873,15 @@ fn admin_items(feedback_badge: Option<NavBadge>) -> Vec<NavItem> {
             external: false,
             badge: None,
         },
+        // BUNYIP-715: passphrase-sealed export and replace-import of every
+        // admin-managed setting.
+        NavItem {
+            title: "Settings Archive",
+            href: "/admin/settings-archive",
+            icon: "archive",
+            external: false,
+            badge: None,
+        },
         // BUNYIP-840: every feature toggle on one page.
         NavItem {
             title: "Feature Toggles",

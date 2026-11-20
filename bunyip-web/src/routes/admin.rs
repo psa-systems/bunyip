@@ -254,6 +254,19 @@ pub fn routes() -> Router<AppState> {
             "/admin/system-config",
             get(admin::system_config).post(admin::system_config_save),
         )
+        // BUNYIP-715: settings archive admin page. Export is a form-driven
+        // streaming download; import is a multipart upload parsed here and
+        // forwarded as JSON. The 33 MiB cap matches the api-side JSON limit.
+        .route("/admin/settings-archive", get(admin::settings_archive_page))
+        .route(
+            "/admin/settings-archive/export",
+            post(admin::settings_archive_export),
+        )
+        .route(
+            "/admin/settings-archive/import",
+            post(admin::settings_archive_import)
+                .layer(axum::extract::DefaultBodyLimit::max(33 * 1024 * 1024)),
+        )
         .route("/admin/email/test", post(admin::email_test))
         .route("/admin/email/test-send", post(admin::email_test_send))
         // BUNYIP-997: the Mirzam integration settings and connection check.
