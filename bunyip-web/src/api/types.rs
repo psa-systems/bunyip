@@ -288,6 +288,10 @@ pub struct Application {
     pub maintenance_mode: bool,
     #[serde(default)]
     pub maintenance_message: Option<String>,
+    /// BUNYIP-797: coming-soon toggle. The card renders a pill and the launch
+    /// button is disabled when true.
+    #[serde(default)]
+    pub coming_soon: bool,
     /// Group membership (BUNYIP-100); `None` = ungrouped. Used to group the
     /// applications page under group headings.
     #[serde(default)]
@@ -1090,6 +1094,9 @@ pub struct AdminApplication {
     // distribution product. Defaults to hosted to match the DB column default.
     #[serde(default = "default_true")]
     pub is_hosted: bool,
+    /// BUNYIP-797: coming-soon toggle. Prefills the admin checkbox.
+    #[serde(default)]
+    pub coming_soon: bool,
     // Distribution config, for prefilling the admin edit form. The backend
     // serialises these straight off the `Application` model (snake_case).
     #[serde(default)]

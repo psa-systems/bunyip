@@ -335,6 +335,7 @@ pub(super) fn application_form(
     blurb: &str,
     identity: Option<&IdentityView>,
     is_hosted: bool,
+    coming_soon: bool,
     details: &DetailsView,
     v: &DistView,
     surfaces: Option<&SurfaceVisibility>,
@@ -370,6 +371,11 @@ pub(super) fn application_form(
                             div class="flex items-start gap-3" {
                                 (toggle_switch_field("is_hosted", "is_hosted", is_hosted, "Hosted app"))
                                 div { label for="is_hosted" class="text-sm font-medium" { "Hosted app" } p class="text-xs font-normal text-muted-foreground" { "On: shows as a launchable hub tile. Off: catalog-only distribution product (downloads / OCI pulls only)." } }
+                            }
+                            // BUNYIP-797: coming-soon toggle; keeps the tile visible with a pill and a disabled launch button.
+                            div class="flex items-start gap-3" {
+                                (toggle_switch_field("coming_soon", "coming_soon", coming_soon, "Coming soon"))
+                                div { label for="coming_soon" class="text-sm font-medium" { "Coming soon" } p class="text-xs font-normal text-muted-foreground" { "On: the tile shows a Coming Soon pill and the launch button is disabled, regardless of reachability." } }
                             }
                             (details_fields(details))
                         }
@@ -478,6 +484,10 @@ pub(super) fn distribution_update_body(f: &DistributionForm) -> serde_json::Valu
     };
     m.insert("forgejo_package".into(), json!(package));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    // BUNYIP-797: coming-soon toggle. Always included so unchecking it clears
+    // the flag (the unchecked checkbox value is "", which `checkbox_on` reads
+    // as false).
+    m.insert("coming_soon".into(), json!(checkbox_on(&f.coming_soon)));
     insert_detail_fields(
         &mut m,
         &f.description,
@@ -525,6 +535,10 @@ pub struct DistributionForm {
     pub pinned_image_tag: String,
     #[serde(default)]
     pub is_hosted: String,
+    /// BUNYIP-797: coming-soon toggle. An unchecked checkbox serialises as "",
+    /// which `checkbox_on` reads as false.
+    #[serde(default)]
+    pub coming_soon: String,
 }
 
 /// GET /admin/applications/{id}/edit
@@ -608,6 +622,7 @@ pub async fn application_edit(
                     "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
                     None,
                     app.is_hosted,
+                    app.coming_soon,
                     &details,
                     &v,
                     Some(&surfaces),
@@ -679,6 +694,7 @@ pub async fn application_distribution_save(
                 "Edit the application details, Forgejo binary, and OCI container coordinates. Blank fields keep their current value.",
                 None,
                 checkbox_on(&f.is_hosted),
+                checkbox_on(&f.coming_soon),
                 &details,
                 &v,
                 None,
@@ -822,6 +838,10 @@ pub struct CreateAppForm {
     pub pinned_image_tag: String,
     #[serde(default)]
     pub is_hosted: String,
+    /// BUNYIP-797: coming-soon toggle on new entries. An unchecked checkbox
+    /// serialises as "", read as false.
+    #[serde(default)]
+    pub coming_soon: String,
 }
 
 // SPEC-12.4.2, SPEC-12.4.3: slug ends up in OCI pull paths, so it is checked at the edge
@@ -847,6 +867,9 @@ pub(super) fn create_app_body(f: &CreateAppForm) -> Result<serde_json::Value, St
     m.insert("display_name".into(), json!(display_name));
     m.insert("container_name".into(), json!(container_name));
     m.insert("is_hosted".into(), json!(checkbox_on(&f.is_hosted)));
+    // BUNYIP-797: coming-soon on create. Empty = false (the DB default anyway);
+    // sending it explicitly lets a brand-new entry be queued as coming-soon.
+    m.insert("coming_soon".into(), json!(checkbox_on(&f.coming_soon)));
     insert_detail_fields(
         &mut m,
         &f.description,
@@ -917,6 +940,7 @@ pub async fn application_new(State(st): State<AppState>, headers: HeaderMap) -> 
         "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
         Some(&id),
         true,
+        false,
         &details,
         &v,
         None,
@@ -970,6 +994,7 @@ pub async fn application_create(
             "Create a catalog application and (optionally) its Forgejo binary and OCI container coordinates.",
             Some(&id),
             checkbox_on(&f.is_hosted),
+            checkbox_on(&f.coming_soon),
             &details,
             &v,
             None,

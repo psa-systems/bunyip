@@ -382,6 +382,7 @@ mod tests {
                 description: None,
                 icon_url: None,
                 is_active: true,
+                coming_soon: false,
                 is_hosted: true,
                 requires_entitlement,
                 maintenance_mode: false,

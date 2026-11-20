@@ -267,6 +267,8 @@ impl ApplicationRepository {
                 -- $23 (bound after the WHERE id param) so the existing $1..$22
                 -- numbering is untouched (BUNYIP-343).
                 release_notes_url   = COALESCE($23, release_notes_url),
+                -- BUNYIP-797: coming-soon toggle. NULL/omitted keeps the current.
+                coming_soon         = COALESCE($24, coming_soon),
                 updated_at          = NOW()
             WHERE id = $22
             RETURNING *
@@ -295,6 +297,7 @@ impl ApplicationRepository {
         .bind(data.pinned_image_tag.as_deref())
         .bind(app_id)
         .bind(data.release_notes_url.as_deref())
+        .bind(data.coming_soon)
         .fetch_one(pool)
         .await?;
 
@@ -314,11 +317,13 @@ impl ApplicationRepository {
                 is_hosted, maintenance_message,
                 forgejo_owner, forgejo_repo, forgejo_package, pinned_release_tag, artifact_source,
                 oci_image_owner, oci_image_name, pinned_image_tag, release_notes_url,
+                coming_soon,
                 sort_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                 COALESCE($12, TRUE), $13,
                 $14, $15, $16, $17, COALESCE($18, 'release'),
                 $19, $20, $21, $22,
+                COALESCE($23, FALSE),
                 -- BUNYIP-473: append at the end with a distinct position so the
                 -- reorder control has something to move (the old default 0 made
                 -- every new app share a position and the swap a no-op).
@@ -348,6 +353,7 @@ impl ApplicationRepository {
         .bind(data.oci_image_name.as_deref())
         .bind(data.pinned_image_tag.as_deref())
         .bind(data.release_notes_url.as_deref())
+        .bind(data.coming_soon)
         .fetch_one(pool)
         .await?;
 
@@ -515,6 +521,7 @@ mod tests {
             health_check_url: None,
             is_active: None,
             is_hosted: None,
+            coming_soon: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,
@@ -570,6 +577,7 @@ mod tests {
             source_code_url: None,
             release_notes_url: None,
             is_hosted: None,
+            coming_soon: None,
             maintenance_message: Some("down for upgrades".into()),
             forgejo_owner: None,
             forgejo_repo: None,
