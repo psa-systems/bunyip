@@ -91,10 +91,10 @@ pub use dunite_mailer::{
     NoSuppression, RelayMessage, RelayOutcome, SuppressionList, SuppressionReason, MAX_ADDRESS_LEN,
     MAX_BODY_LEN, MAX_SUBJECT_LEN,
 };
-pub use organizations::{OrganizationService, TeamService};
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
+pub use organizations::{OrganizationService, TeamService};
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,
     stripe_settings_from_db_model, unconfigured_stripe_config, ProbeStatus, StripeConfig,

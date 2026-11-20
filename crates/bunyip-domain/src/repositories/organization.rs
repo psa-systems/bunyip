@@ -15,10 +15,7 @@ use crate::models::organization::{
 pub struct OrganizationRepository;
 
 impl OrganizationRepository {
-    pub async fn create(
-        pool: &PgPool,
-        data: CreateOrganization,
-    ) -> Result<Organization, AppError> {
+    pub async fn create(pool: &PgPool, data: CreateOrganization) -> Result<Organization, AppError> {
         let row = sqlx::query_as::<_, Organization>(
             "INSERT INTO organizations (owner_bunyip_user_id, name) \
              VALUES ($1, $2) RETURNING *",
@@ -30,10 +27,7 @@ impl OrganizationRepository {
         Ok(row)
     }
 
-    pub async fn find_by_id(
-        pool: &PgPool,
-        id: Uuid,
-    ) -> Result<Option<Organization>, AppError> {
+    pub async fn find_by_id(pool: &PgPool, id: Uuid) -> Result<Option<Organization>, AppError> {
         let row = sqlx::query_as::<_, Organization>("SELECT * FROM organizations WHERE id = $1")
             .bind(id)
             .fetch_optional(pool)
@@ -192,13 +186,12 @@ impl TeamMemberRepository {
         team_id: Uuid,
         bunyip_user_id: Uuid,
     ) -> Result<u64, AppError> {
-        let result = sqlx::query(
-            "DELETE FROM team_members WHERE team_id = $1 AND bunyip_user_id = $2",
-        )
-        .bind(team_id)
-        .bind(bunyip_user_id)
-        .execute(pool)
-        .await?;
+        let result =
+            sqlx::query("DELETE FROM team_members WHERE team_id = $1 AND bunyip_user_id = $2")
+                .bind(team_id)
+                .bind(bunyip_user_id)
+                .execute(pool)
+                .await?;
         Ok(result.rows_affected())
     }
 }

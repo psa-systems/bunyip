@@ -9,6 +9,7 @@
 pub mod admin;
 pub mod auth;
 pub mod calls;
+pub mod organizations;
 pub mod types;
 
 use reqwest::header::{ACCEPT, COOKIE, RETRY_AFTER, SET_COOKIE};

@@ -50,9 +50,7 @@ impl OrganizationService {
             .await?
             .is_some()
         {
-            return Err(AppError::conflict(
-                "This user already owns an organization",
-            ));
+            return Err(AppError::conflict("This user already owns an organization"));
         }
         OrganizationRepository::create(
             pool,
