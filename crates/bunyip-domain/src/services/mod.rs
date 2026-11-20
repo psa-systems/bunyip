@@ -23,6 +23,7 @@ pub mod mailer_webhook;
 pub mod mirzam;
 pub mod mirzam_backfill;
 pub mod mirzam_sync;
+pub mod organizations;
 pub mod password_breach;
 pub mod provider_status;
 pub mod stripe;
@@ -90,6 +91,7 @@ pub use dunite_mailer::{
     NoSuppression, RelayMessage, RelayOutcome, SuppressionList, SuppressionReason, MAX_ADDRESS_LEN,
     MAX_BODY_LEN, MAX_SUBJECT_LEN,
 };
+pub use organizations::{OrganizationService, TeamService};
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
