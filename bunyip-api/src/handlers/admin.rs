@@ -5324,6 +5324,7 @@ mod tests {
             health_check_url: None,
             is_active: None,
             is_hosted: None,
+            coming_soon: None,
             maintenance_mode: None,
             maintenance_message: None,
             webhook_url: None,

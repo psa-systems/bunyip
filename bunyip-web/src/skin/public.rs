@@ -876,6 +876,7 @@ mod wired_apps_tests {
             is_accessible: false,
             maintenance_mode: false,
             maintenance_message: None,
+            coming_soon: false,
             group_id: None,
         }
     }
