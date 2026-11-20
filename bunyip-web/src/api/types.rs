@@ -1112,6 +1112,18 @@ pub struct AdminApplication {
     // selector on the application edit form.
     #[serde(default)]
     pub group_id: Option<String>,
+    /// BUNYIP-1089: most-recent URL health probe outcome. `None` means the
+    /// worker has not written a row yet (feature off, or no interval has
+    /// elapsed since bootstrap).
+    #[serde(default)]
+    pub last_check_status: Option<String>,
+    /// BUNYIP-1089: when the last probe wrote its row.
+    #[serde(default)]
+    pub last_check_at: Option<String>,
+    /// BUNYIP-1089: the probe's error-detail column, surfaced to the admin
+    /// list so a failure is attributable without a drill-down.
+    #[serde(default)]
+    pub last_check_error_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

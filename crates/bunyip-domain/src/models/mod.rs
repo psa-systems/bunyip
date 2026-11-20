@@ -6,6 +6,7 @@
 pub mod application;
 pub mod application_doc;
 pub mod application_group;
+pub mod application_url_check;
 pub mod audit;
 pub mod auto_ban;
 pub mod branding;
@@ -37,6 +38,10 @@ pub use application_doc::{
 };
 pub use application_group::{
     ApplicationGroup, CreateApplicationGroup, SetApplicationGroupRequest, UpdateApplicationGroup,
+};
+pub use application_url_check::{
+    ApplicationUrlCheck, CreateApplicationUrlCheck, CHECK_STATUS_HTTP_ERROR,
+    CHECK_STATUS_NETWORK_ERROR, CHECK_STATUS_OK, CHECK_STATUS_SCREEN_REFUSED, CHECK_STATUS_TIMEOUT,
 };
 pub use audit::{
     AdminNotification, AuditAction, AuditLog, AuditSeverity, CreateAdminNotification,

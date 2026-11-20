@@ -47,6 +47,7 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 - [`DRILLMARK_RELEASE_NOTES_URL`](#var-drillmark-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_RELEASE_NOTES_URL`](#var-mokosh-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`URL_HEALTH_CHECK_INTERVAL_SECS`](#var-url-health-check-interval-secs) (Required: no) - Optional. Leave it unset to keep the default.
 
 <a id="release-v0-21-0"></a>
 
@@ -473,6 +474,9 @@ Every variable below has a working default; set it only to tune the deployment.
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
   so a file in the layer directory overrides the variable of the same name.
+- **URL health worker (BUNYIP-1089)**: `URL_HEALTH_CHECK_INTERVAL_SECS` - cadence in seconds for the application URL
+  health worker; default 300, clamped to [60, 3600]. The `url_health_enabled` feature toggle is the on/off switch;
+  this value is the cadence.
 - **Rate limits**: `RATE_LIMIT_{ACTION}_MAX_REQUESTS` and `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`, one pair per action
   (`crates/bunyip-domain/src/models/rate_limit.rs`). They are declared configuration keys, generated from the preset
   list, and resolve in the [declared provider order](#configuration-providers-and-their-precedence-bunyip-643644): the
@@ -1000,5 +1004,6 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-tier-lifetime-slots"></a>`TIER_LIFETIME_SLOTS` | no | v0.2.1 | Defaulted |
 | <a id="var-tier-standard-trial-days"></a>`TIER_STANDARD_TRIAL_DAYS` | no | v0.2.1 | Defaulted |
 | <a id="var-trusted-proxy-cidr"></a>`TRUSTED_PROXY_CIDR` | no | v0.3.0 | Feature-gating |
+| <a id="var-url-health-check-interval-secs"></a>`URL_HEALTH_CHECK_INTERVAL_SECS` | no | v0.22.0 | Defaulted |
 
 <!-- END GENERATED: all-variables -->

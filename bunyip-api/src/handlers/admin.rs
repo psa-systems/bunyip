@@ -886,7 +886,9 @@ pub async fn list_memberships(
 
 // SPEC-10.5.1: includes inactive applications.
 /// GET /v1/admin/applications
-/// List all applications (including inactive)
+/// List all applications (including inactive). BUNYIP-1089 decorates each row
+/// with its most-recent `application_url_checks` outcome so the admin list can
+/// render the "Last check" column in one request.
 pub async fn list_all_applications(
     req: HttpRequest,
     _admin: AdminUser,
@@ -895,9 +897,35 @@ pub async fn list_all_applications(
     let request_id = get_request_id(&req);
 
     let apps = ApplicationRepository::list_all(&pool).await?;
+    let ids: Vec<uuid::Uuid> = apps.iter().map(|a| a.id).collect();
+    let latest =
+        crate::repositories::ApplicationUrlCheckRepository::latest_per_application(&pool, &ids)
+            .await?;
+    let decorated: Vec<serde_json::Value> = apps
+        .into_iter()
+        .map(|a| {
+            let last = latest.iter().find(|c| c.application_id == a.id);
+            let mut v = serde_json::to_value(&a).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(ref mut m) = v {
+                m.insert(
+                    "last_check_status".into(),
+                    serde_json::json!(last.map(|c| c.status.clone())),
+                );
+                m.insert(
+                    "last_check_at".into(),
+                    serde_json::json!(last.map(|c| c.checked_at)),
+                );
+                m.insert(
+                    "last_check_error_detail".into(),
+                    serde_json::json!(last.and_then(|c| c.error_detail.clone())),
+                );
+            }
+            v
+        })
+        .collect();
 
     Ok(success(
-        serde_json::json!({ "applications": apps }),
+        serde_json::json!({ "applications": decorated }),
         request_id,
     ))
 }

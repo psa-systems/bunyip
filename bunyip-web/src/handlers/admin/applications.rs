@@ -69,9 +69,53 @@ pub(super) fn app_admin_row(app: &AdminApplication) -> Markup {
                     span class="text-sm text-muted-foreground" { "Maintenance" }
                     (toggle_switch(app.maintenance_mode, "Toggle maintenance mode"))
                 }
+                // BUNYIP-1089: last URL health check result. Empty when the
+                // worker has not written a row yet (flag off, or nothing has
+                // ticked since bootstrap).
+                (last_check_pill(app))
                 a href=(format!("/admin/applications/{}/edit", app.id)) class=(button_class("outline", "sm", "")) { "Edit" }
             }
         }
+    }
+}
+
+/// BUNYIP-1089: one admin-row pill summarising the most recent URL probe.
+/// Empty when the worker has not run yet.
+fn last_check_pill(app: &AdminApplication) -> Markup {
+    let Some(status) = app.last_check_status.as_deref() else {
+        return html! {};
+    };
+    let (variant, label) = match status {
+        "ok" => ("success", "Reachable"),
+        "http_error" => ("warning", "HTTP error"),
+        "screen_refused" => ("secondary", "Refused"),
+        "timeout" => ("warning", "Timeout"),
+        "network_error" => ("destructive", "Unreachable"),
+        _ => ("secondary", "Unknown"),
+    };
+    let title = app
+        .last_check_error_detail
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| format!("Last check: {status}"));
+    html! {
+        span
+            class=(format!("inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs {}", pill_class(variant)))
+            title=(title)
+            aria-label=(format!("Last check: {label}"))
+        {
+            (label)
+        }
+    }
+}
+
+fn pill_class(variant: &str) -> &'static str {
+    match variant {
+        "success" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+        "warning" => "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        "destructive" => "bg-rose-500/10 text-rose-700 dark:text-rose-300",
+        _ => "bg-muted text-muted-foreground",
     }
 }
 

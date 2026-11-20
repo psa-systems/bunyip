@@ -2347,6 +2347,15 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "ISO alpha-2 countries refused sign-in, comma separated, applied after COUNTRY_ALLOW \
          (BUNYIP-581)",
     ),
+    // BUNYIP-1089: how often the URL health worker probes every hosted
+    // application entry. Clamped to [60, 3600] seconds by the worker. The
+    // `url_health_enabled` feature toggle is the on/off switch; this value is
+    // a cadence, not a gate.
+    EnvVarSpec::defaulted(
+        "URL_HEALTH_CHECK_INTERVAL_SECS",
+        "cadence of the application URL health probe, in seconds (default 300, clamped 60-3600). \
+         The url_health_enabled feature toggle is the on/off switch (BUNYIP-1089).",
+    ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the
     // admin-managed `branding.brand_name`; this value is used only while that
     // row is still empty, i.e. a database that has never been branded.
