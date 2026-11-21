@@ -61,7 +61,7 @@ Required; no default. One of `environment`, `database`, `infisical`. Governs whe
 ## Rate limiting
 
 - `RATE_LIMIT_FLOOR` sets the baseline per-IP cap every api route sits under. Individual routes may add tighter per-user caps on top; the floor never raises them.
-- `RATE_LIMIT_WHITELIST` is a CIDR list that bypasses the floor. Reserved for trusted internal callers, not for broad allow-listing.
+- The rate-limit whitelist is managed from the admin page's Whitelist tab, not an environment variable. Each entry is an exact `email:`, `ip:`, or `user:` value that bypasses the floor; matching is exact, there is no range support. Reserved for trusted internal callers, not for broad allow-listing.
 
 ## Feature flags
 

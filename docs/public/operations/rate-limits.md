@@ -25,9 +25,9 @@ A caller that trips a cap is answered `429 Too Many Requests` with the standard 
 
 ## The whitelist
 
-Some callers are internal and need not be rate-limited: the fleet's monitoring poll, a scheduled job that fans out through a known subnet. Add a CIDR to the whitelist on the admin page; requests from an IP inside the CIDR bypass the floor.
+Some callers are internal and need not be rate-limited: the fleet's monitoring poll, a known service account. Add an entry to the whitelist on the admin page: a literal email (`email:foo@bar.com`), a literal IP (`ip:1.2.3.4`), or a user id (`user:<uuid>`). Each entry is matched exactly; there is no range support. A request bypasses the floor when its resolved rate-limit key exactly matches a whitelisted entry.
 
-The whitelist check is cached alongside the floor, so adding an entry becomes effective within one refresh window. A whitelisted caller is still subject to per-user caps on routes that carry one; the whitelist bypasses per-IP only.
+The whitelist check is cached alongside the floor, so adding an entry becomes effective within one refresh window. Exemption applies to whichever rate-limit key the request resolves to, not scoped to one bucket type: a whitelisted user id also bypasses that user's per-user caps.
 
 ## Credential checks: failures count, not successes
 
