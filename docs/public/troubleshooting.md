@@ -67,6 +67,6 @@ Login approval is a security feature; the fallback above trades that security fo
 
 - Hard-refresh the browser (shift-reload). The next HTML fetch names the new fingerprints.
 - If the sign-in page is served through a CDN or a reverse proxy with its own cache, invalidate that cache. The HTML page is short-cached by default; a long-cache misconfig at the proxy is the usual root cause.
-- Confirm the images are serving the new assets from inside: `curl -I https://${BUNYIP_HOST}/assets/screen-<some-hash>.css` from the host returns `200`. If `404`, the new image did not ship the expected asset; the deployment pulled a broken image.
+- Confirm the images are serving the new assets from inside: `curl -I https://${BUNYIP_HOST}/assets/screen-<some-hash>.css` from the host returns `200`. (`BUNYIP_HOST` here is shorthand for the apex host you set via `OIDC_ISSUER` and `BUNYIP_API_PUBLIC_ORIGIN`, not a literal env var; substitute your own apex.) If `404`, the new image did not ship the expected asset; the deployment pulled a broken image.
 
 The asset fingerprint is a feature: every bundle carries its own cacheable path, so the browser never serves a mismatched pair. The `404` is the mismatch asserting itself.

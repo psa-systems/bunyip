@@ -10,9 +10,11 @@ Every RP starts at the discovery URL:
 https://api.${BUNYIP_HOST}/.well-known/openid-configuration
 ```
 
+`BUNYIP_HOST` above is shorthand for the apex host, not a literal env var; the operator achieves it by setting `OIDC_ISSUER` and `BUNYIP_API_PUBLIC_ORIGIN` to matching hostnames.
+
 The document names:
 
-- `issuer` (matches `BUNYIP_API_PUBLIC_ORIGIN`)
+- `issuer` (matches `OIDC_ISSUER`, falling back to `BUNYIP_API_URL`)
 - `authorization_endpoint` (`/oauth2/authorize`)
 - `token_endpoint` (`/oauth2/token`)
 - `jwks_uri` (`/oauth2/jwks`)
