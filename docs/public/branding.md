@@ -56,7 +56,7 @@ Assets can be hosted anywhere that is reachable by a signed-out browser. A simpl
 
 ## What NEVER goes in branding
 
-- Email sender address (`EMAIL_FROM`): that is an environment variable because mail sending starts before the database is reached.
+- Email sender address (`SMTP_FROM`): that is an environment variable because mail sending starts before the database is reached.
 - Legal terms or privacy prose: `legal_links` carries the link, not the content. The content lives wherever the link points.
 - Feature toggles: features are not branding even when they look visual. See the Feature flags note in [Configuration](configuration.md).
 

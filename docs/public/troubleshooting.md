@@ -24,7 +24,7 @@ Long-term fix: every downstream RP must refresh JWKS on a schedule, not only on 
 
 **Fix.**
 
-- Confirm Infisical is reachable from the api container: `curl -I $INFISICAL_BASE_URL` from inside the container.
+- Confirm Infisical is reachable from the api container: `curl -I $INFISICAL_ADDRESS` from inside the container.
 - Confirm `INFISICAL_CLIENT_ID` and `INFISICAL_CLIENT_SECRET_FILE` are current. A rotated client secret on Infisical's side with a stale file on bunyip is the common cause.
 - As a short-term measure, flip `SECRETS_STORAGE=database` and paste the integration values into the admin Settings pages. The api picks up the change on restart. Flip back after Infisical is reachable.
 
@@ -40,7 +40,7 @@ Group-1 secrets never need this workaround; they are files.
 
 - Confirm SMTP is reachable: a simpler `openssl s_client -connect $SMTP_HOST:$SMTP_PORT -starttls smtp` from inside the api container fails on the same thing without touching bunyip.
 - Check the password: Group-2 secret via the admin Settings page (database mode), or in Infisical (infisical mode), or `.env` (environment mode).
-- For a brief window while fixing SMTP, flip `MAIL_PROVIDER=log`. The approval link is written to the api log at `info`; an operator reads it and relays to the user out of band. This is a last resort.
+- There is no production-usable fallback while SMTP is down; fix the relay.
 - For a longer window, flip `LOGIN_APPROVAL_ENABLED=false`. Every sign-in stops being gated. Re-enable it once mail is back.
 
 Login approval is a security feature; the fallback above trades that security for availability knowingly.
