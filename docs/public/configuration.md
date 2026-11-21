@@ -12,8 +12,8 @@ This page covers the environment-variable half. The admin pages describe the in-
 ## Hosting
 
 - `APP_PORT` (default `4401`) is the api listen port inside the container.
-- `WEB_PORT` (default `4400`) is the web listen port inside the container.
-- `APP_HOST` (default `0.0.0.0`) is the api bind address.
+- `BUNYIP_BIND_ADDR` (default `0.0.0.0:4400`) is the web listen address inside the container.
+- `HOST_IP` (default `0.0.0.0`) is the api bind address.
 - `BUNYIP_API_URL` (default `http://api:4401`) is how `bunyip-web` reaches `bunyip-api` server-side.
 - `BUNYIP_API_PUBLIC_ORIGIN` is the browser-facing origin of the api, used for OIDC redirect URIs and Stripe webhooks. Required for production.
 - `BUNYIP_HOST` is the apex host the web runs on. Used to build email links and the `Issuer` claim.
@@ -61,7 +61,7 @@ Required; no default. One of `environment`, `database`, `infisical`. Governs whe
 ## Rate limiting
 
 - The baseline per-IP cap every api route sits under is the fixed constant `RateLimitConfig::API_UNAUTH`; there is no environment override. Individual routes may add tighter per-user caps on top; the floor never raises them.
-- `RATE_LIMIT_WHITELIST` is a CIDR list that bypasses the floor. Reserved for trusted internal callers, not for broad allow-listing.
+- The whitelist that bypasses the floor is not an environment variable: it is the admin-managed `rate_limit_whitelist` table, edited on the admin Rate Limits page.
 
 ## Feature flags
 
