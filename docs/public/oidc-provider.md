@@ -14,7 +14,7 @@ https://api.${BUNYIP_HOST}/.well-known/openid-configuration
 
 The document names:
 
-- `issuer` (matches `OIDC_ISSUER`, falling back to `BUNYIP_API_URL`)
+- `issuer` (matches `OIDC_ISSUER`; there is no fallback to `BUNYIP_API_URL`, so leaving it unset disables the OIDC endpoints entirely)
 - `authorization_endpoint` (`/oauth2/authorize`)
 - `token_endpoint` (`/oauth2/token`)
 - `jwks_uri` (`/oauth2/jwks`)
