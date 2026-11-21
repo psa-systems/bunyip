@@ -34,6 +34,11 @@
 # truth, not as a variable). Anything else fails the build, with the closest
 # real entry (by edit distance) printed alongside it.
 #
+# docs/public/configuration.md carries pre-existing invented and renamed
+# variable names from before this gate existed; a separate, already-tracked
+# round of doc fixes corrects those. Until that round lands, this gate fails
+# `just check` on names it did not introduce.
+#
 # Usage:
 #   scripts/check-doc-surface.nu
 #   scripts/check-doc-surface.nu --self-test
