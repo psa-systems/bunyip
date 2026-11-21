@@ -1,6 +1,6 @@
 #!/usr/bin/env nu
 
-# Doc-surface drift gate (BUNYIP-783).
+# Doc-surface drift gate.
 #
 # `docs/configuration.md` used to assert its tables were machine-generated and
 # therefore could not drift, with nothing behind the sentence: five
@@ -24,6 +24,16 @@
 # with one named exception: `ENVIRONMENT`, the one real variable name that has
 # none.
 #
+# `docs/public/configuration.md` is a second, hand-written prose description
+# of the same `ENV_INVENTORY` surface, published externally and outside the
+# table-shaped diff above. Its format (sentences, not a table) makes exact
+# per-row parsing impractical, so it gets a weaker check instead: every
+# backtick-quoted name in the file must either be a real
+# `ENV_INVENTORY` entry, the `{NAME}_FILE` secret-file form of one, or the
+# `ENV_INVENTORY` identifier itself (used in prose to name the source of
+# truth, not as a variable). Anything else fails the build, with the closest
+# real entry (by edit distance) printed alongside it.
+#
 # Usage:
 #   scripts/check-doc-surface.nu
 #   scripts/check-doc-surface.nu --self-test
@@ -31,6 +41,10 @@
 const CONFIG_RS = "crates/bunyip-domain/src/config.rs"
 const SYS_CONFIG_RS = "crates/bunyip-domain/src/sys_config.rs"
 const DOC_FILE = "docs/configuration.md"
+const PUBLIC_DOC_FILE = "docs/public/configuration.md"
+# Names that legitimately appear backtick-quoted in docs/public/configuration.md
+# without being themselves an ENV_INVENTORY variable.
+const PUBLIC_DOC_META_NAMES = ["ENV_INVENTORY"]
 
 # The text between the first occurrence of `start` and the next occurrence of
 # `end` after it, or the rest of the string when `end` never recurs.
@@ -119,6 +133,52 @@ def doc-governed-secret-names [doc: string]: nothing -> list<string> {
     table-first-column-names (between $doc "\n## `SECRETS_STORAGE`" "\n## ")
 }
 
+# Levenshtein edit distance between two strings, used only to pick the
+# closest real name to print alongside an unmatched one.
+def edit-distance [a: string, b: string]: nothing -> int {
+    let ac = ($a | split chars)
+    let bc = ($b | split chars)
+    let la = ($ac | length)
+    let lb = ($bc | length)
+    mut prev = (0..$lb | each {|i| $i })
+    for i in 1..$la {
+        mut cur = [$i]
+        for j in 1..$lb {
+            let cost = if ($ac | get ($i - 1)) == ($bc | get ($j - 1)) { 0 } else { 1 }
+            let del = ($prev | get $j) + 1
+            let ins = ($cur | get ($j - 1)) + 1
+            let sub = ($prev | get ($j - 1)) + $cost
+            $cur = ($cur | append ([$del $ins $sub] | math min))
+        }
+        $prev = $cur
+    }
+    $prev | last
+}
+
+def closest-name [name: string, candidates: list<string>]: nothing -> string {
+    $candidates | each {|c| { name: $c, dist: (edit-distance $name $c) } } | sort-by dist | get name.0
+}
+
+# Every backtick-quoted candidate name in docs/public/configuration.md that
+# cannot be matched to an `ENV_INVENTORY` entry: not the entry itself, not
+# its `{NAME}_FILE` secret-file form, and not a known meta name. Each failure
+# carries the closest real entry by edit distance.
+# SPEC-3.22.6
+def public-doc-problems [doc: string, env_names: list<string>]: nothing -> list<string> {
+    let candidates = (backtick-names $doc | where {|n| $n not-in $PUBLIC_DOC_META_NAMES })
+    mut problems = []
+    for n in $candidates {
+        if $n in $env_names { continue }
+        if ($n | str ends-with "_FILE") {
+            let base = ($n | str substring 0..<(($n | str length) - ("_FILE" | str length)))
+            if $base in $env_names { continue }
+        }
+        let near = (closest-name $n $env_names)
+        $problems = ($problems | append $"($PUBLIC_DOC_FILE) names `($n)`, which is not an ENV_INVENTORY variable \(closest: `($near)`\)")
+    }
+    $problems
+}
+
 # SPEC-3.22.3
 def diff-report [label: string, source: list<string>, doc: list<string>]: nothing -> list<string> {
     let only_source = ($source | where {|n| $n not-in $doc })
@@ -200,6 +260,46 @@ def self-test []: nothing -> nothing {
         }
     }
 
+    let env_names = (env-inventory-names $config_content)
+
+    let real_name = ($env_names | first)
+    if (public-doc-problems $"- `($real_name)` is fine." $env_names) != [] {
+        print --stderr $"self-test FAILED: public-doc-problems flags a real ENV_INVENTORY name \(`($real_name)`)"
+        $ok = false
+    } else {
+        print "self-test ok: public-doc-problems accepts a real ENV_INVENTORY name"
+    }
+
+    if (public-doc-problems "- `ENV_INVENTORY` describes the source of truth." $env_names) != [] {
+        print --stderr "self-test FAILED: public-doc-problems flags the ENV_INVENTORY meta name"
+        $ok = false
+    } else {
+        print "self-test ok: public-doc-problems accepts the ENV_INVENTORY meta name"
+    }
+
+    if (public-doc-problems $"- File-based through `($real_name)_FILE`." $env_names) != [] {
+        print --stderr $"self-test FAILED: public-doc-problems flags the real {NAME}_FILE secret form \(`($real_name)_FILE`)"
+        $ok = false
+    } else {
+        print "self-test ok: public-doc-problems accepts the {NAME}_FILE secret form of a real name"
+    }
+
+    let fake_bad = (public-doc-problems "- `BUNYIP_1095_SELF_TEST_ONLY` is fake." $env_names)
+    if ($fake_bad | is-empty) {
+        print --stderr "self-test FAILED: public-doc-problems misses an invented name"
+        $ok = false
+    } else {
+        print "self-test ok: public-doc-problems catches an invented name"
+    }
+
+    let fake_file_bad = (public-doc-problems "- `BUNYIP_1095_SELF_TEST_ONLY_FILE` is fake." $env_names)
+    if ($fake_file_bad | is-empty) {
+        print --stderr "self-test FAILED: public-doc-problems misses an invented {NAME}_FILE name whose base is not real"
+        $ok = false
+    } else {
+        print "self-test ok: public-doc-problems catches an invented {NAME}_FILE name whose base is not real"
+    }
+
     if not $ok { exit 1 }
 }
 
@@ -242,5 +342,16 @@ def main [
         exit 1
     }
 
-    print $"check-doc-surface: ($env_names | length) ENV_INVENTORY, ($sys_names | length) SYSTEM_LEVEL_ENV_KEYS and ($secret_names | length) GovernedSecret::ALL names agree with docs/configuration.md"
+    let public_doc_content = (open --raw $PUBLIC_DOC_FILE | decode utf-8)
+    let public_problems = (public-doc-problems $public_doc_content $env_names)
+    if ($public_problems | is-not-empty) {
+        for p in $public_problems { print --stderr $"error: ($p)" }
+        print --stderr ""
+        print --stderr $"Every env var name in ($PUBLIC_DOC_FILE) must be a real ENV_INVENTORY entry \(or its"
+        print --stderr "{NAME}_FILE secret-file form). Fix the name, or add it to ENV_INVENTORY if it is"
+        print --stderr "missing there."
+        exit 1
+    }
+
+    print $"check-doc-surface: ($env_names | length) ENV_INVENTORY, ($sys_names | length) SYSTEM_LEVEL_ENV_KEYS and ($secret_names | length) GovernedSecret::ALL names agree with docs/configuration.md, and ($PUBLIC_DOC_FILE) names no invented variables"
 }
