@@ -17,13 +17,14 @@
 #
 # The labels are sized (DEV-769): RUNS_ON_OPENSUSE_HEAVY is the dev image on
 # the large runners, RUNS_ON_OPENSUSE_MEDIUM the base image. BUNYIP-1084 renamed
-# the family off the deprecated `_BASE_` form; the retired-label check at
-# SPEC-3.16.3 still matches the old latest-runner names via a regex that keeps
-# the legacy word out of this source file.
+# the family off the deprecated `_BASE_` and `_DEV_` prefixes; the retired-label
+# check at SPEC-3.16.3 matches any prefixed form (BASE_LIGHT/MEDIUM/HEAVY/MASSIVE
+# and either family's LATEST), so a concurrent workflow addition cannot
+# reintroduce one.
 #
 # Four properties:
 #   1. check.yml (native cargo fmt/clippy/build/test) requests the HEAVY label.
-#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST label.
+#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_* label.
 #   2. no workflow installs a C toolchain, OpenSSL headers, or the browser system
 #      libraries at run time.
 #   3. every `runs-on:` carries a comment above it saying why that label is right;
@@ -76,13 +77,12 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     # SPEC-3.16.3
-    # 1b. The unsized *_LATEST labels are retired. The regex matches both the
-    # base-image and dev-image variants without naming the retired literal in
-    # source (BUNYIP-1084): a final `rg` over the retired word does not hit
-    # this line because the pattern uses a character class, not the retired
-    # underscore-delimited substring.
-    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST' | drop-comments) {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_HEAVY or RUNS_ON_OPENSUSE_MEDIUM \(DEV-769)"
+    # 1b. The prefixed BASE_/DEV_ family is retired. The regex matches any
+    # suffix (LIGHT, MEDIUM, HEAVY, MASSIVE, LATEST) without naming the retired
+    # literal in source: it uses character classes, so a final `rg` over the
+    # retired word does not hit this line.
+    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_' | drop-comments) {
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_{LIGHT,MEDIUM,HEAVY,MASSIVE} \(DEV-769)"
         $status = 1
     }
 

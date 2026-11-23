@@ -81,13 +81,18 @@ def parse-inventory [text: string] {
         # Match is now exhaustive; an unexpected value fails loudly naming
         # the variable and the unrecognised class so a new EnvVarSpec variant
         # cannot sneak into the docs as the wrong class.
+        # BUNYIP-1087: the wildcard pattern uses `_` because nushell 0.112.2
+        # does not bind a named match-arm identifier inside the nested
+        # string interpolation that follows. `$r.fn` already carries the
+        # unrecognised class in scope, so the error message still names the
+        # exact value that failed the match.
         let cls = match $r.fn {
             "required" => "required",
             "required_in_production" => "required_in_production",
             "gating" => "gating",
             "defaulted" => "defaulted",
-            other => (
-                error make { msg: $"config-docs: unknown EnvVarSpec class `($other)` for ($r.name); extend the regex and this match together" }
+            _ => (
+                error make { msg: $"config-docs: unknown EnvVarSpec class `($r.fn)` for ($r.name); extend the regex and this match together" }
             ),
         }
         { name: $r.name, class: $cls }
