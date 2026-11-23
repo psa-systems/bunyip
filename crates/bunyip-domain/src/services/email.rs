@@ -16,7 +16,7 @@ pub use lettre::transport::stub::AsyncStubTransport;
 use std::time::Duration;
 use tera::{Context, Tera};
 
-use crate::config::{EmailConfig, SmtpTls};
+use crate::config::{EmailConfig, SmtpFallbackConfig, SmtpTls};
 use crate::errors::AppError;
 use crate::models::Feedback;
 use dunite_mailer::SuppressionList;
@@ -65,9 +65,63 @@ impl MailTransport {
 }
 
 /// Reloadable SMTP transport + config, swapped on admin update (BUNYIP-351).
+///
+/// BUNYIP-1096: carries an optional secondary (fallback) transport set at boot
+/// from `SMTP_FALLBACK_*` env vars. The primary is reloaded on admin update;
+/// the fallback is NOT (it is an operator-only outage knob, not an admin
+/// surface), so an admin save of the email settings leaves it untouched.
 struct EmailRuntime {
     transport: Option<MailTransport>,
+    fallback: Option<MailTransport>,
     config: EmailConfig,
+    /// Non-secret snapshot of the fallback's config, for error messages. The
+    /// password lives inside the built `MailTransport` only.
+    fallback_summary: Option<FallbackSummary>,
+}
+
+/// BUNYIP-1096: non-secret fallback-transport metadata used by `deliver` to
+/// name which relay rescued (or failed to rescue) a primary send. Never
+/// carries the password.
+#[derive(Debug, Clone)]
+struct FallbackSummary {
+    host: String,
+    port: u16,
+    tls: SmtpTls,
+    username: String,
+    ehlo: String,
+}
+
+impl FallbackSummary {
+    fn from_config(cfg: &SmtpFallbackConfig) -> Self {
+        let ehlo = cfg
+            .smtp_ehlo_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.smtp_host.clone());
+        Self {
+            host: cfg.smtp_host.clone(),
+            port: cfg.smtp_port,
+            tls: cfg.smtp_tls.clone(),
+            username: cfg.smtp_username.clone(),
+            ehlo,
+        }
+    }
+
+    /// Build an `EmailConfig` whose transport-shaped fields reflect this
+    /// fallback, so `MailTransport::send`'s BUNYIP-612 error context names the
+    /// fallback relay (not the primary). The non-transport fields (from_name,
+    /// from_email, templates, etc.) come from the primary unchanged: the
+    /// fallback does not change the identity the message is sent as, only the
+    /// pipe it goes through.
+    fn as_email_config_overlay(&self, primary: &EmailConfig) -> EmailConfig {
+        let mut overlay = primary.clone();
+        overlay.smtp_host = self.host.clone();
+        overlay.smtp_port = self.port;
+        overlay.smtp_tls = self.tls.clone();
+        overlay.smtp_username = self.username.clone();
+        overlay.smtp_ehlo_name = Some(self.ehlo.clone());
+        overlay
+    }
 }
 
 /// BUNYIP-433: which stage of the SMTP handshake a `test_connection` probe
@@ -167,6 +221,45 @@ pub struct EmailService {
 }
 
 impl EmailService {
+    /// BUNYIP-1096: build the fallback transport from `SMTP_FALLBACK_*`.
+    /// Shape mirrors `build_transport` for the primary; the fallback has no
+    /// `enabled` gate (if the operator set one, they want it live) and
+    /// defaults its EHLO name to its own host.
+    fn build_fallback_transport(cfg: &SmtpFallbackConfig) -> Result<MailTransport, AppError> {
+        let creds = Credentials::new(cfg.smtp_username.clone(), cfg.smtp_password.clone());
+        let hello_name = cfg
+            .smtp_ehlo_name
+            .clone()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cfg.smtp_host.clone());
+        let hello = lettre::transport::smtp::extension::ClientId::Domain(hello_name);
+        let transport = match cfg.smtp_tls {
+            SmtpTls::Implicit => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.smtp_host)
+                .map_err(|e| AppError::internal(format!("SMTP fallback connection error: {e}")))?
+                .port(cfg.smtp_port)
+                .credentials(creds)
+                .hello_name(hello)
+                .tls(lettre::transport::smtp::client::Tls::Wrapper(
+                    lettre::transport::smtp::client::TlsParameters::new(cfg.smtp_host.clone())
+                        .map_err(|e| AppError::internal(format!("TLS fallback error: {e}")))?,
+                ))
+                .build(),
+            SmtpTls::Starttls => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.smtp_host)
+                .map_err(|e| AppError::internal(format!("SMTP fallback connection error: {e}")))?
+                .port(cfg.smtp_port)
+                .credentials(creds)
+                .hello_name(hello)
+                .build(),
+        };
+        tracing::info!(
+            host = %cfg.smtp_host,
+            port = cfg.smtp_port,
+            tls = ?cfg.smtp_tls,
+            "SMTP fallback transport built (BUNYIP-1096)"
+        );
+        Ok(MailTransport::Smtp(Box::new(transport)))
+    }
+
     /// Build the SMTP transport from config, or `None` when email is disabled.
     ///
     /// Host/port/tls/credentials are baked into the transport at build time, so
@@ -414,6 +507,67 @@ impl EmailService {
             .clone()
     }
 
+    /// BUNYIP-1096: snapshot the current fallback transport + its summary, or
+    /// `None` if no `SMTP_FALLBACK_*` was set at boot.
+    fn fallback(&self) -> Option<(MailTransport, FallbackSummary)> {
+        let rt = self.runtime.read().expect("EmailService lock poisoned");
+        match (&rt.fallback, &rt.fallback_summary) {
+            (Some(t), Some(s)) => Some((t.clone(), s.clone())),
+            _ => None,
+        }
+    }
+
+    /// BUNYIP-1096: deliver `email` through the primary transport, trying the
+    /// fallback once if the primary fails for any reason. Returns `Ok(())` when
+    /// either transport accepted the message. Logs both attempts so an
+    /// operator sees the primary failure in the record even when the fallback
+    /// rescued it.
+    async fn deliver(&self, config: &EmailConfig, email: Message) -> Result<(), AppError> {
+        let Some(primary) = self.transport() else {
+            return Err(AppError::internal(
+                "Email send error: no SMTP transport is configured",
+            ));
+        };
+        let fallback = self.fallback();
+        match fallback {
+            None => primary.send(config, email).await,
+            Some((fb_transport, fb_summary)) => {
+                let fb_cfg = fb_summary.as_email_config_overlay(config);
+                match primary.send(config, email.clone()).await {
+                    Ok(()) => Ok(()),
+                    Err(primary_err) => {
+                        tracing::warn!(
+                            primary_relay = %config.smtp_host,
+                            fallback_relay = %fb_summary.host,
+                            error = %primary_err,
+                            "primary SMTP send failed; trying SMTP_FALLBACK_* (BUNYIP-1096)"
+                        );
+                        match fb_transport.send(&fb_cfg, email).await {
+                            Ok(()) => {
+                                tracing::info!(
+                                    primary_relay = %config.smtp_host,
+                                    fallback_relay = %fb_summary.host,
+                                    "SMTP fallback delivered the message after a primary failure (BUNYIP-1096)"
+                                );
+                                Ok(())
+                            }
+                            Err(fallback_err) => {
+                                tracing::error!(
+                                    primary_relay = %config.smtp_host,
+                                    fallback_relay = %fb_summary.host,
+                                    primary_error = %primary_err,
+                                    fallback_error = %fallback_err,
+                                    "both primary and SMTP_FALLBACK_* relays failed (BUNYIP-1096)"
+                                );
+                                Err(fallback_err)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Hot-reload the SMTP transport + config (e.g. after an admin update). Rebuilds
     /// the transport because host/port/tls/credentials are baked into it at build time.
     // SPEC-8.18.2
@@ -425,12 +579,64 @@ impl EmailService {
         Ok(())
     }
 
-    /// Create a new email service
+    /// Create a new email service.
+    ///
+    /// BUNYIP-1096: delegates to [`Self::new_with_fallback`] with no fallback
+    /// transport. New call sites that want the resilience knob should pass
+    /// `SmtpFallbackConfig::from_env()?` through `new_with_fallback` instead.
     // SPEC-8.18.12
     pub fn new(config: EmailConfig) -> Result<Self, AppError> {
-        let transport = Self::build_transport(&config)?;
+        Self::new_with_fallback(config, None)
+    }
 
-        // Initialize Tera templates with inline templates
+    /// BUNYIP-1096: create the email service with an optional operator-set
+    /// secondary SMTP transport. The primary transport is reload-swappable via
+    /// [`Self::reload`]; the fallback is set once at boot from
+    /// `SMTP_FALLBACK_*` and stays constant across admin saves of the email
+    /// settings.
+    pub fn new_with_fallback(
+        config: EmailConfig,
+        fallback: Option<SmtpFallbackConfig>,
+    ) -> Result<Self, AppError> {
+        let transport = Self::build_transport(&config)?;
+        let (fallback_transport, fallback_summary) = match fallback {
+            Some(cfg) => {
+                let built = Self::build_fallback_transport(&cfg)?;
+                let summary = FallbackSummary::from_config(&cfg);
+                (Some(built), Some(summary))
+            }
+            None => (None, None),
+        };
+        Self::assemble(transport, fallback_transport, fallback_summary, config)
+    }
+
+    /// Internal helper so `new`, `new_with_fallback` and `new_capturing` can
+    /// share template registration without duplicating the (long) `add_raw_template`
+    /// list. Takes an already-built transport pair and the config.
+    fn assemble(
+        transport: Option<MailTransport>,
+        fallback: Option<MailTransport>,
+        fallback_summary: Option<FallbackSummary>,
+        config: EmailConfig,
+    ) -> Result<Self, AppError> {
+        let templates = Self::build_templates()?;
+        Ok(Self {
+            runtime: std::sync::RwLock::new(EmailRuntime {
+                transport,
+                fallback,
+                config,
+                fallback_summary,
+            }),
+            templates,
+            branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
+        })
+    }
+
+    /// Register every inline email template on a fresh `Tera`. Extracted so
+    /// both `new_with_fallback` (via `assemble`) and the dev/test constructors
+    /// share one registration list.
+    fn build_templates() -> Result<Tera, AppError> {
         let mut templates = Tera::default();
 
         // Register base template
@@ -693,12 +899,7 @@ impl EmailService {
             )
             .map_err(|e| AppError::internal(format!("Template error: {}", e)))?;
 
-        Ok(Self {
-            runtime: std::sync::RwLock::new(EmailRuntime { transport, config }),
-            templates,
-            branding: std::sync::RwLock::new(None),
-            suppression: std::sync::RwLock::new(None),
-        })
+        Ok(templates)
     }
 
     /// Create a new email service with default configuration (dev mode)
@@ -732,7 +933,9 @@ impl EmailService {
         Self {
             runtime: std::sync::RwLock::new(EmailRuntime {
                 transport: None,
+                fallback: None,
                 config,
+                fallback_summary: None,
             }),
             templates,
             branding: std::sync::RwLock::new(None),
@@ -756,13 +959,56 @@ impl EmailService {
         let service = Self {
             runtime: std::sync::RwLock::new(EmailRuntime {
                 transport: Some(MailTransport::Stub(stub.clone())),
+                fallback: None,
                 config,
+                fallback_summary: None,
             }),
             templates: Tera::default(),
             branding: std::sync::RwLock::new(None),
             suppression: std::sync::RwLock::new(None),
         };
         (service, stub)
+    }
+
+    /// BUNYIP-1096 test seam: like `new_capturing`, but also installs a
+    /// fallback stub. The two stubs are returned so a test can seed one to
+    /// error and the other to succeed, then assert that `deliver` routed the
+    /// message through the fallback.
+    #[cfg(test)]
+    pub fn new_capturing_with_fallback(
+        config: EmailConfig,
+        primary_ok: bool,
+        fallback_ok: bool,
+    ) -> (Self, AsyncStubTransport, AsyncStubTransport) {
+        let primary_stub = if primary_ok {
+            AsyncStubTransport::new_ok()
+        } else {
+            AsyncStubTransport::new_error()
+        };
+        let fallback_stub = if fallback_ok {
+            AsyncStubTransport::new_ok()
+        } else {
+            AsyncStubTransport::new_error()
+        };
+        let fallback_summary = Some(FallbackSummary {
+            host: "fallback.example.test".to_string(),
+            port: 587,
+            tls: SmtpTls::Starttls,
+            username: "fallback-user".to_string(),
+            ehlo: "fallback.example.test".to_string(),
+        });
+        let service = Self {
+            runtime: std::sync::RwLock::new(EmailRuntime {
+                transport: Some(MailTransport::Stub(primary_stub.clone())),
+                fallback: Some(MailTransport::Stub(fallback_stub.clone())),
+                config,
+                fallback_summary,
+            }),
+            templates: Tera::default(),
+            branding: std::sync::RwLock::new(None),
+            suppression: std::sync::RwLock::new(None),
+        };
+        (service, primary_stub, fallback_stub)
     }
 
     /// The `<uuid@domain>` Message-ID (header form and bare form), with `domain`
@@ -862,7 +1108,10 @@ impl EmailService {
         };
 
         tracing::info!(to = %to, subject = %subject, "Relayed message queued for delivery");
-        transport.send(&config, email).await?;
+        // BUNYIP-1096: route through `deliver` so a primary failure falls over
+        // to `SMTP_FALLBACK_*` when the operator has configured one.
+        let _ = transport; // retained here to keep the earlier `transport = self.transport().filter(...)` null-check as a gate.
+        self.deliver(&config, email).await?;
         tracing::info!(to = %to, subject = %subject, message_id = %message_id_bare, "Relayed message sent");
         Ok(message_id_bare)
     }
@@ -979,7 +1228,9 @@ impl EmailService {
             // "Email sent successfully" line to bracket every delivery.
             tracing::info!(to = %to, subject = %subject, "Email queued for delivery");
 
-            transport.send(config, email).await?;
+            // BUNYIP-1096: route through `deliver` for the fallback path.
+            let _ = transport;
+            self.deliver(config, email).await?;
 
             tracing::info!(to = %to, subject = %subject, "Email sent successfully");
         } else {
@@ -1054,7 +1305,9 @@ impl EmailService {
             references.as_deref(),
         )?;
         tracing::info!(to = %to, subject = %subject, "Support reply queued for delivery");
-        transport.send(&config, email).await?;
+        // BUNYIP-1096: route through `deliver` for the fallback path.
+        let _ = transport;
+        self.deliver(&config, email).await?;
         tracing::info!(to = %to, subject = %subject, "Support reply sent");
         Ok(message_id)
     }
@@ -1821,6 +2074,94 @@ mod tests {
         );
     }
 
+    /// BUNYIP-1096: a primary-transport failure falls over to `SMTP_FALLBACK_*`.
+    /// The fallback stub reports success, so `send_email` returns Ok, and the
+    /// primary stub's own `messages()` log shows the message was still handed
+    /// to it (lettre's stub appends on send_raw regardless of the response).
+    ///
+    /// The recipient's domain is deliberately NOT one of the RFC 2606 / 6761
+    /// reserved TLDs: `send_email` skips those before the transport, so a test
+    /// built around `user@example.com` never exercises the transport path.
+    #[tokio::test]
+    async fn primary_failure_falls_over_to_the_smtp_fallback_transport() {
+        let (service, primary, fallback) = EmailService::new_capturing_with_fallback(
+            config_with_smtp("smtp.example.test", 587, SmtpTls::Starttls),
+            /* primary_ok = */ false,
+            /* fallback_ok = */ true,
+        );
+        let result = service
+            .send_email(
+                &service.config(),
+                "user@a8n.run",
+                "Your magic link",
+                "<p>link</p>".to_string(),
+                "link".to_string(),
+            )
+            .await;
+        assert!(
+            result.is_ok(),
+            "primary failed but fallback succeeded; send must return Ok: {result:?}"
+        );
+        assert_eq!(
+            fallback.messages().await.len(),
+            1,
+            "the fallback received the message"
+        );
+        // The stub's log records every send_raw regardless of the response,
+        // so the primary also sees the attempt. The point of the test is that
+        // the caller sees Ok even though the primary errored.
+        assert_eq!(primary.messages().await.len(), 1, "primary was tried first");
+    }
+
+    /// BUNYIP-1096: when BOTH the primary and the fallback fail, the error is
+    /// the fallback's (last one tried); the primary's error is in the log.
+    #[tokio::test]
+    async fn both_relays_failing_surfaces_the_fallback_error() {
+        let (service, _primary, _fallback) = EmailService::new_capturing_with_fallback(
+            config_with_smtp("smtp.example.test", 587, SmtpTls::Starttls),
+            /* primary_ok = */ false,
+            /* fallback_ok = */ false,
+        );
+        let err = service
+            .send_email(
+                &service.config(),
+                "user@a8n.run",
+                "Your magic link",
+                "<p>link</p>".to_string(),
+                "link".to_string(),
+            )
+            .await
+            .expect_err("both transports failed, send must return Err");
+        // The error names the fallback relay (BUNYIP-612 context on the final
+        // attempt), not the primary.
+        assert!(
+            err.to_string().contains("fallback.example.test"),
+            "the surfaced error names the fallback relay: {err}"
+        );
+    }
+
+    /// BUNYIP-1096: without a fallback configured, today's single-transport
+    /// behaviour is unchanged. A primary success returns Ok as before.
+    #[tokio::test]
+    async fn no_fallback_keeps_single_transport_semantics() {
+        let (service, stub) = EmailService::new_capturing(config_with_smtp(
+            "smtp.example.test",
+            587,
+            SmtpTls::Starttls,
+        ));
+        let result = service
+            .send_email(
+                &service.config(),
+                "user@a8n.run",
+                "Hello",
+                "<p>Hi</p>".to_string(),
+                "Hi".to_string(),
+            )
+            .await;
+        assert!(result.is_ok());
+        assert_eq!(stub.messages().await.len(), 1);
+    }
+
     /// BUNYIP-825: with `config.enabled = false`, `send_support_reply` must
     /// error before any template renders or Message-ID is generated, rather
     /// than the sibling template senders' silent dev-mode no-op, because the
@@ -2116,7 +2457,9 @@ mod tests {
         EmailService {
             runtime: std::sync::RwLock::new(EmailRuntime {
                 transport: None,
+                fallback: None,
                 config,
+                fallback_summary: None,
             }),
             templates: Tera::default(),
             branding: std::sync::RwLock::new(None),

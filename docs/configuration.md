@@ -47,6 +47,13 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 - [`DRILLMARK_RELEASE_NOTES_URL`](#var-drillmark-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_RELEASE_NOTES_URL`](#var-mokosh-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_HOST`](#var-smtp-fallback-host) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PORT`](#var-smtp-fallback-port) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_TLS`](#var-smtp-fallback-tls) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_USERNAME`](#var-smtp-fallback-username) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PASSWORD`](#var-smtp-fallback-password) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PASSWORD_FILE`](#var-smtp-fallback-password-file) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_EHLO_NAME`](#var-smtp-fallback-ehlo-name) (Required: no) - Optional. Leave it unset to keep the default.
 
 <a id="release-v0-21-0"></a>
 
@@ -461,6 +468,12 @@ Every variable below has a working default; set it only to tune the deployment.
   `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
 - **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see [
   `encryption-key-rotation.md`](encryption-key-rotation.md)).
+- **SMTP fallback transport (BUNYIP-1096)**: `SMTP_FALLBACK_HOST`, `SMTP_FALLBACK_PORT`, `SMTP_FALLBACK_TLS`,
+  `SMTP_FALLBACK_USERNAME`, `SMTP_FALLBACK_PASSWORD` (or `SMTP_FALLBACK_PASSWORD_FILE` for a secret-mount deployment),
+  `SMTP_FALLBACK_EHLO_NAME`. An operator-only secondary SMTP relay the email service tries when the primary fails to
+  deliver. `SMTP_FALLBACK_HOST` unset keeps today's single-transport behaviour. No admin-page surface and no DB row; set
+  once at boot, not touched by admin saves of the email settings. The error returned when both relays fail names the
+  fallback (last tried); the primary's error is in the log line BUNYIP-1096 adds at `warn!`.
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
   `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`, `SUPPORT_INBOX_EMAIL` (Reply-To for system mail: the monitored support
   inbox replies are ingested into, BUNYIP-571), and the inbound IMAP poller settings `SUPPORT_IMAP_HOST`,
@@ -979,6 +992,13 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-setup-default-admin"></a>`SETUP_DEFAULT_ADMIN` | no | v0.15.0 | Feature-gating |
 | <a id="var-signup-bot-guard-enabled"></a>`SIGNUP_BOT_GUARD_ENABLED` | no | v0.8.0 | Defaulted |
 | <a id="var-smtp-ehlo-name"></a>`SMTP_EHLO_NAME` | no | v0.14.0 | Defaulted |
+| <a id="var-smtp-fallback-ehlo-name"></a>`SMTP_FALLBACK_EHLO_NAME` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-host"></a>`SMTP_FALLBACK_HOST` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-password"></a>`SMTP_FALLBACK_PASSWORD` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-password-file"></a>`SMTP_FALLBACK_PASSWORD_FILE` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-port"></a>`SMTP_FALLBACK_PORT` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-tls"></a>`SMTP_FALLBACK_TLS` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-username"></a>`SMTP_FALLBACK_USERNAME` | no | v0.22.0 | Defaulted |
 | <a id="var-smtp-from"></a>`SMTP_FROM` | no | v0.2.1 | Defaulted |
 | <a id="var-smtp-host"></a>`SMTP_HOST` | no | v0.2.1 | Feature-gating |
 | <a id="var-smtp-password"></a>`SMTP_PASSWORD` | no | v0.2.1 | Defaulted |
