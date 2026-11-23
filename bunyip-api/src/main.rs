@@ -349,6 +349,10 @@ async fn main() -> anyhow::Result<()> {
     // authoritative and self-healing, correcting the stale row in place. Each
     // client is env-gated: unset vars -> skip + log (mirrors SETUP_DEFAULT_ADMIN).
     // SPEC-9.5.8: two fixed SPA clients, env-reconciled
+    // Seeds mirror the migrations the startup reconciler races against:
+    // 20260603000010 for the two SPA rows, 20260926000040 for mokosh-apps'
+    // backchannel URI. When the operator has set no env override AND the row
+    // still matches these seeds exactly, the a8n seed is cleared.
     upsert_spa_oidc_client(
         &pool,
         "b0000000-0000-4000-8000-000000000002",
@@ -357,6 +361,10 @@ async fn main() -> anyhow::Result<()> {
         "MOKOSH_APPS_POST_LOGOUT_REDIRECT_URIS",
         "MOKOSH_APPS_AUDIENCE",
         "MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI",
+        &["https://msp.a8n.systems/auth/callback"],
+        &["https://msp.a8n.systems"],
+        "https://api.msp.a8n.systems",
+        Some("https://api.msp.a8n.systems/api/v1/bunyip/oauth2/backchannel-logout"),
     )
     .await?;
     upsert_spa_oidc_client(
@@ -367,6 +375,10 @@ async fn main() -> anyhow::Result<()> {
         "DRILLMARK_POST_LOGOUT_REDIRECT_URIS",
         "DRILLMARK_AUDIENCE",
         "DRILLMARK_BACKCHANNEL_LOGOUT_URI",
+        &["https://drillmark.a8n.systems/auth/callback"],
+        &["https://drillmark.a8n.systems"],
+        "https://api.drillmark.a8n.systems",
+        None,
     )
     .await?;
 
@@ -2019,12 +2031,51 @@ async fn upsert_spa_oidc_client(
     post_logout_var: &str,
     audience_var: &str,
     backchannel_logout_var: &str,
+    seed_redirect_uris: &[&str],
+    seed_post_logout: &[&str],
+    seed_audience: &str,
+    seed_backchannel_logout: Option<&str>,
 ) -> anyhow::Result<()> {
     let (Some(redirect_uris), Some(audience)) =
         (secret_env(redirect_uris_var), secret_env(audience_var))
     else {
-        // Silent here: the env inventory warns once at boot for each of this
-        // client's variables, so the message lives in one place (BUNYIP-537).
+        // BUNYIP-862: no env override for this client in this environment. The
+        // migration seed is a8n-specific, so for a self-hoster it points at
+        // hosts they do not control. Delete the row ONLY if it still matches
+        // the known migration seed on every URL-ish column; an admin edit on
+        // any of them means it is now this operator's data, not a stale a8n
+        // seed, and must be left alone. The migration is run-once (sqlx
+        // tracks it in `_sqlx_migrations`), so the delete sticks until the
+        // operator sets the env vars, at which point the ON CONFLICT path
+        // below re-inserts the row.
+        let seed_redirect: Vec<String> = seed_redirect_uris
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let seed_plogout: Vec<String> = seed_post_logout.iter().map(|s| (*s).to_string()).collect();
+        let cleared = sqlx::query(
+            r#"
+            DELETE FROM oauth_clients
+            WHERE client_id = $1::uuid
+              AND redirect_uris = $2
+              AND post_logout_redirect_uris = $3
+              AND audience = $4
+              AND backchannel_logout_uri IS NOT DISTINCT FROM $5
+            "#,
+        )
+        .bind(client_id)
+        .bind(&seed_redirect)
+        .bind(&seed_plogout)
+        .bind(seed_audience)
+        .bind(seed_backchannel_logout)
+        .execute(pool)
+        .await?;
+        if cleared.rows_affected() > 0 {
+            info!(
+                client = name,
+                "SPA OIDC client row cleared: no env override and row still matches the a8n seed"
+            );
+        }
         return Ok(());
     };
     // Optional: a client with no post-logout URIs upserts an empty array.
@@ -2122,8 +2173,41 @@ async fn upsert_lets_chat_oidc_client(pool: &sqlx::PgPool) -> anyhow::Result<()>
         secret_env("LETS_CHAT_REDIRECT_URIS"),
         secret_env("LETS_CHAT_AUDIENCE"),
     ) else {
-        // Silent here: the env inventory warns once at boot for each of the two
-        // variables, so the message lives in exactly one place (BUNYIP-537).
+        // BUNYIP-862: no env override in this environment. The migration seed
+        // points at `chat.a8n.systems` and uses a known-shared client_secret
+        // hash; a self-hoster who never set the env vars is left with a stale
+        // client row that would both accept the known secret and redirect
+        // callbacks to a host they do not control. Delete the row ONLY if it
+        // still matches the migration seed on every URL-ish column AND the
+        // client_secret_hash is still the shared seed (admin-set via
+        // LETS_CHAT_CLIENT_SECRET_HASH overrides this check). The migration
+        // is run-once (sqlx tracks it in `_sqlx_migrations`), so the delete
+        // sticks until the operator sets the env vars.
+        let seed_redirect: Vec<String> =
+            vec!["https://chat.a8n.systems/auth/bunyip/callback".to_string()];
+        let seed_plogout: Vec<String> = vec!["https://chat.a8n.systems".to_string()];
+        let seed_audience = "https://chat.a8n.systems";
+        let seed_secret_hash = "$argon2id$v=19$m=65536,t=3,p=4$gLBGXD23tryNkzHo142zRA$zO6k3LxNcC8xqyO+J844UySGuyfW8xPjNXLnTixoiI4";
+        let cleared = sqlx::query(
+            r#"
+            DELETE FROM oauth_clients
+            WHERE client_id = $1::uuid
+              AND redirect_uris = $2
+              AND post_logout_redirect_uris = $3
+              AND audience = $4
+              AND client_secret_hash = $5
+            "#,
+        )
+        .bind(client_id)
+        .bind(&seed_redirect)
+        .bind(&seed_plogout)
+        .bind(seed_audience)
+        .bind(seed_secret_hash)
+        .execute(pool)
+        .await?;
+        if cleared.rows_affected() > 0 {
+            info!("lets-chat OIDC client row cleared: no env override and row still matches the a8n seed");
+        }
         return Ok(());
     };
     let post_logout = secret_env("LETS_CHAT_POST_LOGOUT_REDIRECT_URIS").unwrap_or_default();
