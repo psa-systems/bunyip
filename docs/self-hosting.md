@@ -6,7 +6,7 @@
 
 A Traefik edge terminates TLS and routes two public names at the host:
 
-- `${BUNYIP_HOST}` (the apex, e.g. `bunyip.example.com`) - the `bunyip-web` front-end.
+- `${BUNYIP_HOST}` (the apex, e.g. `bunyip.example.com`) - the `bunyip-web` front-end. `BUNYIP_HOST` is shorthand for this apex/subdomain split, not a literal env var; the operator achieves it by setting `OIDC_ISSUER` and `BUNYIP_API_PUBLIC_ORIGIN` to matching hostnames, as below.
 - `api.${BUNYIP_HOST}` (e.g. `api.bunyip.example.com`) - `bunyip-api`, which is also the OIDC issuer, so relying parties reach `/.well-known/openid-configuration` and `/oauth2/*` there.
 
 `bunyip-web` reaches `bunyip-api` server-side over the internal Compose network (`BUNYIP_API_URL`, default `http://api:4401`); the browser only ever talks to the two public names above. `BUNYIP_API_PUBLIC_ORIGIN` (e.g. `https://api.${BUNYIP_HOST}`) is the browser-facing origin the front-end and Stripe use for redirects and webhooks.

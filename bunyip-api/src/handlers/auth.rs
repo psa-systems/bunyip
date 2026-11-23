@@ -38,11 +38,14 @@ pub type OidcProviderData =
 /// silent-SSO refresh-token path's family seed, the back-channel logout
 /// fan-out) inherits the truthful value.
 ///
-/// BUNYIP-266: `op_session_cookie_domain` is sourced from
-/// `Config::op_session_cookie_domain()`, NOT `Config::cookie_domain`. Without
+/// BUNYIP-266, BUNYIP-793: `op_session_cookie_domain` is sourced from
+/// `Config::shared_cookie_domain()`, NOT `Config::cookie_domain`. Without
 /// the explicit `BUNYIP_COOKIE_SHARED_DOMAIN=true` opt-in this resolves to
 /// `None`, so the session cookie is host-scoped and never sent to sibling
-/// subdomains regardless of how `COOKIE_DOMAIN` is set.
+/// subdomains regardless of how `COOKIE_DOMAIN` is set. BUNYIP-793 moved
+/// every other cookie-set site in this handler module behind the same
+/// method call, so the opt-in now decides for every cross-subdomain
+/// cookie, not just the OP session.
 /// BUNYIP-636 PR 3b: the return type carries the newly-minted session's
 /// row id alongside the cookie, so the caller can bind the hub refresh
 /// token to the session (via `AuthService::link_refresh_token_to_op_session`)
@@ -413,7 +416,7 @@ pub async fn register(
     }
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     // BUNYIP-381 / BUNYIP-636: a fresh registration is not "remember me",
     // so the OP session takes the shorter idle window in step with the
@@ -423,7 +426,7 @@ pub async fn register(
         &req,
         user.id,
         secure,
-        config.op_session_cookie_domain(),
+        config.shared_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
         false,
@@ -563,7 +566,7 @@ pub async fn login(
         )),
         LoginResult::Success(tokens, user) => {
             let secure = config.cookies_secure(&req);
-            let cookie_domain = config.cookie_domain.as_deref();
+            let cookie_domain = config.shared_cookie_domain();
 
             // BUNYIP-636: the OP session's idle window matches the refresh
             // token cookie's max-age (`body.remember`), so both clocks are
@@ -573,7 +576,7 @@ pub async fn login(
                 &req,
                 user.id,
                 secure,
-                config.op_session_cookie_domain(),
+                config.shared_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
                 body.remember,
@@ -739,7 +742,7 @@ pub async fn verify_magic_link(
             }
 
             let secure = config.cookies_secure(&req);
-            let cookie_domain = config.cookie_domain.as_deref();
+            let cookie_domain = config.shared_cookie_domain();
 
             // BUNYIP-636: the magic-link cookie has always been set with
             // the remember-me (30-day) lifetime; carry the same signal into
@@ -749,7 +752,7 @@ pub async fn verify_magic_link(
                 &req,
                 user.id,
                 secure,
-                config.op_session_cookie_domain(),
+                config.shared_cookie_domain(),
                 ACR_OTP,
                 &["otp".to_string()],
                 true,
@@ -829,7 +832,7 @@ pub async fn verify_login_approval(
         .await?;
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     // The approval proves control of the account's email on top of the primary
     // factor. v1 gates password + magic-link; report the password ACR as the
@@ -845,7 +848,7 @@ pub async fn verify_login_approval(
         &req,
         user.id,
         secure,
-        config.op_session_cookie_domain(),
+        config.shared_cookie_domain(),
         ACR_PASSWORD,
         &["pwd".to_string()],
         true,
@@ -926,7 +929,7 @@ pub async fn accept_admin_invite(
         )),
         AcceptInviteResult::Success(tokens, user) => {
             let secure = config.cookies_secure(&req);
-            let cookie_domain = config.cookie_domain.as_deref();
+            let cookie_domain = config.shared_cookie_domain();
 
             // BUNYIP-636: the invite-accept refresh_token cookie has always
             // been remember-me, so the OP session matches.
@@ -935,7 +938,7 @@ pub async fn accept_admin_invite(
                 &req,
                 user.id,
                 secure,
-                config.op_session_cookie_domain(),
+                config.shared_cookie_domain(),
                 ACR_PASSWORD,
                 &["pwd".to_string()],
                 true,
@@ -1029,7 +1032,7 @@ pub async fn refresh_token(
     };
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     let mut resp = HttpResponse::Ok();
     for cookie in AuthCookies::clear_stale(secure) {
@@ -1111,7 +1114,7 @@ pub async fn logout(
     }
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     // Clear cookies unconditionally. This is the whole point of the endpoint
     // from the browser's perspective: emit clearing `Set-Cookie` headers for
@@ -1214,7 +1217,7 @@ pub async fn logout_redirect(
     }
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
     let clear_cookies = AuthCookies::clear(secure, cookie_domain);
 
     let mut builder = HttpResponse::Found();
@@ -1244,7 +1247,7 @@ pub async fn logout_all(
     revoke_op_sessions(&oidc_provider, user.0.sub).await;
 
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     let mut response = HttpResponse::Ok().json(crate::responses::ApiResponse::<()> {
         success: true,
@@ -1469,7 +1472,7 @@ pub async fn auth_redirect(
             Ok(tokens) => {
                 tracing::debug!(location = %target_url, "auth_redirect: refresh succeeded, redirecting to target");
                 let secure = config.cookies_secure(&req);
-                let cookie_domain = config.cookie_domain.as_deref();
+                let cookie_domain = config.shared_cookie_domain();
 
                 let mut resp = HttpResponse::Found();
                 for cookie in AuthCookies::clear_stale(secure) {

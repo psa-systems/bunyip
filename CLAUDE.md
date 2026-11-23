@@ -116,6 +116,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 
 ### Build, CI and repo tooling
 
+- Public docs: `docs/public/` is the user-facing docs tree published to docs.a8n.systems/docs/bunyip on every main push via sarracenia; `docs/` outside `public/` (invariants/, dev-docs/, specification.md, ROADMAP.md, runbooks) is internal engineering material and is NOT published. The sarracenia walk root is `docs/public/` (the workflow cd's there before running sarracenia).
 - [sqlx](docs/invariants/build-ci.md#sqlx): Only bunyip-oidc uses `sqlx::query!`; build with `SQLX_OFFLINE=true` and commit a regenerated `.sqlx/`.
 - [Migrations](docs/invariants/build-ci.md#migrations-bunyip-293) (BUNYIP-293): Committed migrations are immutable: fix forward with a new file, never edit one on `main`.
 - [Images](docs/invariants/build-ci.md#images-bunyip-389-bunyip-558-bunyip-426-bunyip-534) (BUNYIP-389/558/426/534/519): Pinned per-binary cargo-chef images, locked cache mounts.
@@ -135,6 +136,7 @@ A new convention adds one index line here and its full text in [`docs/invariants
 - [Configuration providers](docs/invariants/config.md#configuration-providers-bunyip-643-bunyip-537-bunyip-644) (BUNYIP-643/537/644/645): Resolve `database` > `file` > `environment` via `ConfigStack`.
 - [Secret sourcing (two tiers)](docs/invariants/config.md#secret-sourcing-two-tiers-bunyip-38-bunyip-542-bunyip-642) (BUNYIP-38/542/642): Group-1 secrets are files; Group-2 use `SECRETS_STORAGE`.
 - [Host secrets and config](docs/invariants/config.md#host-secrets-bunyip-983) (BUNYIP-983, BUNYIP-1011): `/v1/host/secrets/{KEY}` and `/v1/host/config/{KEY}` serve a registry key to an allow-listed machine client, one list each.
+- [Hostname literals](docs/invariants/config.md#hostname-literals-bunyip-861) (BUNYIP-861): New migrations may not seed per-environment hostnames; configuration-driven seeding is the pattern.
 - [Settings archive](docs/invariants/config.md#settings-archive-bunyip-714) (BUNYIP-714): Settings move as one passphrase-encrypted file; import replaces, never merges.
 
 ### Branding and email

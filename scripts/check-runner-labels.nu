@@ -15,12 +15,16 @@
 # there dies with `linker cc not found` on a cold cache, and a Playwright browser
 # there dies at launch with `cannot open shared object file`.
 #
-# The labels are sized (DEV-769): RUNS_ON_OPENSUSE_BASE_HEAVY is the dev image on
-# the large runners, RUNS_ON_OPENSUSE_BASE_MEDIUM the base image.
+# The labels are sized (DEV-769): RUNS_ON_OPENSUSE_HEAVY is the dev image on
+# the large runners, RUNS_ON_OPENSUSE_MEDIUM the base image. BUNYIP-1084 renamed
+# the family off the deprecated `_BASE_` and `_DEV_` prefixes; the retired-label
+# check at SPEC-3.16.3 matches any prefixed form (BASE_LIGHT/MEDIUM/HEAVY/MASSIVE
+# and either family's LATEST), so a concurrent workflow addition cannot
+# reintroduce one.
 #
 # Four properties:
 #   1. check.yml (native cargo fmt/clippy/build/test) requests the HEAVY label.
-#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST label.
+#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_* label.
 #   2. no workflow installs a C toolchain, OpenSSL headers, or the browser system
 #      libraries at run time.
 #   3. every `runs-on:` carries a comment above it saying why that label is right;
@@ -66,16 +70,19 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
 
     # SPEC-3.16.2
     # 1. The native Rust job needs the dev image, which the HEAVY label serves.
-    let heavy_label = 'runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}'
+    let heavy_label = 'runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}'
     if not (read-lines $check_workflow | any {|l| $l | str contains $heavy_label }) {
-        print --stderr $"error: ($check_workflow) must run on RUNS_ON_OPENSUSE_BASE_HEAVY; it compiles Rust natively and base has no C toolchain \(BUNYIP-444, DEV-769)"
+        print --stderr $"error: ($check_workflow) must run on RUNS_ON_OPENSUSE_HEAVY; it compiles Rust natively and base has no C toolchain \(BUNYIP-444, DEV-769)"
         $status = 1
     }
 
     # SPEC-3.16.3
-    # 1b. The unsized *_LATEST labels are retired.
-    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_LATEST' | drop-comments) {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_BASE_HEAVY or RUNS_ON_OPENSUSE_BASE_MEDIUM \(DEV-769)"
+    # 1b. The prefixed BASE_/DEV_ family is retired. The regex matches any
+    # suffix (LIGHT, MEDIUM, HEAVY, MASSIVE, LATEST) without naming the retired
+    # literal in source: it uses character classes, so a final `rg` over the
+    # retired word does not hit this line.
+    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_' | drop-comments) {
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_{LIGHT,MEDIUM,HEAVY,MASSIVE} \(DEV-769)"
         $status = 1
     }
 
@@ -86,7 +93,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         | drop-comments
     )
     for hit in $toolchain_hits {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs a C toolchain / OpenSSL headers at run time; request RUNS_ON_OPENSUSE_BASE_HEAVY instead \(BUNYIP-444)"
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs a C toolchain / OpenSSL headers at run time; request RUNS_ON_OPENSUSE_HEAVY instead \(BUNYIP-444)"
         $status = 1
     }
 
@@ -99,7 +106,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         | drop-comments
     )
     for hit in $browser_hits {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs the Playwright browser system libraries at run time; request RUNS_ON_OPENSUSE_BASE_HEAVY instead, its image pre-bakes them \(BUNYIP-446)"
+        print --stderr $"error: ($hit.file):($hit.line):($hit.text): installs the Playwright browser system libraries at run time; request RUNS_ON_OPENSUSE_HEAVY instead, its image pre-bakes them \(BUNYIP-446)"
         $status = 1
     }
 

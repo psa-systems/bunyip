@@ -22,7 +22,7 @@ jobs:
     # is unavailable, which needs the C toolchain the dev image carries
     # (BUNYIP-444).
     # SPEC-3.1.2
-    runs-on: ${{ vars.RUNS_ON_OPENSUSE_BASE_HEAVY }}
+    runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}
 
     # Every step in this repo runs under Nushell (BUNYIP-489).
     defaults:
