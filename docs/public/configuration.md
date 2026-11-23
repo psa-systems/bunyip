@@ -15,9 +15,10 @@ This page covers the environment-variable half. The admin pages describe the in-
 - `BUNYIP_BIND_ADDR` (default `0.0.0.0:4400`) is the web listen address inside the container.
 - `HOST_IP` (default `0.0.0.0`) is the api bind address.
 - `BUNYIP_API_URL` (default `http://api:4401`) is how `bunyip-web` reaches `bunyip-api` server-side.
-- `BUNYIP_API_PUBLIC_ORIGIN` is the browser-facing origin of the api, used for OIDC redirect URIs and Stripe webhooks. Required for production.
-- `BUNYIP_HOST` is the apex host the web runs on. Used to build email links and the `Issuer` claim.
-- `APP_NAME` (default `localhost`) is the product name shown on the sign-in page before the branding row is seeded. Once the `branding` row is populated it wins.
+- `BUNYIP_API_PUBLIC_ORIGIN` is the browser-facing origin of the api, used for OIDC redirect URIs and Stripe webhooks. Required for production. Pair it with `OIDC_ISSUER` below to get the apex/subdomain split some deployments use (e.g. `bunyip.example.com` for the browser, `api.bunyip.example.com` for the issuer).
+- `OIDC_ISSUER` is the `Issuer` claim bunyip-api mints into OIDC tokens. There is no fallback to `BUNYIP_API_URL`: leaving it unset disables the OIDC endpoints entirely.
+- `APP_URL` is the public base URL used to build links in outgoing email.
+- `APP_NAME` (default `PSA Systems`) is the product name shown on the sign-in page before the branding row is seeded. Once the `branding` row is populated it wins.
 - `TRUSTED_PROXY_CIDR` and `WEB_TRUSTED_PROXY_CIDR` restrict which upstream proxies the api and web honour forwarded headers from. A request from outside these CIDRs is treated as the socket IP.
 
 ## Database
