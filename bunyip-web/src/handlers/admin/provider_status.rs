@@ -14,6 +14,8 @@ use axum::http::HeaderMap;
 use axum::response::Response;
 use maud::{html, Markup};
 
+use bunyip_domain::services::provider_status::{EnabledProviderReport, KindEnumerationStatus};
+
 use crate::api::admin as admin_api;
 use crate::api::types::{
     ProviderAppState, ProviderAppStatusRow, ProviderDiscrepancy, ProviderKindEntry,
@@ -60,6 +62,12 @@ fn state_detail(status: &ProviderAppState, brand_name: &str) -> Option<String> {
 // SPEC-12.19.5
 /// One provider kind's row within a healthy application: which providers are
 /// enabled, in priority order, and which is serving.
+///
+/// BUNYIP-664: each enabled provider renders as a chip whose `title` tooltip
+/// carries the aggregator's per-provider detail (priority + reachability +
+/// unreachable reason). Keeps the visible chip compact; the detail is one
+/// hover away. `aria-label` carries the same text so screen readers do not
+/// miss the detail a sighted user gets through `title`.
 fn kind_row(kind: &ProviderKindEntry) -> Markup {
     html! {
         div class="py-2" {
@@ -72,16 +80,71 @@ fn kind_row(kind: &ProviderKindEntry) -> Markup {
                 }
             }
             @if !kind.enabled.is_empty() {
-                p class="text-xs text-muted-foreground mt-1" {
-                    "enabled: "
-                    @for (i, provider) in kind.enabled.iter().enumerate() {
-                        @if i > 0 { ", " }
-                        (provider.name)
-                        @if !provider.reachable { " (unreachable)" }
+                p class="text-xs text-muted-foreground mt-1 flex flex-wrap gap-1 items-center" {
+                    span { "enabled:" }
+                    @for provider in &kind.enabled {
+                        (provider_chip(provider))
                     }
                 }
             }
+            (enumeration_line(kind.enumeration.as_ref()))
         }
+    }
+}
+
+/// BUNYIP-664: one enabled provider rendered as a chip with its tooltip
+/// detail. The tooltip string is pure data - name, priority, reachability,
+/// reason - assembled here so a test can assert its exact shape.
+fn provider_chip(provider: &EnabledProviderReport) -> Markup {
+    let detail = provider_tooltip_detail(provider);
+    html! {
+        span
+            class="inline-flex items-center rounded border border-border/60 bg-muted/50 px-1.5 py-0.5"
+            title=(detail)
+            aria-label=(detail)
+        {
+            (provider.name)
+            @if !provider.reachable { " *" }
+        }
+    }
+}
+
+/// BUNYIP-664: pure classifier the tooltip + its test both read from. The
+/// aggregator never carries a credential-shaped value, so the string here
+/// cannot grow one by mistake: this is names, small integers and a free-text
+/// reason the aggregator itself wrote.
+pub(super) fn provider_tooltip_detail(provider: &EnabledProviderReport) -> String {
+    let reachable = if provider.reachable {
+        "reachable"
+    } else {
+        "unreachable"
+    };
+    let base = format!("priority {}; {}", provider.priority, reachable);
+    match (&provider.reachable, &provider.unreachable_reason) {
+        (false, Some(reason)) if !reason.is_empty() => format!("{base}: {reason}"),
+        _ => base,
+    }
+}
+
+/// BUNYIP-664: `enumeration: Supported (N keys)` / `Unsupported` under the
+/// enabled chips; absent when the aggregator did not report a status. The
+/// Supported vector itself holds key names only (the contract redacts
+/// values), so a count is safe to surface without exposing the names.
+fn enumeration_line(status: Option<&KindEnumerationStatus>) -> Markup {
+    match status {
+        None => html! {},
+        Some(KindEnumerationStatus::Supported(keys)) => {
+            let n = keys.len();
+            let suffix = if n == 1 { "key" } else { "keys" };
+            html! {
+                p class="text-xs text-muted-foreground mt-1" {
+                    "enumeration: Supported (" (n) " " (suffix) ")"
+                }
+            }
+        }
+        Some(KindEnumerationStatus::Unsupported) => html! {
+            p class="text-xs text-muted-foreground mt-1" { "enumeration: Unsupported" }
+        },
     }
 }
 
@@ -319,6 +382,116 @@ mod tests {
         assert!(html.contains("mokosh"));
         assert!(html.contains("drillmark"));
         assert!(html.contains("Version mismatch"));
+    }
+
+    /// BUNYIP-664 AC #2: the aggregator's per-provider detail (priority +
+    /// reachability + reason) reaches the page as a `title` tooltip on each
+    /// chip; a screen-reader user gets it through `aria-label` too.
+    #[test]
+    fn each_enabled_provider_chip_carries_its_tooltip_detail() {
+        let kind = ProviderKindEntry {
+            kind: "secrets_application".to_string(),
+            serving: Some("database".to_string()),
+            enabled: vec![
+                EnabledProviderReport {
+                    name: "database".to_string(),
+                    priority: 1,
+                    reachable: true,
+                    unreachable_reason: None,
+                },
+                EnabledProviderReport {
+                    name: "environment".to_string(),
+                    priority: 2,
+                    reachable: false,
+                    unreachable_reason: Some("could not read $SMTP_PASSWORD".to_string()),
+                },
+            ],
+            keys: vec![],
+            ..Default::default()
+        };
+        let html = kind_row(&kind).into_string();
+        assert!(
+            html.contains(r#"title="priority 1; reachable""#),
+            "reachable provider carries its priority + reachable title: {html}"
+        );
+        assert!(
+            html.contains(r#"aria-label="priority 1; reachable""#),
+            "reachable provider carries its aria-label too: {html}"
+        );
+        assert!(
+            html.contains(r#"title="priority 2; unreachable: could not read $SMTP_PASSWORD""#),
+            "unreachable provider carries its reason in the title: {html}"
+        );
+        // The chip is still visible as its name; the `*` marker calls out
+        // unreachable without hiding what's broken.
+        assert!(html.contains("environment"));
+        assert!(html.contains('*'));
+    }
+
+    /// BUNYIP-664 AC #2: the enumeration status line surfaces alongside the
+    /// chips when the aggregator reports one, counting keys without naming
+    /// them (the contract redacts values; name-only would still have been a
+    /// data leak choice).
+    #[test]
+    fn enumeration_status_renders_a_count_without_naming_keys() {
+        let supported = ProviderKindEntry {
+            kind: "configuration".to_string(),
+            serving: Some("environment".to_string()),
+            enabled: vec![],
+            keys: vec![],
+            enumeration: Some(KindEnumerationStatus::Supported(vec![
+                "APP_URL".into(),
+                "COOKIE_DOMAIN".into(),
+                "DATABASE_URL".into(),
+            ])),
+        };
+        let html = kind_row(&supported).into_string();
+        assert!(
+            html.contains("enumeration: Supported (3 keys)"),
+            "Supported renders a count: {html}"
+        );
+        for leaked in ["APP_URL", "COOKIE_DOMAIN", "DATABASE_URL"] {
+            assert!(
+                !html.contains(leaked),
+                "enumeration keys must not leak into the page: {leaked} in {html}"
+            );
+        }
+
+        let unsupported = ProviderKindEntry {
+            enumeration: Some(KindEnumerationStatus::Unsupported),
+            ..Default::default()
+        };
+        let html = kind_row(&unsupported).into_string();
+        assert!(html.contains("enumeration: Unsupported"));
+
+        let absent = ProviderKindEntry::default();
+        let html = kind_row(&absent).into_string();
+        assert!(!html.contains("enumeration:"));
+    }
+
+    /// BUNYIP-664 AC #5 (redaction): the page's rendered markup must not carry
+    /// any credential-shaped substring the aggregator's contract already
+    /// forbids on the wire. Belt-and-braces: the aggregator itself guards the
+    /// envelope (`no_value_shaped_field_in_the_contract`), this test guards
+    /// against a render-side mistake.
+    #[test]
+    fn rendered_page_carries_no_credential_shaped_substring() {
+        let rows = vec![ok_row("bunyip")];
+        let html = provider_status_content(&rows, &[], None, "").into_string();
+        for forbidden in [
+            "client_secret",
+            "password=",
+            "api_token",
+            "secret_key",
+            "oauth_token",
+            "salt=",
+            "nonce=",
+        ] {
+            assert!(
+                !html.contains(forbidden),
+                "redaction: rendered page carries a credential-shaped substring {forbidden:?}: {html}"
+            );
+        }
     }
 
     #[test]
