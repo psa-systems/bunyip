@@ -83,7 +83,7 @@ default:
 # SPEC-14.14.1: umbrella gate, order matters
 # Umbrella check: build + clippy + fmt + docker builder stage.
 [group: 'checks']
-check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
+check: check-justfile check-migrations check-migration-immutability check-workflows check-workflow-shell check-serde-compat check-runners check-security check-stripe-env check-key-env check-env-parity check-compose-env-parity check-argon2-offload check-no-bash check-scrollbars check-css-current check-ui-copy check-price-literals check-brand-literals check-domain-literals check-theme-colors check-em-dash check-doc-surface check-config-docs check-claude-md check-cache-mounts check-cache-keys check-publish-triggers check-dependency-audit check-build check-clippy check-fmt check-docker
 
 # SPEC-14.14.6: alias of the shared recipe
 # Gate migration version numbers: unique + uniform width (BUNYIP-79). Delegates
@@ -221,6 +221,16 @@ check-price-literals:
 check-brand-literals:
     ./scripts/check-brand-literals.nu --self-test
     ./scripts/check-brand-literals.nu
+
+# SPEC-14.14.2: self-test runs before the real gate
+# Gate hard-coded hostnames in new migrations: configuration-driven seeding
+# is the intended pattern (BUNYIP-861, BUNYIP-862). The six migrations
+# already carrying hostnames on main are allowlisted by filename because
+# BUNYIP-293 forbids editing their bytes.
+[group: 'checks']
+check-domain-literals:
+    ./scripts/check-domain-literals.nu --self-test
+    ./scripts/check-domain-literals.nu
 
 # SPEC-14.14.2: self-test runs before the real gate
 # Gate the em-dash ban: no U+2014 in any tracked file (BUNYIP-694).

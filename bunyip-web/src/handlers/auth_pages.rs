@@ -1775,6 +1775,7 @@ mod logout_clear_tests {
             app_domain: app_domain.into(),
             community_url: String::new(),
             blog_url: String::new(),
+            docs_url: String::new(),
             trusted_proxies: Vec::new(),
             csp: crate::config::CspConfig::default(),
         }

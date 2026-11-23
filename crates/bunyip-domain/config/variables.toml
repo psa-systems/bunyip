@@ -115,6 +115,11 @@ since = "v0.17.0"
 required = false
 
 [[variable]]
+name = "BUNYIP_DOCS_URL"
+since = "v0.22.0"
+required = false
+
+[[variable]]
 name = "BUNYIP_CONFIG_DIR"
 since = "v0.17.0"
 required = false
@@ -252,6 +257,11 @@ required = false
 [[variable]]
 name = "DRILLMARK_REDIRECT_URIS"
 since = "v0.15.0"
+required = false
+
+[[variable]]
+name = "DRILLMARK_RELEASE_NOTES_URL"
+since = "v0.22.0"
 required = false
 
 [[variable]]
@@ -417,6 +427,11 @@ required = false
 [[variable]]
 name = "MOKOSH_PROVIDER_STATUS_URL"
 since = "v0.17.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_RELEASE_NOTES_URL"
+since = "v0.22.0"
 required = false
 
 [[variable]]

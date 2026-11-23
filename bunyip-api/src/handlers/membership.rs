@@ -265,7 +265,7 @@ pub async fn cancel_membership(
 
     // Determine if we should use secure cookies
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     Ok(HttpResponse::Ok()
         .cookie(AuthCookies::access_token(
@@ -341,7 +341,7 @@ pub async fn cancel_membership_immediate(
 
     let access_token = jwt_service.create_access_token(&updated_user)?;
     let secure = config.cookies_secure(&req);
-    let cookie_domain = config.cookie_domain.as_deref();
+    let cookie_domain = config.shared_cookie_domain();
 
     Ok(HttpResponse::Ok()
         .cookie(AuthCookies::access_token(

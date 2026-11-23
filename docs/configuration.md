@@ -42,8 +42,11 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 #### Added
 
 - [`BUNYIP_BLOG_URL`](#var-bunyip-blog-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`BUNYIP_DOCS_URL`](#var-bunyip-docs-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_BACKCHANNEL_LOGOUT_URI`](#var-drillmark-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
+- [`DRILLMARK_RELEASE_NOTES_URL`](#var-drillmark-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
+- [`MOKOSH_RELEASE_NOTES_URL`](#var-mokosh-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
 
 <a id="release-v0-21-0"></a>
 
@@ -518,6 +521,10 @@ Every variable below has a working default; set it only to tune the deployment.
   error, never a wrong-password result; default 5. These names moved with the DUNITE-20 leaf bump (BUNYIP-875); a
   deploy manifest still pinning the pre-BUNYIP-875 names has no effect. See
   `crates/bunyip-domain/src/services/argon2_offload.rs`.
+- **Hosted applications**: `MOKOSH_RELEASE_NOTES_URL`, `DRILLMARK_RELEASE_NOTES_URL` (BUNYIP-862). Overwrite
+  `applications.release_notes_url` on the matching `applications.slug` row at boot. Unset leaves the migration-seeded
+  value in place (see migration `20260713000020_add_application_release_notes_url.sql`); an admin can also clear or
+  change the value via the admin applications UI without a redeploy.
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage
@@ -835,8 +842,9 @@ deployment configuration, and are listed here only so the boundary is explicit.
 
 bunyip-web is a separate binary with its own configuration (`bunyip-web/src/config.rs`): `BUNYIP_BIND_ADDR`,
 `BUNYIP_API_URL`, `BUNYIP_API_PUBLIC_ORIGIN`, `BUNYIP_OIDC_ISSUER`, `BUNYIP_APP_DOMAIN`, `BUNYIP_COMMUNITY_URL`,
-`BUNYIP_BLOG_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one has a working
-default. It holds no secrets and reads none of the api variables above, so the api's inventory does not cover it.
+`BUNYIP_BLOG_URL`, `BUNYIP_DOCS_URL`, `TRUSTED_PROXY_CIDR`, `CSP_CONNECT_SRC`, `CSP_FORM_ACTION`, `RUST_LOG`. Every one
+has a working default. It holds no secrets and reads none of the api variables above, so the api's inventory does not
+cover it.
 
 It has no `APP_NAME` and no `BRAND_DESCRIPTION`: the product name, tagline, meta description and Open Graph image are
 the admin-managed `branding` record above (BUNYIP-561), fetched from bunyip-api rather than read from the environment.
@@ -880,6 +888,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-bunyip-config-dir"></a>`BUNYIP_CONFIG_DIR` | no | v0.17.0 | Defaulted |
 | <a id="var-bunyip-config-file"></a>`BUNYIP_CONFIG_FILE` | no | v0.15.0 | Defaulted |
 | <a id="var-bunyip-cookie-shared-domain"></a>`BUNYIP_COOKIE_SHARED_DOMAIN` | no | v0.5.0 | Defaulted |
+| <a id="var-bunyip-docs-url"></a>`BUNYIP_DOCS_URL` | no | v0.22.0 | Defaulted |
 | <a id="var-bunyip-e2e-bootstrap-allow"></a>`BUNYIP_E2E_BOOTSTRAP_ALLOW` | no | v0.5.0 | Defaulted |
 | <a id="var-bunyip-e2e-totp-secret"></a>`BUNYIP_E2E_TOTP_SECRET` | no | v0.15.0 | Defaulted |
 | <a id="var-bunyip-oidc-issuer"></a>`BUNYIP_OIDC_ISSUER` | no | v0.17.0 | Defaulted |
@@ -905,6 +914,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-drillmark-post-logout-redirect-uris"></a>`DRILLMARK_POST_LOGOUT_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-drillmark-provider-status-url"></a>`DRILLMARK_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-drillmark-redirect-uris"></a>`DRILLMARK_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
+| <a id="var-drillmark-release-notes-url"></a>`DRILLMARK_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
 | <a id="var-dunite-argon2-max-concurrent"></a>`DUNITE_ARGON2_MAX_CONCURRENT` | no | v0.19.0 | Defaulted |
 | <a id="var-dunite-argon2-permit-timeout-secs"></a>`DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` | no | v0.19.0 | Defaulted |
 | <a id="var-email-enabled"></a>`EMAIL_ENABLED` | no | v0.2.1 | Defaulted |
@@ -938,6 +948,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-mokosh-backup-api-url"></a>`MOKOSH_BACKUP_API_URL` | no | v0.15.0 | Feature-gating |
 | <a id="var-mokosh-google-client-secret"></a>`MOKOSH_GOOGLE_CLIENT_SECRET` | no | v0.21.0 | Defaulted |
 | <a id="var-mokosh-provider-status-url"></a>`MOKOSH_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
+| <a id="var-mokosh-release-notes-url"></a>`MOKOSH_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
 | <a id="var-mokosh-webhook-url"></a>`MOKOSH_WEBHOOK_URL` | no | v0.15.0 | Feature-gating |
 | <a id="var-oci-blob-cache-dir"></a>`OCI_BLOB_CACHE_DIR` | no | v0.2.1 | Defaulted |
 | <a id="var-oci-blob-cache-max-bytes"></a>`OCI_BLOB_CACHE_MAX_BYTES` | no | v0.2.1 | Defaulted |
