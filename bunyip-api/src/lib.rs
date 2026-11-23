@@ -15,6 +15,7 @@ pub use bunyip_domain::{
 // SPEC-9.1.11
 pub mod access_log;
 pub mod branding_assets;
+pub mod break_glass;
 pub mod compress;
 pub mod config_status;
 pub mod db;

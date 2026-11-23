@@ -1912,8 +1912,65 @@ async fn run_subcommand(
             }
             Ok(())
         }
+        // BUNYIP-1096 Option E: break-glass password reset. Mints a one-time
+        // password-reset token OUT OF BAND of SMTP, prints the URL to stdout,
+        // and audits the action. The SMTP-outage escape hatch when
+        // SMTP_FALLBACK_* is unavailable (or also down); shared with the user
+        // by phone / Signal / out-of-band channel.
+        "break-glass-password-reset" => run_break_glass_password_reset(args, pool, config).await,
         other => run_reencrypt_subcommand(other, pool, config).await,
     }
+}
+
+/// BUNYIP-1096 Option E: the break-glass password-reset subcommand body.
+///
+/// Takes `--email <user>` and `--i-understand`. The latter is the "yes, I
+/// mean it" opt-in: the subcommand prints a bearer-shaped URL to stdout,
+/// which bypasses SMTP entirely. The minting + auditing logic lives in
+/// `bunyip_api::break_glass` so an integration test can drive it against a
+/// real database; this function is the CLI veneer (argument parsing,
+/// stdout/stderr split, the --i-understand gate).
+async fn run_break_glass_password_reset(
+    args: &[String],
+    pool: &sqlx::PgPool,
+    config: &Config,
+) -> anyhow::Result<()> {
+    let email = flag_value(args, "--email").ok_or_else(|| {
+        anyhow::anyhow!(
+            "break-glass-password-reset needs --email <user>; the user whose password reset \
+             URL to print to stdout. Pair with --i-understand."
+        )
+    })?;
+    if !args.iter().any(|a| a == "--i-understand") {
+        anyhow::bail!(
+            "break-glass-password-reset refused: pass --i-understand to confirm you want a \
+             one-time password-reset URL printed to stdout. This URL is a bearer credential; \
+             do not log it, do not paste it into a shared channel, and share it only on an \
+             out-of-band path (phone / signed DM / in-person) with the account holder. \
+             Audited as `break_glass_password_reset` with actor `break-glass-cli`."
+        );
+    }
+
+    let jwt_secret = secret_env("JWT_SECRET").ok_or_else(|| {
+        anyhow::anyhow!(
+            "JWT_SECRET (or JWT_SECRET_FILE) must be set for break-glass-password-reset; \
+             the subcommand uses the same HMAC pepper the running server does to hash the \
+             minted token for storage."
+        )
+    })?;
+    let outcome =
+        bunyip_api::break_glass::mint_break_glass_reset(pool, config, &email, &jwt_secret).await?;
+
+    // The one piece of output the operator is here for. Keep it on its own
+    // line so a `--quiet` wrapper can pipe it directly; the surrounding lines
+    // go to stderr so they do not contaminate a captured stdout.
+    eprintln!(
+        "break-glass-password-reset: minted a one-time URL for {} (expires {}).",
+        outcome.target_email, outcome.expires_at
+    );
+    eprintln!("Share it OUT OF BAND with the account holder; it is a bearer credential.");
+    println!("{}", outcome.url);
+    Ok(())
 }
 
 // SPEC-9.11.14
@@ -1989,7 +2046,8 @@ async fn run_reencrypt_subcommand(
         other => anyhow::bail!(
             "unknown subcommand {other:?} (known: reencrypt-secrets, secrets-status, \
              secrets-migrate, secrets-purge, config-status, machine-client, \
-             reconcile-duplicate-prices, settings-export, settings-import, mirzam-backfill)"
+             reconcile-duplicate-prices, settings-export, settings-import, mirzam-backfill, \
+             break-glass-password-reset)"
         ),
     }
 }

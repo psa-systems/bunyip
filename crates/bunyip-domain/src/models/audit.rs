@@ -231,6 +231,14 @@ pub enum AuditAction {
     SystemConfigUpdated,
     /// A super admin flipped a feature toggle (BUNYIP-840). Metadata carries `key` and `enabled`.
     AdminFeatureToggleUpdated,
+    /// BUNYIP-1096 break-glass CLI: an operator ran `bunyip-api
+    /// break-glass-password-reset --email <user>` to mint a one-time password-reset
+    /// token outside the email path (the SMTP-outage escape hatch). `actor_id`
+    /// is NULL because the subcommand runs in a shell, not as an authenticated
+    /// user; `actor_email` carries the literal `break-glass-cli`, `actor_role`
+    /// carries `system`. Metadata carries the target email so an audit trail
+    /// records who the token was minted for.
+    BreakGlassPasswordReset,
 }
 
 impl AuditAction {
@@ -345,6 +353,7 @@ impl AuditAction {
             AuditAction::AdminMailerSuppressionDeleted => "admin_mailer_suppression_deleted",
             AuditAction::SystemConfigUpdated => "system_config_updated",
             AuditAction::AdminFeatureToggleUpdated => "admin_feature_toggle_updated",
+            AuditAction::BreakGlassPasswordReset => "break_glass_password_reset",
         }
     }
 
@@ -408,6 +417,7 @@ impl AuditAction {
                 | AuditAction::AdminMailerSuppressionDeleted
                 | AuditAction::SystemConfigUpdated
                 | AuditAction::AdminFeatureToggleUpdated
+                | AuditAction::BreakGlassPasswordReset
         )
     }
 }
@@ -512,6 +522,16 @@ impl CreateAuditLog {
 
     pub fn with_actor(mut self, id: Uuid, email: &str, role: &str) -> Self {
         self.actor_id = Some(id);
+        self.actor_email = Some(email.to_string());
+        self.actor_role = Some(role.to_string());
+        self
+    }
+
+    /// BUNYIP-1096: a system actor (CLI subcommand, scheduled job) that has
+    /// no `actor_id`. Keeps the audit row attributable (actor_email +
+    /// actor_role) without inventing a user id.
+    pub fn with_system_actor(mut self, email: &str, role: &str) -> Self {
+        self.actor_id = None;
         self.actor_email = Some(email.to_string());
         self.actor_role = Some(role.to_string());
         self
