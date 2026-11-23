@@ -6,7 +6,7 @@ For a deployment operator putting bunyip on a real host. `compose.yml` is the re
 
 A Traefik edge terminates TLS and routes two public names at the host:
 
-- `${BUNYIP_HOST}` (the apex, e.g. `bunyip.example.com`) is `bunyip-web`, the front-end.
+- `${BUNYIP_HOST}` (the apex, e.g. `bunyip.example.com`) is `bunyip-web`, the front-end. `BUNYIP_HOST` is shorthand for this split, not a literal env var; the operator achieves it by setting `OIDC_ISSUER` and `BUNYIP_API_PUBLIC_ORIGIN` to matching hostnames, as below.
 - `api.${BUNYIP_HOST}` is `bunyip-api`, which is also the OIDC issuer. Discovery lives at `api.${BUNYIP_HOST}/.well-known/openid-configuration` and the OAuth 2.1 endpoints at `/oauth2/*`.
 
 `bunyip-web` reaches `bunyip-api` server-side over the internal Compose network via `BUNYIP_API_URL` (default `http://api:4401`). The browser only ever hits the two public names above. `BUNYIP_API_PUBLIC_ORIGIN` (e.g. `https://api.${BUNYIP_HOST}`) is the browser-facing origin the front-end and Stripe redirects use.
