@@ -84,6 +84,7 @@ Both routes are 404 for an unknown key, 403 for a caller outside the allow-list.
 ## Mailer relay
 
 - `POST /v1/mailer/send` sends a transactional mail on behalf of a different fleet service. Authenticated by machine-client token only; the send is scoped to a configured template.
+- `POST /v1/mailer/webhooks/feedback` accepts inbound bounce/complaint callbacks from the mail provider, authenticated by an `X-Webhook-Signature` HMAC over the body rather than a machine-client token, exempt from the per-IP floor.
 
 A deployment that wants cross-service mail standardized goes through this endpoint rather than giving every service its own SMTP relationship. See [Integrations](integrations.md).
 
@@ -95,6 +96,7 @@ Every mutating admin action lands in the audit log. The admin page is the only w
 
 - `GET /v1/branding` returns the public branding payload (product name, palette, logo URL). Unauthenticated so the sign-in page can render it.
 - `PUT /v1/admin/branding` writes the single `branding` row. Admin only.
+- `GET /v1/branding/assets/{kind}` returns a brand image (mark, mascot, derived favicon set) by kind, unauthenticated.
 
 See [Branding](branding.md).
 
