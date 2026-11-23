@@ -113,7 +113,10 @@ fn last_check_pill(app: &AdminApplication) -> Markup {
 fn pill_class(variant: &str) -> &'static str {
     match variant {
         "success" => "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-        "warning" => "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        // BUNYIP-548 amber-text AA floor: amber-700 under the 10% wash is
+        // 4.34:1 on `--background`, below 4.5:1 AA; amber-800 clears every
+        // surface (BUNYIP-1091 CI failure).
+        "warning" => "bg-amber-500/10 text-amber-800 dark:text-amber-300",
         "destructive" => "bg-rose-500/10 text-rose-700 dark:text-rose-300",
         _ => "bg-muted text-muted-foreground",
     }
