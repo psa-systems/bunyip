@@ -32,7 +32,7 @@ Then visit:
 
 **As the default admin.** On first start, when no admin exists, `bunyip-api` creates one from `SETUP_DEFAULT_ADMIN` (`email:password`). The `.env.example` default is `admin@bunyip.local` / `ChangeMeBunyip2026`. Open <http://localhost:4400/login> and sign in with those.
 
-**As a new signup.** Email sending is off in dev (`EMAIL_ENABLED=false`), so the magic link is not delivered. Set `EMAIL_LOG_TOKENS=true` in your `.env` (it logs the full link at DEBUG, and is forced off in production), restart, then:
+**As a new signup.** Email sending is off in dev (`EMAIL_ENABLED=false`), so the magic link is not delivered. Set `EMAIL_LOG_TOKENS=true` AND `RUST_LOG=info,bunyip_api=debug,bunyip_core=info,bunyip_domain=debug` in your `.env` (the token-logging calls are at DEBUG in `bunyip_domain`, which `compose.dev.yml`'s default `RUST_LOG` does not enable, and token logging is forced off in production regardless), restart, then:
 
 1. Open <http://localhost:4400/signup>, enter an email, submit.
 2. Read the magic link from the api logs: `docker logs dev-bunyip-api-${USER}`, and open it.
