@@ -189,6 +189,7 @@ pub mod host_secrets;
 pub mod mailer;
 pub mod membership;
 pub mod mx_check;
+pub mod organization;
 pub mod pricing;
 pub mod support;
 pub mod system_config;
@@ -224,6 +225,11 @@ pub use feedback::{
 pub use membership::{
     billing_portal, cancel_membership, cancel_membership_immediate, create_checkout,
     get_membership, get_payment_history, reactivate_membership,
+};
+pub use organization::{
+    add_team_member, create_my_organization, create_team, delete_team, get_my_organization,
+    get_team, list_team_members, list_teams, remove_team_member, update_my_organization,
+    update_team, update_team_member_role,
 };
 pub use pricing::{
     admin_pricing_status, public_pricing, AdminPricingStatus, PricingCache, PricingReasonView,
