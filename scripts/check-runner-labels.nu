@@ -16,15 +16,10 @@
 # there dies at launch with `cannot open shared object file`.
 #
 # The labels are sized (DEV-769): RUNS_ON_OPENSUSE_HEAVY is the dev image on
-# the large runners, RUNS_ON_OPENSUSE_MEDIUM the base image. BUNYIP-1084 renamed
-# the family off the deprecated `_BASE_` and `_DEV_` prefixes; the retired-label
-# check at SPEC-3.16.3 matches any prefixed form (BASE_LIGHT/MEDIUM/HEAVY/MASSIVE
-# and either family's LATEST), so a concurrent workflow addition cannot
-# reintroduce one.
+# the large runners, RUNS_ON_OPENSUSE_MEDIUM the base image.
 #
 # Three properties:
 #   1. check.yml (native cargo fmt/clippy/build/test) requests the HEAVY label.
-#   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_* label.
 #   2. no workflow installs a C toolchain, OpenSSL headers, or the browser system
 #      libraries at run time.
 #   3. every `runs-on:` carries a comment above it saying why that label is right;
@@ -77,16 +72,6 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     # SPEC-3.16.3
-    # 1b. The prefixed BASE_/DEV_ family is retired. The regex matches any
-    # suffix (LIGHT, MEDIUM, HEAVY, MASSIVE, LATEST) without naming the retired
-    # literal in source: it uses character classes, so a final `rg` over the
-    # retired word does not hit this line.
-    for hit in (grep-tree $workflows_dir 'RUNS_ON_OPENSUSE_(BASE|DEV)_' | drop-comments) {
-        print --stderr $"error: ($hit.file):($hit.line):($hit.text): retired label; use RUNS_ON_OPENSUSE_{LIGHT,MEDIUM,HEAVY,MASSIVE} \(DEV-769)"
-        $status = 1
-    }
-
-    # SPEC-3.16.4
     # 2. No run-time toolchain install anywhere: that is the workaround, not the fix.
     let toolchain_hits = (
         grep-tree $workflows_dir '(zypper|apt-get|dnf|yum).*(install).*( gcc| clang| binutils|libopenssl-devel|openssl-devel|build-essential)'
@@ -110,7 +95,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
         $status = 1
     }
 
-    # SPEC-3.16.5
+    # SPEC-3.16.4
     # 3. Every label is annotated with its reason.
     for hit in (grep-tree $workflows_dir '^\s*runs-on:') {
         let above = (

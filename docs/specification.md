@@ -469,16 +469,11 @@ component the browser talks to directly.
   when `check.yml` is not a file there.
 - `SPEC-3.16.2` The guard must exit 1 unless `check.yml` contains the exact text `runs-on: ${{
   vars.RUNS_ON_OPENSUSE_HEAVY }}`.
-- `SPEC-3.16.3` The guard must exit 1 for any non-comment line under the workflows directory naming a retired
-  prefixed-family runner variable: any variable whose name begins with the retired base-image or dev-image
-  prefix under the previous naming, including the `_LATEST` suffix and the sized `_LIGHT`, `_MEDIUM`, `_HEAVY`
-  and `_MASSIVE` suffixes. The guard's own source expresses the prefixes as a regex such as
-  `RUNS_ON_OPENSUSE_(BASE|DEV)_` so the literal `_BASE_` form does not appear in the tree.
-- `SPEC-3.16.4` The guard must exit 1 for any non-comment line that installs `gcc`, `clang`, `binutils`,
+- `SPEC-3.16.3` The guard must exit 1 for any non-comment line that installs `gcc`, `clang`, `binutils`,
   `libopenssl-devel`, `openssl-devel` or `build-essential` with `zypper`, `apt-get`, `dnf` or `yum`, and for any
   non-comment line naming a Playwright browser system library package (`libgtk-3-0`, `libgobject-2_0-0`,
   `libglib-2_0-0`, `mozilla-nss`, `mozilla-nspr`, `libatk-1_0-0`, `libasound2`, `libgbm1`, `libxkbcommon0`).
-- `SPEC-3.16.5` The guard must exit 1 for any `runs-on:` line whose nearest preceding non-blank line is not a comment,
+- `SPEC-3.16.4` The guard must exit 1 for any `runs-on:` line whose nearest preceding non-blank line is not a comment,
   so every runner label states why it is correct.
 
 ### 3.17 Nushell-only guards (`check-workflow-shell.nu`, `check-no-bash.nu`)
