@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use axum::http::header::{HeaderValue, LOCATION, SET_COOKIE};
+use axum::http::header::{HeaderName, HeaderValue, LOCATION, SET_COOKIE};
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use maud::Markup;
@@ -215,6 +215,80 @@ pub fn redirect_cookies(path: &str, cookies: &[String]) -> Response {
     let mut resp = redirect(path);
     attach_cookies(&mut resp, cookies);
     resp
+}
+
+// An htmx partial-swap endpoint always answers 200 (it re-renders
+// the current state whether the underlying API call succeeded or not), so the
+// `?toast_ok=`/`?toast_err=` redirect convention the full-navigation handlers
+// use has nothing to attach to here. An `HX-Trigger` response header carries
+// the same success/failure message to the client instead: htmx fires a
+// `bunyip-toast` event on the triggering element (bubbling to `<body>`, where
+// app.js listens) with the JSON value as `event.detail`.
+/// Attaches an `HX-Trigger: {"bunyip-toast": {...}}` header so a partial-swap
+/// response can surface a toast the same way a full-navigation redirect does.
+pub fn with_toast(mut resp: Response, kind: &str, message: &str) -> Response {
+    let payload = serde_json::json!({ "bunyip-toast": { "kind": kind, "message": message } })
+        .to_string();
+    match HeaderValue::from_str(&payload) {
+        Ok(v) => {
+            resp.headers_mut().insert(HeaderName::from_static("hx-trigger"), v);
+        }
+        // A message with a byte HeaderValue rejects (a stray control
+        // character) would otherwise vanish silently; log it instead of
+        // leaving the user with an unexplained missing toast.
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "with_toast: dropped an HX-Trigger header with an invalid value",
+            );
+        }
+    }
+    resp
+}
+
+#[cfg(test)]
+mod toast_tests {
+    use axum::http::StatusCode;
+    use maud::html;
+
+    use super::{html_cookies, with_toast};
+
+    fn trigger_header(resp: &axum::response::Response) -> serde_json::Value {
+        let raw = resp
+            .headers()
+            .get("hx-trigger")
+            .expect("with_toast sets HX-Trigger")
+            .to_str()
+            .expect("the header is valid ASCII");
+        serde_json::from_str(raw).expect("the header is a JSON object")
+    }
+
+    // A succeeding call surfaces a success message.
+    #[test]
+    fn with_toast_carries_a_success_message() {
+        let resp = with_toast(html_cookies(html! { "ok" }, &[]), "success", "Team created");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let payload = trigger_header(&resp);
+        assert_eq!(payload["bunyip-toast"]["kind"], "success");
+        assert_eq!(payload["bunyip-toast"]["message"], "Team created");
+    }
+
+    // A failing call surfaces an error message naming the
+    // action that failed, and the message survives JSON escaping intact.
+    #[test]
+    fn with_toast_carries_an_error_message() {
+        let resp = with_toast(
+            html_cookies(html! { "ok" }, &[]),
+            "error",
+            "Could not create team: \"Platform\" already exists",
+        );
+        let payload = trigger_header(&resp);
+        assert_eq!(payload["bunyip-toast"]["kind"], "error");
+        assert_eq!(
+            payload["bunyip-toast"]["message"],
+            "Could not create team: \"Platform\" already exists"
+        );
+    }
 }
 
 #[cfg(test)]
