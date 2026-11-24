@@ -91,6 +91,13 @@ const EXCEPTIONS = [
         review_by: "2027-02-07"
         reason: "libsqlite3-sys is in Cargo.lock only through sqlx-sqlite, which sqlx lists unconditionally regardless of enabled features; no bunyip crate enables sqlx's `sqlite` feature (all take only `postgres`), and `cargo tree --workspace -i libsqlite3-sys` prints nothing, confirming nothing compiles it, the same shape as the RUSTSEC-2023-0071/rsa/sqlx-mysql row above."
     }
+    {
+        id: "RUSTSEC-2026-0594"
+        package: "cookie"
+        issue: "BUNYIP-1119"
+        review_by: "2027-05-24"
+        reason: "cookie 0.16.2 is transitively required by actix-web 4.x (actix-web 4.20.0 pins cookie ^0.16). bunyip is a single-process actix-web server with no fork(2) in the workspace or in its tokio/actix dependencies, so the fork-nonce reuse the advisory describes cannot trigger. cookie 0.18 is a breaking release that moves types actix-web consumes from the private API, so a [patch.crates-io] forcing 0.18.3 does not compile against actix-web 4.x. Revisit when actix-web ships a release that depends on cookie 0.18+ or when bunyip migrates off actix-web."
+    }
 ]
 
 # `docker compose run --rm` gives every invocation its own container, so an
