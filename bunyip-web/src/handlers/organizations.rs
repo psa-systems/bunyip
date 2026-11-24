@@ -117,7 +117,7 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
             div class="space-y-2" {
                 h4 class="text-sm font-medium text-muted-foreground" { "Members" }
                 @if members.is_empty() {
-                    p class="text-sm text-muted-foreground" { "No members yet." }
+                    (empty_state("users", "No members yet.", None))
                 } @else {
                     ul class="space-y-1" {
                         @for m in members {
