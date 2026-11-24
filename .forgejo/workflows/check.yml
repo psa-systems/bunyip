@@ -7,9 +7,9 @@
 # generic dunite-core kernel is an anonymously-readable Forgejo git dependency
 # (network only, no credentials).
 #
-# Split into two parallel jobs. `cargo` on BASE_HEAVY (dev image, C toolchain)
+# Split into two parallel jobs. `cargo` on HEAVY (dev image, C toolchain)
 # runs fmt / clippy / check / unit / docker-builder / audit. `guards` on
-# BASE_MEDIUM runs every nu-script + justfile guard (migration, workflow,
+# MEDIUM runs every nu-script + justfile guard (migration, workflow,
 # source-literal, doc, tailwind, publish-trigger). `secrets` keeps its own
 # base-medium job unchanged.
 #
@@ -398,9 +398,8 @@ jobs:
 
       # SPEC-3.5.4
       - name: Check runner labels
-        # Keep the native cargo job on the HEAVY (dev image) label, no job on a
-        # retired *_LATEST label, every label annotated, and no run-time
-        # toolchain install (BUNYIP-444, DEV-769).
+        # Keep the native cargo job on the HEAVY (dev image) label, every label
+        # annotated, and no run-time toolchain install (BUNYIP-444, DEV-769).
         run: ./scripts/check-runner-labels.nu
 
       - name: Check security invariants
