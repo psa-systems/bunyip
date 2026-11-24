@@ -227,11 +227,12 @@ pub fn redirect_cookies(path: &str, cookies: &[String]) -> Response {
 /// Attaches an `HX-Trigger: {"bunyip-toast": {...}}` header so a partial-swap
 /// response can surface a toast the same way a full-navigation redirect does.
 pub fn with_toast(mut resp: Response, kind: &str, message: &str) -> Response {
-    let payload = serde_json::json!({ "bunyip-toast": { "kind": kind, "message": message } })
-        .to_string();
+    let payload =
+        serde_json::json!({ "bunyip-toast": { "kind": kind, "message": message } }).to_string();
     match HeaderValue::from_str(&payload) {
         Ok(v) => {
-            resp.headers_mut().insert(HeaderName::from_static("hx-trigger"), v);
+            resp.headers_mut()
+                .insert(HeaderName::from_static("hx-trigger"), v);
         }
         // A message with a byte HeaderValue rejects (a stray control
         // character) would otherwise vanish silently; log it instead of
