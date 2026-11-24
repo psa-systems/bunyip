@@ -1,50 +1,287 @@
-//! Organizations and teams, behind the BUNYIP-493 feature flag.
+//! Organizations and teams admin surface, gated on `orgs_enabled` (BUNYIP-493,
+//! BUNYIP-672).
 //!
-//! The flag exists before the feature does, so every surface the work adds is
-//! dark from its first commit rather than being retrofitted behind a switch
-//! later. `/organizations` is the route the flag gates today: while the switch
-//! is off it is indistinguishable from a route that was never registered (the
-//! branded 404 the router fallback serves), and no nav entry points at it.
-//!
-//! The semantics are Enable Pricing's, deliberately: off means invisible, not
-//! merely inert. Anything the feature adds later - further routes, nav entries,
-//! copy - goes under the same flag from the start.
+//! The semantics are Enable Pricing's: off means invisible, not merely inert.
+//! The route stays mounted; when `orgs_enabled()` is false the handler returns
+//! the branded 404 the router fallback renders BEFORE the auth guard runs, so
+//! a redirect to `/login` does not confirm the route exists.
 
-use axum::extract::State;
+use axum::extract::{Form, Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
-use maud::{html, Markup};
+use maud::{html, Markup, PreEscaped};
+use serde::Deserialize;
 
-use crate::handlers::{dashboard_response, guard};
+use crate::api::organizations as orgs_api;
+use crate::api::organizations::{OrganizationResponse, TeamMemberResponse, TeamResponse};
+use crate::handlers::{dashboard_input, dashboard_response, guard};
 use crate::views::layout::orgs_enabled;
 use crate::views::ui::empty_state;
-use crate::web::AppState;
+use crate::web::{html_cookies, AppState};
 
-// SPEC-12.45.2: placeholder claims no capability
-/// The page body served while the feature is switched on. A placeholder until
-/// the feature itself lands; it names no capability the product does not have.
-fn organizations_content() -> Markup {
+#[derive(Debug, Deserialize)]
+pub struct OrgNameForm {
+    pub name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TeamForm {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MemberForm {
+    pub bunyip_user_id: String,
+    pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RoleForm {
+    pub role: String,
+}
+
+fn org_card(org: &OrganizationResponse) -> Markup {
     html! {
-        div class="space-y-6" {
-            div {
-                h1 class="text-3xl font-bold" { "Organizations" }
-                p class="mt-2 text-muted-foreground" {
-                    "Shared accounts for a team. This is switched on for the environment the feature is being built in."
+        div class="rounded-lg border bg-card p-6 space-y-4" {
+            div class="flex items-start justify-between" {
+                div {
+                    h2 class="text-xl font-semibold" { (org.name) }
+                    p class="text-sm text-muted-foreground" { "Created " (org.created_at) }
                 }
             }
-            div class="rounded-lg border bg-card p-6" {
-                (empty_state("users", "No organizations yet.", None))
+            form
+                hx-put="/organizations/name"
+                hx-target="closest .rounded-lg"
+                hx-swap="outerHTML"
+                class="flex items-end gap-2"
+            {
+                div class="flex-1 space-y-1" {
+                    label class="text-sm font-medium" for="rename-name" { "Rename" }
+                    input id="rename-name" name="name" required value=(org.name) class=(dashboard_input());
+                }
+                button
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                { "Save" }
             }
         }
     }
 }
 
+fn create_org_card() -> Markup {
+    html! {
+        div class="rounded-lg border bg-card p-6" {
+            h2 class="text-xl font-semibold" { "Create your organization" }
+            p class="mt-2 text-sm text-muted-foreground" {
+                "Group collaborators into teams you share accounts with."
+            }
+            form
+                hx-post="/organizations"
+                hx-target="#organization-root"
+                hx-swap="outerHTML"
+                class="mt-4 flex items-end gap-2"
+            {
+                div class="flex-1 space-y-1" {
+                    label class="text-sm font-medium" for="create-name" { "Name" }
+                    input id="create-name" name="name" required placeholder="Acme" class=(dashboard_input());
+                }
+                button
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                { "Create" }
+            }
+        }
+    }
+}
+
+fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
+    html! {
+        div class="rounded-lg border bg-card p-4 space-y-3" id=(format!("team-{}", team.id)) {
+            div class="flex items-start justify-between gap-2" {
+                div {
+                    h3 class="text-lg font-medium" { (team.name) }
+                    @if let Some(d) = &team.description {
+                        p class="text-sm text-muted-foreground" { (d) }
+                    }
+                }
+                button
+                    type="button"
+                    hx-delete=(format!("/organizations/teams/{}", team.id))
+                    hx-target=(format!("#team-{}", team.id))
+                    hx-swap="outerHTML"
+                    hx-confirm="Delete this team?"
+                    class="text-sm text-destructive hover:underline"
+                { "Delete" }
+            }
+            div class="space-y-2" {
+                h4 class="text-sm font-medium text-muted-foreground" { "Members" }
+                @if members.is_empty() {
+                    p class="text-sm text-muted-foreground" { "No members yet." }
+                } @else {
+                    ul class="space-y-1" {
+                        @for m in members {
+                            li class="flex items-center justify-between gap-2 text-sm" {
+                                span class="font-mono text-xs" { (m.bunyip_user_id) }
+                                span class="rounded bg-muted px-2 py-0.5 text-xs" { (m.role) }
+                                button
+                                    type="button"
+                                    hx-delete=(format!("/organizations/teams/{}/members/{}", team.id, m.bunyip_user_id))
+                                    hx-target=(format!("#team-{}", team.id))
+                                    hx-swap="outerHTML"
+                                    class="text-xs text-destructive hover:underline"
+                                { "Remove" }
+                            }
+                        }
+                    }
+                }
+                form
+                    hx-post=(format!("/organizations/teams/{}/members", team.id))
+                    hx-target=(format!("#team-{}", team.id))
+                    hx-swap="outerHTML"
+                    class="flex flex-wrap items-end gap-2"
+                {
+                    div class="flex-1 min-w-[220px] space-y-1" {
+                        label class="text-xs font-medium" for=(format!("member-id-{}", team.id)) { "User ID" }
+                        input
+                            id=(format!("member-id-{}", team.id))
+                            name="bunyip_user_id"
+                            required
+                            placeholder="uuid"
+                            class=(dashboard_input());
+                    }
+                    div class="w-32 space-y-1" {
+                        label class="text-xs font-medium" for=(format!("member-role-{}", team.id)) { "Role" }
+                        input
+                            id=(format!("member-role-{}", team.id))
+                            name="role"
+                            placeholder="member"
+                            class=(dashboard_input());
+                    }
+                    button
+                        type="submit"
+                        class="inline-flex items-center justify-center rounded-md bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/90"
+                    { "Add" }
+                }
+            }
+        }
+    }
+}
+
+fn teams_section(teams: &[TeamResponse], members: &[(String, Vec<TeamMemberResponse>)]) -> Markup {
+    html! {
+        div class="space-y-4" id="teams-section" {
+            div class="flex items-center justify-between" {
+                h2 class="text-xl font-semibold" { "Teams" }
+            }
+            form
+                hx-post="/organizations/teams"
+                hx-target="#teams-section"
+                hx-swap="outerHTML"
+                class="rounded-lg border bg-card p-4 flex flex-wrap items-end gap-2"
+            {
+                div class="flex-1 min-w-[220px] space-y-1" {
+                    label class="text-sm font-medium" for="team-name" { "New team name" }
+                    input id="team-name" name="name" required placeholder="Platform" class=(dashboard_input());
+                }
+                div class="flex-1 min-w-[260px] space-y-1" {
+                    label class="text-sm font-medium" for="team-description" { "Description" }
+                    input id="team-description" name="description" placeholder="Optional" class=(dashboard_input());
+                }
+                button
+                    type="submit"
+                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                { "Create team" }
+            }
+            @if teams.is_empty() {
+                (empty_state("users", "No teams yet.", None))
+            } @else {
+                div class="space-y-3" {
+                    @for t in teams {
+                        @let empty_vec: Vec<TeamMemberResponse> = Vec::new();
+                        @let ms = members.iter().find(|(id, _)| id == &t.id).map(|(_, v)| v).unwrap_or(&empty_vec);
+                        (team_row(t, ms))
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn organizations_root(
+    org: Option<&OrganizationResponse>,
+    teams: &[TeamResponse],
+    members: &[(String, Vec<TeamMemberResponse>)],
+) -> Markup {
+    html! {
+        div class="space-y-6" id="organization-root" {
+            div {
+                h1 class="text-3xl font-bold" { "Organization" }
+                p class="mt-2 text-muted-foreground" {
+                    "Administer the organization you own and its teams."
+                }
+            }
+            @match org {
+                Some(o) => (org_card(o)),
+                None => (create_org_card()),
+            }
+            @if org.is_some() {
+                (teams_section(teams, members))
+            }
+        }
+    }
+}
+
+// SPEC-12.45.2: placeholder claims no capability
+/// The flag-on page body. Kept pure so tests can assert the copy without
+/// standing up an app state, mirroring the shape every other dashboard page uses.
+fn organizations_content() -> Markup {
+    html! {
+        div class="space-y-6" id="organization-root" {
+            div {
+                h1 class="text-3xl font-bold" { "Organization" }
+                p class="mt-2 text-muted-foreground" {
+                    "Administer the organization you own and its teams."
+                }
+            }
+            div class="rounded-lg border bg-card p-6" {
+                (empty_state("users", "Loading\u{2026}", None))
+            }
+        }
+    }
+}
+
+async fn fetch_state(
+    st: &AppState,
+    cookie: Option<&str>,
+) -> (
+    Option<OrganizationResponse>,
+    Vec<TeamResponse>,
+    Vec<(String, Vec<TeamMemberResponse>)>,
+) {
+    let org = orgs_api::get_my_organization(&st.api, cookie)
+        .await
+        .ok()
+        .flatten();
+    let teams = if org.is_some() {
+        orgs_api::list_teams(&st.api, cookie)
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut members = Vec::with_capacity(teams.len());
+    for t in &teams {
+        let list = orgs_api::list_team_members(&st.api, cookie, &t.id)
+            .await
+            .unwrap_or_default();
+        members.push((t.id.clone(), list));
+    }
+    (org, teams, members)
+}
+
 // SPEC-12.45.1, SPEC-12.45.2: flag off answers 404 before auth so the route stays dark
-/// `GET /organizations` - the flagged surface.
-///
-/// With the flag off the caller gets the same 404 the router fallback renders,
-/// BEFORE the auth guard runs: a redirect to `/login` would confirm the route
-/// exists, which is exactly what "dark in production" must not do.
+/// `GET /organizations` - the landing page.
 pub async fn organizations(State(st): State<AppState>, headers: HeaderMap) -> Response {
     if !orgs_enabled() {
         return crate::skin::public::not_found(State(st), headers).await;
@@ -53,13 +290,172 @@ pub async fn organizations(State(st): State<AppState>, headers: HeaderMap) -> Re
         Ok(v) => v,
         Err(r) => return r,
     };
-    dashboard_response(
-        &c,
-        &user,
-        "/organizations",
-        "Organizations",
-        organizations_content(),
+    let (org, teams, members) = fetch_state(&st, c.forward.as_deref()).await;
+    let content = organizations_root(org.as_ref(), &teams, &members);
+    dashboard_response(&c, &user, "/organizations", "Organization", content)
+}
+
+#[allow(clippy::result_large_err)] // Err is the ready-made redirect the caller returns as-is
+async fn require_signed_in(
+    st: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::AuthCtx, Response> {
+    if !orgs_enabled() {
+        return Err(crate::skin::public::not_found(State(st.clone()), headers.clone()).await);
+    }
+    let (_, c) = match guard(st, headers, "/organizations").await {
+        Ok(v) => v,
+        Err(r) => return Err(r),
+    };
+    Ok(c)
+}
+
+/// POST /organizations: create the caller's organization. Replaces the
+/// `#organization-root` fragment with the live view.
+pub async fn create_my_organization(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(body): Form<OrgNameForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let _ = orgs_api::create_my_organization(&st.api, cookie, &body.name).await;
+    let (org, teams, members) = fetch_state(&st, cookie).await;
+    html_cookies(
+        organizations_root(org.as_ref(), &teams, &members),
+        &c.set_cookies,
     )
+}
+
+/// PUT /organizations/name: rename the caller's organization. Replaces the
+/// `.rounded-lg` card with the fresh view.
+pub async fn update_my_organization(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(body): Form<OrgNameForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let renamed = orgs_api::update_my_organization(&st.api, cookie, &body.name).await;
+    match renamed {
+        Ok(org) => html_cookies(org_card(&org), &c.set_cookies),
+        Err(_) => {
+            let (org, _, _) = fetch_state(&st, cookie).await;
+            html_cookies(
+                match org {
+                    Some(o) => org_card(&o),
+                    None => create_org_card(),
+                },
+                &c.set_cookies,
+            )
+        }
+    }
+}
+
+/// POST /organizations/teams: create a team. Replaces `#teams-section`.
+pub async fn create_team(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Form(body): Form<TeamForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let desc = body.description.as_deref().filter(|s| !s.is_empty());
+    let _ = orgs_api::create_team(&st.api, cookie, &body.name, desc).await;
+    let (_, teams, members) = fetch_state(&st, cookie).await;
+    html_cookies(teams_section(&teams, &members), &c.set_cookies)
+}
+
+/// DELETE /organizations/teams/{id}: swap-out an empty string replaces the
+/// card with nothing, matching htmx's hx-swap="outerHTML" semantics.
+pub async fn delete_team(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let _ = orgs_api::delete_team(&st.api, cookie, &id).await;
+    html_cookies(PreEscaped(String::new()), &c.set_cookies)
+}
+
+/// POST /organizations/teams/{id}/members: add member, replaces the team row.
+pub async fn add_team_member(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(team_id): Path<String>,
+    Form(body): Form<MemberForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let role = body.role.as_deref().filter(|s| !s.is_empty());
+    let _ = orgs_api::add_team_member(&st.api, cookie, &team_id, &body.bunyip_user_id, role).await;
+    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+}
+
+/// DELETE /organizations/teams/{tid}/members/{uid}: remove member, replaces team row.
+pub async fn remove_team_member(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((team_id, user_id)): Path<(String, String)>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let _ = orgs_api::remove_team_member(&st.api, cookie, &team_id, &user_id).await;
+    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+}
+
+/// PUT /organizations/teams/{tid}/members/{uid}/role: update member role.
+pub async fn update_team_member_role(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((team_id, user_id)): Path<(String, String)>,
+    Form(body): Form<RoleForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let _ =
+        orgs_api::update_team_member_role(&st.api, cookie, &team_id, &user_id, &body.role).await;
+    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+}
+
+async fn render_team_row(
+    st: &AppState,
+    cookie: Option<&str>,
+    set_cookies: &[String],
+    team_id: &str,
+) -> Response {
+    let teams = orgs_api::list_teams(&st.api, cookie)
+        .await
+        .unwrap_or_default();
+    let Some(team) = teams.into_iter().find(|t| t.id == team_id) else {
+        return html_cookies(PreEscaped(String::new()), set_cookies);
+    };
+    let members = orgs_api::list_team_members(&st.api, cookie, team_id)
+        .await
+        .unwrap_or_default();
+    html_cookies(team_row(&team, &members), set_cookies)
 }
 
 #[cfg(test)]
@@ -74,10 +470,6 @@ mod tests {
     use crate::handlers::unreachable_api_state;
     use crate::views::layout::install_orgs_enabled;
 
-    /// The flag cell is process-wide and its lock is a plain `Mutex`, so the
-    /// request is driven on a runtime built inside the test rather than by
-    /// `#[tokio::test]`: that keeps the guard off any await point the test body
-    /// owns (`clippy::await_holding_lock`) while still serialising the flag.
     fn block_on<F: std::future::Future>(f: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -86,7 +478,6 @@ mod tests {
             .block_on(f)
     }
 
-    /// The status and `Location` the router answers `GET /organizations` with.
     async fn get_organizations() -> (StatusCode, Option<String>) {
         let app = Router::new()
             .route("/organizations", get(organizations))
@@ -108,10 +499,9 @@ mod tests {
         (res.status(), location)
     }
 
-    /// BUNYIP-493 AC: with the switch off the flagged route is unreachable, and
-    /// unreachable means 404 - the same answer a path that was never registered
-    /// gets. An empty page, an error page or a redirect to `/login` would each
-    /// confirm the route exists.
+    /// BUNYIP-493 AC: with the switch off the route is unreachable, same answer
+    /// a path that was never registered gets. An empty page, an error page or a
+    /// redirect would each confirm the route exists.
     #[test]
     fn the_flagged_route_404s_while_the_switch_is_off() {
         let _guard = crate::feature_flags::FLAG_LOCK
@@ -126,9 +516,7 @@ mod tests {
         );
     }
 
-    /// The other half: with the switch on the route exists, so an anonymous
-    /// caller is sent to sign in rather than told the page is not there. Without
-    /// this the test above would pass on a route that is broken in both states.
+    /// Flag on, route exists; anonymous caller lands at sign-in.
     #[test]
     fn the_flagged_route_exists_once_the_switch_is_on() {
         let _guard = crate::feature_flags::FLAG_LOCK
@@ -145,12 +533,11 @@ mod tests {
         assert_eq!(location.as_deref(), Some("/login"));
     }
 
-    /// The page copy renders under the flag, and it claims nothing the product
-    /// does not have (BUNYIP-487 removed the copy that did).
+    /// The flag-on placeholder names no capability the BUNYIP-487 guard forbids.
     #[test]
     fn the_page_names_no_capability_that_does_not_exist() {
         let markup = organizations_content().into_string();
-        assert!(markup.contains("Organizations"));
-        assert!(markup.contains("No organizations yet."));
+        assert!(markup.contains("Organization"));
+        assert!(markup.contains("Administer the organization you own"));
     }
 }
