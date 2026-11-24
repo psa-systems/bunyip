@@ -10,8 +10,8 @@
 //! to include 'seed'; this test proves the full dataset now loads.
 //!
 //! Env-gated like the other DB tests (`rls_isolation.rs`, `applications_catalog.rs`):
-//! bunyip CI has no Postgres, so it skips unless `BUNYIP_TEST_DATABASE_URL`
-//! (or `RLS_TEST_DATABASE_URL`) points at a throwaway database it may migrate:
+//! it skips unless `BUNYIP_TEST_DATABASE_URL` (or `RLS_TEST_DATABASE_URL`,
+//! both set by the Check workflow) points at a throwaway database it may migrate:
 //!
 //! ```sh
 //! BUNYIP_TEST_DATABASE_URL=postgres://postgres:postgres@localhost/bunyip_seed_test \

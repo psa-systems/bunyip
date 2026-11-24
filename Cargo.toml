@@ -55,3 +55,11 @@ features = ["serde"]
 [workspace.dependencies.tracing-subscriber]
 version = "0.3"
 features = ["env-filter"]
+
+# PSPEC-1.1.1: Argon2 password hashing runs in most database tests, so the
+# test build optimizes it and its hash crate; workspace members stay unoptimized.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

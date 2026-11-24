@@ -7,8 +7,8 @@
 //! `20260731000010_add_totp_last_used_step.sql`) picks exactly one winner when
 //! two submissions of the same code race.
 //!
-//! Env-gated. bunyip CI has no Postgres service (`just check-container` runs the
-//! workspace lib tests only), so with `RLS_TEST_DATABASE_URL` unset this test
+//! Env-gated. The Check workflow sets `RLS_TEST_DATABASE_URL` to its PostgreSQL
+//! service; with it unset (for example `just check-container`) this test
 //! skips and stays green. The URL must point at a throwaway database the test
 //! may migrate:
 //!

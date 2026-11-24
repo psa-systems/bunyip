@@ -76,6 +76,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# SPEC-3.4.3, PSPEC-1.1.4: workflow level so every job builds the same artifacts.
+# line-tables-only keeps file:line in backtraces at about half the target/ size;
+# incremental output is never reused on CI and filled the runner disk (ENOSPC).
+env:
+  CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   # SPEC-3.4.3
   cargo:
@@ -83,20 +90,30 @@ jobs:
     # HEAVY: native cargo build/test plus a docker build; the dev image carries the
     # C toolchain and OpenSSL headers crate build scripts need (BUNYIP-444, DEV-769).
     runs-on: ${{ vars.RUNS_ON_OPENSUSE_HEAVY }}
+
+    # PSPEC-2.1.1, PSPEC-2.1.2, PSPEC-2.1.8: throwaway PostgreSQL 18 for the
+    # database tests; trust auth keeps every password out of this workflow.
+    services:
+      postgres:
+        image: postgres:18.2-alpine3.23
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: bunyip_test
+        # PSPEC-2.2.1, PSPEC-2.2.3. PSPEC-2.1.3: size=4g is provisional until the
+        # "Print the PostgreSQL data directory size" step of a green run gives the peak.
+        options: >-
+          --health-cmd "pg_isready --username=postgres --dbname=bunyip_test"
+          --health-interval ${{ env.CI_POSTGRES_HEALTH_INTERVAL || '5s' }}
+          --health-timeout ${{ env.CI_POSTGRES_HEALTH_TIMEOUT || '5s' }}
+          --health-retries ${{ env.CI_POSTGRES_HEALTH_RETRIES || '24' }}
+          --health-start-period ${{ env.CI_POSTGRES_HEALTH_START_PERIOD || '30s' }}
+          --tmpfs /var/lib/postgresql:rw,size=4g
+
     env:
       SQLX_OFFLINE: "true"
-      # Disk-footprint controls. CI doesn't need full DWARF debug info -
-      # nothing here runs a debugger - and `-C debuginfo=2` (cargo's dev
-      # default) bloats `target/` past 10GB per workspace. `line-tables-only`
-      # keeps enough info for readable test panics and rustc backtraces while
-      # cutting the on-disk size ~50%. Combined with disabling incremental
-      # (which builds a separate per-job dep tree that gets thrown away on
-      # the next runner allocation anyway), this keeps the runner's
-      # /workspace from filling up between consecutive PR jobs - the
-      # ENOSPC failures we hit on three back-to-back bunyip-upgrade PRs
-      # were all this.
-      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
-      CARGO_INCREMENTAL: "0"
+      # Superuser URL: rls_isolation.rs creates roles and SET ROLEs to them.
+      BUNYIP_TEST_DATABASE_URL: postgres://postgres@postgres:5432/bunyip_test
+      RLS_TEST_DATABASE_URL: postgres://postgres@postgres:5432/bunyip_test
 
     # Every run: step in this repo executes under Nushell (BUNYIP-489).
     # Declared once per job so a new step cannot silently inherit Bash;
@@ -250,12 +267,69 @@ jobs:
         if: ${{ steps.classify-diff.outputs.result == 'code' }}
         run: cargo check --workspace --all-targets --locked
 
+      - name: Turn off PostgreSQL durability
+        # PSPEC-2.1.4, PSPEC-2.1.6: a service takes no command, so ALTER SYSTEM and reload,
+        # then read all four back for up to 30 s. PSPEC-2.1.7: only through the service alias.
+        if: ${{ steps.classify-diff.outputs.result == 'code' }}
+        run: |
+          let settings = [fsync full_page_writes synchronous_commit autovacuum]
+          let alter = ($settings | each {|name| $"ALTER SYSTEM SET ($name) = off;" } | append "SELECT pg_reload_conf();" | str join "\n")
+          let names = ($settings | each {|name| "'" + $name + "'" } | str join ", ")
+          let read = "SELECT name, setting FROM pg_settings WHERE name IN (" + $names + ")"
+          let deadline = (date now) + 30sec
+          mut differing = $settings
+          mut last_error = ""
+          loop {
+              # Piped, not --command: ALTER SYSTEM cannot run inside the implicit transaction of one -c string.
+              let set = ($alter | ^psql $env.BUNYIP_TEST_DATABASE_URL --set=ON_ERROR_STOP=1 --quiet | complete)
+              if $set.exit_code == 0 {
+                  let got = (^psql $env.BUNYIP_TEST_DATABASE_URL --set=ON_ERROR_STOP=1 --tuples-only --no-align --field-separator "=" --command $read | complete)
+                  if $got.exit_code == 0 {
+                      let off = ($got.stdout | lines | parse "{name}={setting}" | where setting == "off" | get name)
+                      $differing = ($settings | where {|name| $name not-in $off })
+                      if ($differing | is-empty) {
+                          print $"PostgreSQL settings off: ($settings | str join ', ')"
+                          break
+                      }
+                  } else {
+                      $last_error = $got.stderr
+                  }
+              } else {
+                  $last_error = $set.stderr
+              }
+              if (date now) > $deadline {
+                  error make {msg: $"PostgreSQL settings not off after 30 s: ($differing | str join ', ') ($last_error)"}
+              }
+              sleep 1sec
+          }
+
+      - name: Start MemAvailable sampler
+        # PSPEC-2.7.1: samples the host's MemAvailable every 5 s until the report step stops it.
+        if: ${{ steps.classify-diff.outputs.result == 'code' }}
+        run: |
+          let dir = $"($env.RUNNER_TEMP)/mem-available"
+          mkdir $dir
+          let script = $"($dir)/sample.nu"
+          r#'$nu.pid | into string | save $"($env.MEM_AVAILABLE_SAMPLES).pid"
+          loop {
+              let kb = (open /proc/meminfo | lines | parse --regex '^MemAvailable:\s+(?P<kb>\d+) kB' | get kb.0)
+              $"(date now | format date '%+') ($kb)\n" | save --append --raw $env.MEM_AVAILABLE_SAMPLES
+              sleep 5sec
+          }'# | save $script
+          with-env {MEM_AVAILABLE_SAMPLES: $"($dir)/samples.txt"} {
+              ^setsid --fork nu --no-config-file $script out+err> $"($dir)/sampler.log"
+          }
+
       - name: Unit tests
         # --all-targets (not --lib) so binary-crate tests run too: bunyip-web
         # is a bin-only crate, and `--lib` silently skips its entire test suite
         # (BUNYIP-271). The registration-form field-error guards live there.
         # Skipped unless the diff contains code (PC-134, BUNYIP-1040).
         if: ${{ steps.classify-diff.outputs.result == 'code' }}
+        env:
+          # PSPEC-2.3.2: 8 threads x 10 connections (largest per-test pool, sqlx's
+          # default) + 0 held by other steps = 80 < max_connections 100.
+          RUST_TEST_THREADS: "8"
         run: cargo test --workspace --all-targets
 
       # SPEC-3.4.5, SPEC-3.4.9
@@ -296,6 +370,31 @@ jobs:
         # set (justfile, compose.dev.yml, scripts/) that reintroduces one
         # (BUNYIP-647).
         run: just check-tree-ownership
+
+      - name: Print the PostgreSQL data directory size
+        # PSPEC-2.1.3: du runs inside the job's own service; tests drop no database, so the end size is near the peak.
+        if: ${{ always() && steps.classify-diff.outputs.result == 'code' }}
+        run: |
+          let sql = "CREATE TEMP TABLE du (line text); COPY du FROM PROGRAM 'du -sk /var/lib/postgresql | cut -f1'; SELECT line FROM du;"
+          let kib = (^psql $env.BUNYIP_TEST_DATABASE_URL --set=ON_ERROR_STOP=1 --tuples-only --no-align --command $sql | lines | last | into int)
+          print $"PostgreSQL data directory: ($kib // 1024) MiB \(tmpfs size=4g\)"
+
+      - name: Print the lowest MemAvailable
+        # PSPEC-2.7.1
+        if: always()
+        run: |
+          let samples = $"($env.RUNNER_TEMP)/mem-available/samples.txt"
+          if not ($samples | path exists) {
+              print "MemAvailable sampler did not run (tests skipped)"
+              exit 0
+          }
+          let pid_file = $"($samples).pid"
+          if ($pid_file | path exists) {
+              ^kill (open $pid_file | str trim) | complete | ignore
+          }
+          let rows = (open $samples | lines | parse "{at} {kb}" | update kb { into int })
+          let low = ($rows | sort-by kb | first)
+          print $"Lowest MemAvailable: ($low.kb // 1024) MiB at ($low.at), over ($rows | length) samples"
 
       - name: Report job metrics
         # Last and always(), so a failing job still reports (composite actions have no post hook).

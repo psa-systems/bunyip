@@ -11,9 +11,9 @@
 //! resolved-but-not-allowed country would be, and the same branch every
 //! caller shares because all three delegate to `AuthService::enforce_country_gate`.
 //!
-//! Env-gated. bunyip CI has no Postgres service (`just check-container` runs
-//! the workspace tests only), so with `RLS_TEST_DATABASE_URL` unset this test
-//! skips and stays green. The URL must point at a throwaway database the test
+//! Env-gated. The Check workflow sets `RLS_TEST_DATABASE_URL` to its
+//! PostgreSQL service; with it unset (for example `just check-container`)
+//! this test skips and stays green. The URL must point at a throwaway database the test
 //! may migrate:
 //!
 //! ```sh

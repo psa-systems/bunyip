@@ -13,7 +13,7 @@
 //!
 //! Env-gated the same way the other DB-backed integration tests are: with
 //! `BUNYIP_TEST_DATABASE_URL` / `RLS_TEST_DATABASE_URL` unset it skips and stays
-//! green (bunyip CI has no Postgres service). The URL must point at a
+//! green (the Check workflow sets both to its PostgreSQL service). The URL must point at a
 //! throwaway database this test may migrate:
 //!
 //! ```sh

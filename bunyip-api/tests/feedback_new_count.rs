@@ -2,8 +2,8 @@
 //! look at: `status = 'new'` AND `is_spam = FALSE`. A `reviewed`, `responded`,
 //! `closed`, or spam row is excluded.
 //!
-//! Env-gated. bunyip CI has no Postgres service (`just check-container` runs the
-//! workspace tests only), so with `RLS_TEST_DATABASE_URL` unset this test skips
+//! Env-gated. The Check workflow sets `RLS_TEST_DATABASE_URL` to its PostgreSQL
+//! service; with it unset (for example `just check-container`) this test skips
 //! and stays green. The URL must point at a database the test may migrate:
 //!
 //! ```sh

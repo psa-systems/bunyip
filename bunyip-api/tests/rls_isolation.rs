@@ -7,8 +7,8 @@
 //! crafted query that omits the `WHERE user_id = ...` filter. Mirrors
 //! `mokosh-server/tests/rls_isolation.rs`.
 //!
-//! Env-gated. bunyip CI has no Postgres service (`just check-container` runs the
-//! workspace lib tests only), so with `RLS_TEST_DATABASE_URL` unset this test
+//! Env-gated. The Check workflow sets `RLS_TEST_DATABASE_URL` to its PostgreSQL
+//! service; with it unset (for example `just check-container`) this test
 //! skips and stays green. The URL must point at a Postgres SUPERUSER (it creates
 //! a role and `SET ROLE`s to it) on a throwaway database the test may migrate:
 //!

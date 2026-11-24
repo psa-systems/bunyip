@@ -10,8 +10,8 @@
 //! is enforced for that caller.
 //!
 //! Env-gated the same way the other DB-backed integration tests are: with
-//! `RLS_TEST_DATABASE_URL` unset it skips and stays green (bunyip CI has no
-//! Postgres service). The URL must point at a throwaway, already-migrated
+//! `RLS_TEST_DATABASE_URL` unset it skips and stays green (the Check workflow
+//! sets it to its PostgreSQL service). The URL must point at a throwaway, already-migrated
 //! database:
 //!
 //! ```sh

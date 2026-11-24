@@ -91,8 +91,7 @@ enum EventClaim {
 /// failed handler released between the upsert and the status read - must NOT be
 /// treated as already processed, so Stripe's retry re-runs the handler instead
 /// of being swallowed with a bare `200`. Factored out of `claim_webhook_event`
-/// so it can be unit-tested without a live database (CI runs `--lib` tests with
-/// no Postgres).
+/// so it can be unit-tested without a live database.
 // SPEC-10.31.4: only a done row may short-circuit a redelivery
 fn classify_claim(won_claim: bool, existing_status: Option<&str>) -> EventClaim {
     if won_claim {
@@ -997,8 +996,7 @@ mod tests {
     // permanently. The fix claims the event as `processing`, only promotes it to
     // `done` after the handler succeeds, and releases the claim on failure.
     //
-    // CI has no Postgres (tests run `--lib` with SQLX_OFFLINE), so the DB SQL is
-    // not exercised here. What IS exercised is the pure decision that governs
+    // This unit test has no database, so the DB SQL is not exercised here. What IS exercised is the pure decision that governs
     // whether a redelivery is allowed to re-run: only a `done` row may be
     // skipped; every other state must re-process. That is exactly the invariant
     // the old fence violated.

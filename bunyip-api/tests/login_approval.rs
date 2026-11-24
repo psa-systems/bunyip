@@ -12,8 +12,8 @@
 //! `.BIN` fixture; the country half reuses BUNYIP-366's `login_location_decision`,
 //! which is unit-tested in `services::auth`.
 //!
-//! Env-gated. bunyip CI has no Postgres service (`just check-container` runs the
-//! workspace tests only), so with `RLS_TEST_DATABASE_URL` unset this test skips
+//! Env-gated. The Check workflow sets `RLS_TEST_DATABASE_URL` to its PostgreSQL
+//! service; with it unset (for example `just check-container`) this test skips
 //! and stays green. The URL must point at a throwaway database the test may
 //! migrate:
 //!
