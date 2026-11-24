@@ -60,7 +60,7 @@ fn org_card(org: &OrganizationResponse) -> Markup {
                     label class="text-sm font-medium" for="rename-name" { "Rename" }
                     input id="rename-name" name="name" required value=(org.name) class=(dashboard_input());
                 }
-                button type="submit" class=(button_class("default", "sm", "")) { "Save" }
+                button type="submit" class=(button_class("default", "default", "")) { "Save" }
             }
         }
     }
@@ -83,7 +83,7 @@ fn create_org_card() -> Markup {
                     label class="text-sm font-medium" for="create-name" { "Name" }
                     input id="create-name" name="name" required placeholder="Acme" class=(dashboard_input());
                 }
-                button type="submit" class=(button_class("default", "sm", "")) { "Create" }
+                button type="submit" class=(button_class("default", "default", "")) { "Create" }
             }
         }
     }
@@ -152,7 +152,7 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
                             placeholder="member"
                             class=(dashboard_input());
                     }
-                    button type="submit" class=(button_class("default", "sm", "")) { "Add" }
+                    button type="submit" class=(button_class("secondary", "sm", "")) { "Add" }
                 }
             }
         }
@@ -179,7 +179,7 @@ fn teams_section(teams: &[TeamResponse], members: &[(String, Vec<TeamMemberRespo
                     label class="text-sm font-medium" for="team-description" { "Description" }
                     input id="team-description" name="description" placeholder="Optional" class=(dashboard_input());
                 }
-                button type="submit" class=(button_class("default", "sm", "")) { "Create team" }
+                button type="submit" class=(button_class("default", "default", "")) { "Create team" }
             }
             @if teams.is_empty() {
                 (empty_state("users", "No teams yet.", None))
