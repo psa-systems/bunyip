@@ -234,9 +234,11 @@ component the browser talks to directly.
   filter, so a required check always reports.
 - `SPEC-3.4.2` The workflow must use concurrency group `${{ github.workflow }}-${{ github.ref }}` with
   `cancel-in-progress: true`.
-- `SPEC-3.4.3` The `cargo` job must run on `vars.RUNS_ON_OPENSUSE_HEAVY` with `defaults.run.shell: nu {0}`, must
-  set `SQLX_OFFLINE` to `true`, `CARGO_PROFILE_DEV_DEBUG` to `line-tables-only` and `CARGO_INCREMENTAL` to `0`, and must
-  check out with `submodules: true` so the root justfile's `import` resolves.
+- `SPEC-3.4.3` The Check workflow must set `CARGO_PROFILE_DEV_DEBUG` to `line-tables-only` and `CARGO_INCREMENTAL` to
+  `0` in its workflow-level `env:`, not in a job's `env:`, so every job builds the same artifacts (PSPEC-1.1.4 of the
+  adopted Rust test build profile, section 15). The `cargo` job must run on `vars.RUNS_ON_OPENSUSE_HEAVY` with
+  `defaults.run.shell: nu {0}`, must set `SQLX_OFFLINE` to `true`, and must check out with `submodules: true` so the
+  root justfile's `import` resolves.
 - `SPEC-3.4.4` Right after checkout, the `cargo` job must run the shared `classify-diff` action with step id
   `classify-diff`; outside a `pull_request` event its result must be treated as `code`.
 - `SPEC-3.4.5` Clippy, the `Cargo.lock` sync check, the unit tests and the docker builder stage must run only when
@@ -11168,3 +11170,13 @@ All `POST /settings/...` actions below must pass `guard`, answer 303, and on fai
 - `SPEC-14.39.3` The release version must live only at `[workspace.package] version` in the root `Cargo.toml`
   (`SPEC-14.1.2`), and a release must be cut with `just create-release <major|minor|hotfix>` from a host with a Rust
   toolchain, because the recipe runs `cargo` on the host.
+
+## 15. Adopted profiles
+
+bunyip adopts these profiles of the shared `common` repository (common SPEC-11.6.6). Each is normative here as
+written in `common`; a requirement of this document that conflicts with an adopted profile is amended to match it.
+
+| Document | Chapter | Title |
+|---|---|---|
+| `common/docs/profile-specification.md` | 1 | Rust test build profile |
+| `common/docs/profile-specification.md` | 2 | PostgreSQL test profile |
