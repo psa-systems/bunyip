@@ -265,6 +265,11 @@ since = "v0.22.0"
 required = false
 
 [[variable]]
+name = "DRILLMARK_SUBDOMAIN"
+since = "v0.22.0"
+required = false
+
+[[variable]]
 name = "DUNITE_ARGON2_MAX_CONCURRENT"
 since = "v0.19.0"
 required = false
@@ -431,6 +436,11 @@ required = false
 
 [[variable]]
 name = "MOKOSH_RELEASE_NOTES_URL"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "MOKOSH_SUBDOMAIN"
 since = "v0.22.0"
 required = false
 

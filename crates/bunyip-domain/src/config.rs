@@ -2595,6 +2595,14 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "optional override for `applications.release_notes_url` on the drillmark row at boot; empty leaves the migration-seeded Forgejo URL in place (BUNYIP-862)",
     ),
     EnvVarSpec::defaulted(
+        "MOKOSH_SUBDOMAIN",
+        "subdomain of the Mokosh launch tile; written to `applications.subdomain` at boot. Empty clears the a8n-specific `msp` seed so a self-hoster's dashboard shows no bogus launch link (BUNYIP-862)",
+    ),
+    EnvVarSpec::defaulted(
+        "DRILLMARK_SUBDOMAIN",
+        "subdomain of the Drillmark launch tile; written to `applications.subdomain` at boot. Empty clears the a8n-specific `drillmark` seed so a self-hoster's dashboard shows no bogus launch link (BUNYIP-862)",
+    ),
+    EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",
         "extra connect-src origins a skin appends to bunyip-web's CSP (BUNYIP-503)",
     ),

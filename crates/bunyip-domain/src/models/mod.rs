@@ -18,6 +18,7 @@ pub mod membership;
 pub mod mirzam;
 pub mod mokosh;
 pub mod oauth_client_user_tenant;
+pub mod organization;
 pub mod rate_limit;
 pub mod stripe;
 pub mod support;
@@ -76,6 +77,10 @@ pub use mokosh::{
     MokoshConfigRow, UpdateMokoshConfigRequest,
 };
 pub use oauth_client_user_tenant::{CreateUserTenantAssignment, OAuthClientUserTenant};
+pub use organization::{
+    AddTeamMember, CreateOrganization, CreateTeam, Organization, Team, TeamMember,
+    UpdateOrganization, UpdateTeam, UpdateTeamMemberRole, TEAM_MEMBER_ROLE_MEMBER,
+};
 pub use rate_limit::{
     rate_limit_vars, KeyKind, KeySubject, RateLimit, RateLimitConfig, RateLimitVars,
     TWO_FACTOR_KEY_PREFIX,

@@ -23,6 +23,7 @@ pub mod mailer_webhook;
 pub mod mirzam;
 pub mod mirzam_backfill;
 pub mod mirzam_sync;
+pub mod organizations;
 pub mod outbound;
 pub mod password_breach;
 pub mod provider_status;
@@ -95,6 +96,7 @@ pub use dunite_mailer::{
 pub use mailer_webhook::{
     ingest_feedback, verify_signature, FeedbackEvent, FeedbackOutcome, SIGNATURE_HEADER,
 };
+pub use organizations::{OrganizationService, TeamService};
 pub use stripe::{
     classify_probe, stripe_config_from_db_model, stripe_err, stripe_err_for,
     stripe_settings_from_db_model, unconfigured_stripe_config, ProbeStatus, StripeConfig,
