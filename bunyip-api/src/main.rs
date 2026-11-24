@@ -394,6 +394,13 @@ async fn main() -> anyhow::Result<()> {
     // migration for a self-hoster whose releases live elsewhere.
     upsert_application_release_notes_urls(&pool).await?;
 
+    // BUNYIP-862 second slice: the hosted-application `subdomain` column
+    // (migrations 20260603000020 / 20260604000010 seed 'msp' / 'drillmark',
+    // both a8n.systems defaults). Overwrite from env when set; otherwise NULL
+    // the row when it still matches the a8n seed, so a fresh self-hoster boots
+    // with no bogus launch tile linking to someone else's host.
+    upsert_hosted_application_subdomains(&pool).await?;
+
     // Test database connection
     // SPEC-9.4.14: post-reconcile health check
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
@@ -2257,6 +2264,81 @@ async fn upsert_application_release_notes_urls(pool: &sqlx::PgPool) -> anyhow::R
                 release_notes_url = %url,
                 "applications.release_notes_url reconciled from environment"
             );
+        }
+    }
+    Ok(())
+}
+
+/// BUNYIP-862 second slice: `applications.subdomain` for the two hosted apps
+/// (Mokosh and Drillmark) is set per environment from `MOKOSH_SUBDOMAIN` /
+/// `DRILLMARK_SUBDOMAIN`. When the env var is unset AND the stored subdomain
+/// still matches the migration's a8n-specific seed, the column is set to
+/// NULL: a fresh self-hoster boots with no launch tile linking to a bogus
+/// host. An admin-edited value (anything other than the seed) is left alone.
+///
+/// The seed pair is `('msp', 'drillmark')`, from migrations
+/// `20260603000020_seed_mokosh_hosted_application.sql` and
+/// `20260604000010_seed_drillmark_hosted_application.sql`.
+async fn upsert_hosted_application_subdomains(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    // (slug, env var, seed value the migration wrote)
+    for (slug, env_var, seed) in [
+        ("mokosh", "MOKOSH_SUBDOMAIN", "msp"),
+        ("drillmark", "DRILLMARK_SUBDOMAIN", "drillmark"),
+    ] {
+        match secret_env(env_var) {
+            Some(value) => {
+                let rows = sqlx::query(
+                    r#"
+                    UPDATE applications
+                       SET subdomain = $1
+                     WHERE slug = $2
+                    "#,
+                )
+                .bind(&value)
+                .bind(slug)
+                .execute(pool)
+                .await?
+                .rows_affected();
+                if rows == 0 {
+                    tracing::warn!(
+                        slug,
+                        env_var,
+                        "no applications row matched; subdomain left at its \
+                         migration-seeded default. Expected the hosted-application \
+                         seed migration to have run first."
+                    );
+                } else {
+                    info!(
+                        slug,
+                        subdomain = %value,
+                        "applications.subdomain reconciled from environment"
+                    );
+                }
+            }
+            None => {
+                // Only clear the a8n-specific seed, never an admin's edit.
+                let rows = sqlx::query(
+                    r#"
+                    UPDATE applications
+                       SET subdomain = NULL
+                     WHERE slug = $1 AND subdomain = $2
+                    "#,
+                )
+                .bind(slug)
+                .bind(seed)
+                .execute(pool)
+                .await?
+                .rows_affected();
+                if rows > 0 {
+                    info!(
+                        slug,
+                        seed,
+                        "applications.subdomain cleared from the a8n-specific \
+                         seed (BUNYIP-862); the launch tile is invisible until \
+                         an admin or an env var sets a real subdomain"
+                    );
+                }
+            }
         }
     }
     Ok(())

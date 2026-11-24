@@ -53,6 +53,6 @@ A rotation of a client's token (the caller's credential) is done from the client
 
 ## Audit
 
-Every `GET /v1/host/secrets/*` lands in the audit log with the caller client id, the requested key, and the outcome. A `403` is as auditable as a `200`; both ride through the same log site.
+Every `GET /v1/host/secrets/*` request goes to the application log, not the audit log. A served read logs at INFO, keyed by the calling client and the secret name. A rejected credential or an unentitled key logs at WARN. A key this build does not serve (an operator typo in `allowed_secret_keys`) logs at ERROR. A key that is allow-listed and declared but has no value set yet is not logged at all; the caller only sees the 404.
 
-An operator who wants to answer "who fetched this key in the last day" opens the Audit page, filters by the key name under `q`, and reads the result.
+An operator who wants to answer "who fetched this key in the last day" greps the application log for the client id or key name; the Audit page does not cover this endpoint.
