@@ -145,6 +145,17 @@
     if (window.console && console[level]) console[level]('bunyip: ' + what, e || '');
   };
 
+  // An htmx partial-swap endpoint replaces a fragment in place
+  // and never reloads, so the ?toast_ok=/?toast_err= drain below (which only
+  // runs once, on page load) never sees it. Those handlers instead send an
+  // `HX-Trigger: {"bunyip-toast":{"kind":"success","message":"..."}}` response
+  // header; htmx dispatches the named event on the element that made the
+  // request, and it bubbles, so one listener on `document` catches every one.
+  document.addEventListener('bunyip-toast', function (e) {
+    var detail = e.detail || {};
+    window.bunyipToast(detail.message, detail.kind);
+  });
+
   // SPEC-11.37.7, SPEC-11.37.8
   // Drain ?toast_ok= / ?toast_err= so a handler can surface a confirmation via
   // a 302 (`Location: /settings?toast_ok=Email%20updated`). The params are

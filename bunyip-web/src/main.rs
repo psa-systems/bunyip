@@ -255,15 +255,15 @@ async fn main() {
             axum::routing::post(handlers::organizations::create_team),
         )
         .route(
-            "/organizations/teams/{id}",
+            "/organizations/teams/:id",
             axum::routing::delete(handlers::organizations::delete_team),
         )
         .route(
-            "/organizations/teams/{id}/members",
+            "/organizations/teams/:id/members",
             axum::routing::post(handlers::organizations::add_team_member),
         )
         .route(
-            "/organizations/teams/{tid}/members/{uid}",
+            "/organizations/teams/:tid/members/:uid",
             axum::routing::put(handlers::organizations::update_team_member_role)
                 .delete(handlers::organizations::remove_team_member),
         )

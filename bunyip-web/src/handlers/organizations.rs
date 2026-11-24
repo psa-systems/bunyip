@@ -17,7 +17,7 @@ use crate::api::organizations::{OrganizationResponse, TeamMemberResponse, TeamRe
 use crate::handlers::{dashboard_input, dashboard_response, guard};
 use crate::views::layout::orgs_enabled;
 use crate::views::ui::empty_state;
-use crate::web::{html_cookies, AppState};
+use crate::web::{html_cookies_toast, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct OrgNameForm {
@@ -322,12 +322,13 @@ pub async fn create_my_organization(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::create_my_organization(&st.api, cookie, &body.name).await;
+    let result = orgs_api::create_my_organization(&st.api, cookie, &body.name).await;
     let (org, teams, members) = fetch_state(&st, cookie).await;
-    html_cookies(
-        organizations_root(org.as_ref(), &teams, &members),
-        &c.set_cookies,
-    )
+    let markup = organizations_root(org.as_ref(), &teams, &members);
+    match result {
+        Ok(_) => html_cookies_toast(markup, &c.set_cookies, "success", "Organization created"),
+        Err(e) => html_cookies_toast(markup, &c.set_cookies, "error", &e.user_message()),
+    }
 }
 
 /// PUT /organizations/name: rename the caller's organization. Replaces the
@@ -344,15 +345,22 @@ pub async fn update_my_organization(
     let cookie = c.forward.as_deref();
     let renamed = orgs_api::update_my_organization(&st.api, cookie, &body.name).await;
     match renamed {
-        Ok(org) => html_cookies(org_card(&org), &c.set_cookies),
-        Err(_) => {
+        Ok(org) => html_cookies_toast(
+            org_card(&org),
+            &c.set_cookies,
+            "success",
+            "Organization renamed",
+        ),
+        Err(e) => {
             let (org, _, _) = fetch_state(&st, cookie).await;
-            html_cookies(
+            html_cookies_toast(
                 match org {
                     Some(o) => org_card(&o),
                     None => create_org_card(),
                 },
                 &c.set_cookies,
+                "error",
+                &e.user_message(),
             )
         }
     }
@@ -370,9 +378,13 @@ pub async fn create_team(
     };
     let cookie = c.forward.as_deref();
     let desc = body.description.as_deref().filter(|s| !s.is_empty());
-    let _ = orgs_api::create_team(&st.api, cookie, &body.name, desc).await;
+    let result = orgs_api::create_team(&st.api, cookie, &body.name, desc).await;
     let (_, teams, members) = fetch_state(&st, cookie).await;
-    html_cookies(teams_section(&teams, &members), &c.set_cookies)
+    let markup = teams_section(&teams, &members);
+    match result {
+        Ok(_) => html_cookies_toast(markup, &c.set_cookies, "success", "Team created"),
+        Err(e) => html_cookies_toast(markup, &c.set_cookies, "error", &e.user_message()),
+    }
 }
 
 /// DELETE /organizations/teams/{id}: swap-out an empty string replaces the
@@ -387,8 +399,19 @@ pub async fn delete_team(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::delete_team(&st.api, cookie, &id).await;
-    html_cookies(PreEscaped(String::new()), &c.set_cookies)
+    match orgs_api::delete_team(&st.api, cookie, &id).await {
+        Ok(()) => html_cookies_toast(
+            PreEscaped(String::new()),
+            &c.set_cookies,
+            "success",
+            "Team deleted",
+        ),
+        // The team was not removed, so re-render its current row instead of
+        // blanking a card that a failed delete never actually took down.
+        Err(e) => {
+            render_team_row(&st, cookie, &c.set_cookies, &id, "error", &e.user_message()).await
+        }
+    }
 }
 
 /// POST /organizations/teams/{id}/members: add member, replaces the team row.
@@ -404,8 +427,13 @@ pub async fn add_team_member(
     };
     let cookie = c.forward.as_deref();
     let role = body.role.as_deref().filter(|s| !s.is_empty());
-    let _ = orgs_api::add_team_member(&st.api, cookie, &team_id, &body.bunyip_user_id, role).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let result =
+        orgs_api::add_team_member(&st.api, cookie, &team_id, &body.bunyip_user_id, role).await;
+    let (kind, message) = match &result {
+        Ok(_) => ("success", "Member added".to_string()),
+        Err(e) => ("error", e.user_message()),
+    };
+    render_team_row(&st, cookie, &c.set_cookies, &team_id, kind, &message).await
 }
 
 /// DELETE /organizations/teams/{tid}/members/{uid}: remove member, replaces team row.
@@ -419,8 +447,12 @@ pub async fn remove_team_member(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::remove_team_member(&st.api, cookie, &team_id, &user_id).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let result = orgs_api::remove_team_member(&st.api, cookie, &team_id, &user_id).await;
+    let (kind, message) = match &result {
+        Ok(_) => ("success", "Member removed".to_string()),
+        Err(e) => ("error", e.user_message()),
+    };
+    render_team_row(&st, cookie, &c.set_cookies, &team_id, kind, &message).await
 }
 
 /// PUT /organizations/teams/{tid}/members/{uid}/role: update member role.
@@ -435,9 +467,13 @@ pub async fn update_team_member_role(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ =
+    let result =
         orgs_api::update_team_member_role(&st.api, cookie, &team_id, &user_id, &body.role).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let (kind, message) = match &result {
+        Ok(_) => ("success", "Role updated".to_string()),
+        Err(e) => ("error", e.user_message()),
+    };
+    render_team_row(&st, cookie, &c.set_cookies, &team_id, kind, &message).await
 }
 
 async fn render_team_row(
@@ -445,17 +481,19 @@ async fn render_team_row(
     cookie: Option<&str>,
     set_cookies: &[String],
     team_id: &str,
+    kind: &str,
+    message: &str,
 ) -> Response {
     let teams = orgs_api::list_teams(&st.api, cookie)
         .await
         .unwrap_or_default();
     let Some(team) = teams.into_iter().find(|t| t.id == team_id) else {
-        return html_cookies(PreEscaped(String::new()), set_cookies);
+        return html_cookies_toast(PreEscaped(String::new()), set_cookies, kind, message);
     };
     let members = orgs_api::list_team_members(&st.api, cookie, team_id)
         .await
         .unwrap_or_default();
-    html_cookies(team_row(&team, &members), set_cookies)
+    html_cookies_toast(team_row(&team, &members), set_cookies, kind, message)
 }
 
 #[cfg(test)]
@@ -539,5 +577,316 @@ mod tests {
         let markup = organizations_content().into_string();
         assert!(markup.contains("Organization"));
         assert!(markup.contains("Administer the organization you own"));
+    }
+}
+
+// Each of the seven mutating handlers has to surface an
+// `HX-Trigger` toast on both arms, not just build without error. Routes
+// against a recording stand-in for bunyip-api (the pattern dashboard.rs's
+// `twofa_setup_flow_tests` already uses), toggled `ok` to pick which arm each
+// write call takes; the read endpoints a handler re-fetches after mutating
+// (`GET /organization`, `GET .../teams`, `GET .../teams/{id}/members`) always
+// succeed, so only the mutation itself decides success or failure.
+#[cfg(test)]
+mod toast_tests {
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode, Uri};
+    use axum::routing::{delete, post, put};
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+
+    use super::*;
+    use crate::feature_flags::FLAG_LOCK;
+    use crate::views::layout::install_orgs_enabled;
+    use crate::web::AppState;
+
+    /// Serves `/v1/users/me` plus the organization/team/member surface. Every
+    /// GET succeeds; every mutating call answers `ok` (success) or a 422 with
+    /// `MOCK_FAIL_MESSAGE` (failure).
+    const MOCK_FAIL_MESSAGE: &str = "Simulated failure";
+
+    async fn mock_api(ok: bool) -> String {
+        let router = Router::new().fallback(move |method: Method, uri: Uri| async move {
+            let path = uri.path();
+            let fail = || {
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(json!({
+                        "success": false,
+                        "error": { "code": "VALIDATION_ERROR", "message": MOCK_FAIL_MESSAGE }
+                    })),
+                )
+            };
+            if path == "/v1/users/me" {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "data": {
+                        "id": "u1",
+                        "email": "owner@example.org",
+                        "role": "subscriber",
+                        "email_verified": true,
+                        "two_factor_enabled": false,
+                        "first_name": "Ada",
+                        "last_name": "Lovelace"
+                    }})),
+                );
+            }
+            if path == "/v1/organization" && method == Method::GET {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "data": {
+                        "id": "org1",
+                        "name": "Acme",
+                        "owner_bunyip_user_id": "u1",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }})),
+                );
+            }
+            if path == "/v1/organization/teams" && method == Method::GET {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "data": [{
+                        "id": "t1",
+                        "organization_id": "org1",
+                        "name": "Team A",
+                        "description": Value::Null,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z"
+                    }]})),
+                );
+            }
+            if path == "/v1/organization/teams/t1/members" && method == Method::GET {
+                return (
+                    StatusCode::OK,
+                    Json(json!({ "data": [{
+                        "team_id": "t1",
+                        "bunyip_user_id": "u2",
+                        "role": "subscriber",
+                        "joined_at": "2026-01-01T00:00:00Z"
+                    }]})),
+                );
+            }
+            // Every other path is a mutation this test is driving: a team create,
+            // org rename, member add/remove, role update, etc.
+            if ok {
+                (
+                    StatusCode::OK,
+                    Json(json!({ "data": {
+                        "id": "org1",
+                        "organization_id": "org1",
+                        "name": "Acme",
+                        "owner_bunyip_user_id": "u1",
+                        "description": Value::Null,
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "team_id": "t1",
+                        "bunyip_user_id": "u2",
+                        "role": "subscriber",
+                        "joined_at": "2026-01-01T00:00:00Z"
+                    }})),
+                )
+            } else {
+                fail()
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener.local_addr().expect("the mock API has an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
+    fn state(api_url: &str) -> AppState {
+        AppState {
+            api: crate::api::Api::new(api_url),
+            ..crate::handlers::unreachable_api_state()
+        }
+    }
+
+    fn toast_header(res: &axum::response::Response) -> Value {
+        let raw = res
+            .headers()
+            .get("hx-trigger")
+            .expect("a mutating handler always sets HX-Trigger")
+            .to_str()
+            .expect("the header is valid UTF-8");
+        let parsed: Value = serde_json::from_str(raw).expect("the header is JSON");
+        parsed["bunyip-toast"].clone()
+    }
+
+    // Each #[tokio::test] gets its own dedicated thread and current-thread
+    // runtime, so no other task on this thread ever contends for FLAG_LOCK
+    // while it's held across the await below; it only needs to exclude the
+    // *other* tests' threads for the span of this request.
+    #[allow(clippy::await_holding_lock)]
+    async fn call(
+        router: Router,
+        method: &str,
+        uri: &str,
+        form_body: &str,
+    ) -> axum::response::Response {
+        let _guard = FLAG_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        install_orgs_enabled(true);
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("cookie", "access_token=mock")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from(form_body.to_string()))
+            .expect("the request builds");
+        let res = router.oneshot(req).await.expect("the router answers");
+        install_orgs_enabled(false);
+        res
+    }
+
+    #[tokio::test]
+    async fn create_my_organization_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Organization created"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route("/organizations", post(create_my_organization))
+                .with_state(state(&api_url));
+            let res = call(router, "POST", "/organizations", "name=Acme").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_my_organization_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Organization renamed"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route("/organizations/name", put(update_my_organization))
+                .with_state(state(&api_url));
+            let res = call(router, "PUT", "/organizations/name", "name=Acme2").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_team_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Team created"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route("/organizations/teams", post(create_team))
+                .with_state(state(&api_url));
+            let res = call(router, "POST", "/organizations/teams", "name=Team%20B").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_team_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Team deleted"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route("/organizations/teams/:id", delete(delete_team))
+                .with_state(state(&api_url));
+            let res = call(router, "DELETE", "/organizations/teams/t1", "").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn add_team_member_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Member added"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route("/organizations/teams/:id/members", post(add_team_member))
+                .with_state(state(&api_url));
+            let res = call(
+                router,
+                "POST",
+                "/organizations/teams/t1/members",
+                "bunyip_user_id=u2",
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn remove_team_member_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Member removed"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route(
+                    "/organizations/teams/:tid/members/:uid",
+                    delete(remove_team_member),
+                )
+                .with_state(state(&api_url));
+            let res = call(router, "DELETE", "/organizations/teams/t1/members/u2", "").await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
+    }
+
+    #[tokio::test]
+    async fn update_team_member_role_toasts_success_and_failure() {
+        for (ok, kind, message) in [
+            (true, "success", "Role updated"),
+            (false, "error", MOCK_FAIL_MESSAGE),
+        ] {
+            let api_url = mock_api(ok).await;
+            let router = Router::new()
+                .route(
+                    "/organizations/teams/:tid/members/:uid",
+                    put(update_team_member_role),
+                )
+                .with_state(state(&api_url));
+            let res = call(
+                router,
+                "PUT",
+                "/organizations/teams/t1/members/u2",
+                "role=admin",
+            )
+            .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let toast = toast_header(&res);
+            assert_eq!(toast["kind"], kind);
+            assert_eq!(toast["message"], message);
+        }
     }
 }

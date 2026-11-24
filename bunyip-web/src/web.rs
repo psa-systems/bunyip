@@ -177,6 +177,37 @@ pub fn html_cookies(markup: Markup, cookies: &[String]) -> Response {
 }
 
 // SPEC-11.2.9, SPEC-2.3.3
+/// 200 HTML response that relays refreshed cookies and carries a toast via the
+/// `HX-Trigger` response header. For htmx partial-swap endpoints
+/// that replace a fragment in place rather than redirecting, so the
+/// `?toast_ok=`/`?toast_err=` query-param convention (drained by app.js on a
+/// full navigation) has no page load to run on. `kind` is "success" or
+/// "error", matching the client's `bunyipToast` palette.
+pub fn html_cookies_toast(
+    markup: Markup,
+    cookies: &[String],
+    kind: &str,
+    message: &str,
+) -> Response {
+    let mut resp = html_cookies(markup, cookies);
+    let payload =
+        serde_json::json!({ "bunyip-toast": { "kind": kind, "message": message } }).to_string();
+    match HeaderValue::from_str(&payload) {
+        Ok(v) => {
+            resp.headers_mut()
+                .insert(axum::http::header::HeaderName::from_static("hx-trigger"), v);
+        }
+        // Mirrors redirect()'s fallback: an invalid value drops the toast
+        // rather than failing the whole response, which still carries the
+        // correct markup.
+        Err(e) => {
+            tracing::warn!(error = %e, "html_cookies_toast: payload is not a valid header value; toast dropped");
+        }
+    }
+    resp
+}
+
+// SPEC-11.2.9, SPEC-2.3.3
 /// A bare status response that relays refreshed cookies (BUNYIP-473). For
 /// fetch-driven endpoints that must not redirect (a redirect would reload and
 /// scroll the page), the client only reads `response.ok`.
