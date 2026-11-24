@@ -243,7 +243,29 @@ async fn main() {
         // SPEC-11.1.11: registered unconditionally; the feature flag is checked in the handler.
         .route(
             "/organizations",
-            get(handlers::organizations::organizations),
+            get(handlers::organizations::organizations)
+                .post(handlers::organizations::create_my_organization),
+        )
+        .route(
+            "/organizations/name",
+            axum::routing::put(handlers::organizations::update_my_organization),
+        )
+        .route(
+            "/organizations/teams",
+            axum::routing::post(handlers::organizations::create_team),
+        )
+        .route(
+            "/organizations/teams/{id}",
+            axum::routing::delete(handlers::organizations::delete_team),
+        )
+        .route(
+            "/organizations/teams/{id}/members",
+            axum::routing::post(handlers::organizations::add_team_member),
+        )
+        .route(
+            "/organizations/teams/{tid}/members/{uid}",
+            axum::routing::put(handlers::organizations::update_team_member_role)
+                .delete(handlers::organizations::remove_team_member),
         )
         .route(
             "/membership/subscribe",
