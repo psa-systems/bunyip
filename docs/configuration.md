@@ -45,8 +45,10 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 - [`BUNYIP_DOCS_URL`](#var-bunyip-docs-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_BACKCHANNEL_LOGOUT_URI`](#var-drillmark-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_RELEASE_NOTES_URL`](#var-drillmark-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`DRILLMARK_SUBDOMAIN`](#var-drillmark-subdomain) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_RELEASE_NOTES_URL`](#var-mokosh-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`MOKOSH_SUBDOMAIN`](#var-mokosh-subdomain) (Required: no) - Optional. Leave it unset to keep the default.
 
 <a id="release-v0-21-0"></a>
 
@@ -525,6 +527,10 @@ Every variable below has a working default; set it only to tune the deployment.
   `applications.release_notes_url` on the matching `applications.slug` row at boot. Unset leaves the migration-seeded
   value in place (see migration `20260713000020_add_application_release_notes_url.sql`); an admin can also clear or
   change the value via the admin applications UI without a redeploy.
+  `MOKOSH_SUBDOMAIN`, `DRILLMARK_SUBDOMAIN` (BUNYIP-862). Overwrite `applications.subdomain` on the matching slug at
+  boot. Unset clears the a8n-specific seed (`msp` / `drillmark`) so a fresh self-hoster sees no launch tile linking to
+  a bogus host; an admin edit to any other value is left alone. The dashboard tile is absent whenever the column is
+  NULL, so a self-hoster can leave both unset until their deploy points real hostnames at Mokosh and Drillmark.
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage
@@ -915,6 +921,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-drillmark-provider-status-url"></a>`DRILLMARK_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-drillmark-redirect-uris"></a>`DRILLMARK_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-drillmark-release-notes-url"></a>`DRILLMARK_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
+| <a id="var-drillmark-subdomain"></a>`DRILLMARK_SUBDOMAIN` | no | v0.22.0 | Defaulted |
 | <a id="var-dunite-argon2-max-concurrent"></a>`DUNITE_ARGON2_MAX_CONCURRENT` | no | v0.19.0 | Defaulted |
 | <a id="var-dunite-argon2-permit-timeout-secs"></a>`DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` | no | v0.19.0 | Defaulted |
 | <a id="var-email-enabled"></a>`EMAIL_ENABLED` | no | v0.2.1 | Defaulted |
@@ -949,6 +956,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-mokosh-google-client-secret"></a>`MOKOSH_GOOGLE_CLIENT_SECRET` | no | v0.21.0 | Defaulted |
 | <a id="var-mokosh-provider-status-url"></a>`MOKOSH_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-mokosh-release-notes-url"></a>`MOKOSH_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
+| <a id="var-mokosh-subdomain"></a>`MOKOSH_SUBDOMAIN` | no | v0.22.0 | Defaulted |
 | <a id="var-mokosh-webhook-url"></a>`MOKOSH_WEBHOOK_URL` | no | v0.15.0 | Feature-gating |
 | <a id="var-oci-blob-cache-dir"></a>`OCI_BLOB_CACHE_DIR` | no | v0.2.1 | Defaulted |
 | <a id="var-oci-blob-cache-max-bytes"></a>`OCI_BLOB_CACHE_MAX_BYTES` | no | v0.2.1 | Defaulted |

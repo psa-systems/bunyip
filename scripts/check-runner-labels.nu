@@ -22,7 +22,7 @@
 # and either family's LATEST), so a concurrent workflow addition cannot
 # reintroduce one.
 #
-# Four properties:
+# Three properties:
 #   1. check.yml (native cargo fmt/clippy/build/test) requests the HEAVY label.
 #   1b. no workflow requests a retired RUNS_ON_OPENSUSE_(BASE|DEV)_* label.
 #   2. no workflow installs a C toolchain, OpenSSL headers, or the browser system
@@ -127,7 +127,7 @@ def main [workflows_dir: string = ".forgejo/workflows"] {
     }
 
     if $status == 0 {
-        print "runner labels OK: native check on HEAVY, no retired label, every label annotated, no run-time install of what the image provides"
+        print "runner labels OK: native check on HEAVY, every label annotated, no run-time install of what the image provides"
     }
 
     exit $status
