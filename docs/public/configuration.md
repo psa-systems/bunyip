@@ -12,7 +12,7 @@ This page covers the environment-variable half. The admin pages describe the in-
 ## Hosting
 
 - `APP_PORT` (default `4401`) is the api listen port inside the container.
-- `BUNYIP_BIND_ADDR` (default `0.0.0.0:4400`) is the web listen address inside the container.
+- `BUNYIP_BIND_ADDR` (default `0.0.0.0:4400`) is the combined host:port the web process binds to.
 - `HOST_IP` (default `0.0.0.0`) is the api bind address.
 - `BUNYIP_API_URL` (default `http://api:4401`) is how `bunyip-web` reaches `bunyip-api` server-side.
 - `BUNYIP_API_PUBLIC_ORIGIN` is the browser-facing origin of the api, used for OIDC redirect URIs and Stripe webhooks. Required for production. Pair it with `OIDC_ISSUER` below to get the apex/subdomain split some deployments use (e.g. `bunyip.example.com` for the browser, `api.bunyip.example.com` for the issuer).
