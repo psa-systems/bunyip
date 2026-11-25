@@ -16,7 +16,7 @@ use crate::api::organizations as orgs_api;
 use crate::api::organizations::{OrganizationResponse, TeamMemberResponse, TeamResponse};
 use crate::handlers::{dashboard_input, dashboard_response, guard};
 use crate::views::layout::orgs_enabled;
-use crate::views::ui::empty_state;
+use crate::views::ui::{button_class, empty_state};
 use crate::web::{html_cookies, AppState};
 
 #[derive(Debug, Deserialize)]
@@ -60,10 +60,7 @@ fn org_card(org: &OrganizationResponse) -> Markup {
                     label class="text-sm font-medium" for="rename-name" { "Rename" }
                     input id="rename-name" name="name" required value=(org.name) class=(dashboard_input());
                 }
-                button
-                    type="submit"
-                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                { "Save" }
+                button type="submit" class=(button_class("default", "default", "")) { "Save" }
             }
         }
     }
@@ -86,10 +83,7 @@ fn create_org_card() -> Markup {
                     label class="text-sm font-medium" for="create-name" { "Name" }
                     input id="create-name" name="name" required placeholder="Acme" class=(dashboard_input());
                 }
-                button
-                    type="submit"
-                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                { "Create" }
+                button type="submit" class=(button_class("default", "default", "")) { "Create" }
             }
         }
     }
@@ -111,7 +105,7 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
                     hx-target=(format!("#team-{}", team.id))
                     hx-swap="outerHTML"
                     hx-confirm="Delete this team?"
-                    class="text-sm text-destructive hover:underline"
+                    class=(button_class("destructive", "sm", ""))
                 { "Delete" }
             }
             div class="space-y-2" {
@@ -129,7 +123,7 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
                                     hx-delete=(format!("/organizations/teams/{}/members/{}", team.id, m.bunyip_user_id))
                                     hx-target=(format!("#team-{}", team.id))
                                     hx-swap="outerHTML"
-                                    class="text-xs text-destructive hover:underline"
+                                    class=(button_class("destructive", "sm", ""))
                                 { "Remove" }
                             }
                         }
@@ -158,10 +152,7 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
                             placeholder="member"
                             class=(dashboard_input());
                     }
-                    button
-                        type="submit"
-                        class="inline-flex items-center justify-center rounded-md bg-secondary px-3 py-2 text-sm font-medium text-secondary-foreground hover:bg-secondary/90"
-                    { "Add" }
+                    button type="submit" class=(button_class("secondary", "sm", "")) { "Add" }
                 }
             }
         }
@@ -188,10 +179,7 @@ fn teams_section(teams: &[TeamResponse], members: &[(String, Vec<TeamMemberRespo
                     label class="text-sm font-medium" for="team-description" { "Description" }
                     input id="team-description" name="description" placeholder="Optional" class=(dashboard_input());
                 }
-                button
-                    type="submit"
-                    class="inline-flex items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                { "Create team" }
+                button type="submit" class=(button_class("default", "default", "")) { "Create team" }
             }
             @if teams.is_empty() {
                 (empty_state("users", "No teams yet.", None))
