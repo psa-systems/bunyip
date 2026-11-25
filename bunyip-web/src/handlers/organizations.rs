@@ -17,7 +17,7 @@ use crate::api::organizations::{OrganizationResponse, TeamMemberResponse, TeamRe
 use crate::handlers::{dashboard_input, dashboard_response, guard};
 use crate::views::layout::orgs_enabled;
 use crate::views::ui::{button_class, empty_state};
-use crate::web::{html_cookies, AppState};
+use crate::web::{html_cookies, with_toast, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct OrgNameForm {
@@ -310,12 +310,16 @@ pub async fn create_my_organization(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::create_my_organization(&st.api, cookie, &body.name).await;
+    let result = orgs_api::create_my_organization(&st.api, cookie, &body.name).await;
     let (org, teams, members) = fetch_state(&st, cookie).await;
-    html_cookies(
+    let resp = html_cookies(
         organizations_root(org.as_ref(), &teams, &members),
         &c.set_cookies,
-    )
+    );
+    match result {
+        Ok(_) => with_toast(resp, "success", "Organization created"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 /// PUT /organizations/name: rename the caller's organization. Replaces the
@@ -332,16 +336,21 @@ pub async fn update_my_organization(
     let cookie = c.forward.as_deref();
     let renamed = orgs_api::update_my_organization(&st.api, cookie, &body.name).await;
     match renamed {
-        Ok(org) => html_cookies(org_card(&org), &c.set_cookies),
-        Err(_) => {
+        Ok(org) => with_toast(
+            html_cookies(org_card(&org), &c.set_cookies),
+            "success",
+            "Organization renamed",
+        ),
+        Err(e) => {
             let (org, _, _) = fetch_state(&st, cookie).await;
-            html_cookies(
+            let resp = html_cookies(
                 match org {
                     Some(o) => org_card(&o),
                     None => create_org_card(),
                 },
                 &c.set_cookies,
-            )
+            );
+            with_toast(resp, "error", &e.user_message())
         }
     }
 }
@@ -358,9 +367,13 @@ pub async fn create_team(
     };
     let cookie = c.forward.as_deref();
     let desc = body.description.as_deref().filter(|s| !s.is_empty());
-    let _ = orgs_api::create_team(&st.api, cookie, &body.name, desc).await;
+    let result = orgs_api::create_team(&st.api, cookie, &body.name, desc).await;
     let (_, teams, members) = fetch_state(&st, cookie).await;
-    html_cookies(teams_section(&teams, &members), &c.set_cookies)
+    let resp = html_cookies(teams_section(&teams, &members), &c.set_cookies);
+    match result {
+        Ok(_) => with_toast(resp, "success", "Team created"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 /// DELETE /organizations/teams/{id}: swap-out an empty string replaces the
@@ -375,8 +388,12 @@ pub async fn delete_team(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::delete_team(&st.api, cookie, &id).await;
-    html_cookies(PreEscaped(String::new()), &c.set_cookies)
+    let result = orgs_api::delete_team(&st.api, cookie, &id).await;
+    let resp = html_cookies(PreEscaped(String::new()), &c.set_cookies);
+    match result {
+        Ok(_) => with_toast(resp, "success", "Team deleted"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 /// POST /organizations/teams/{id}/members: add member, replaces the team row.
@@ -392,8 +409,13 @@ pub async fn add_team_member(
     };
     let cookie = c.forward.as_deref();
     let role = body.role.as_deref().filter(|s| !s.is_empty());
-    let _ = orgs_api::add_team_member(&st.api, cookie, &team_id, &body.bunyip_user_id, role).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let result =
+        orgs_api::add_team_member(&st.api, cookie, &team_id, &body.bunyip_user_id, role).await;
+    let resp = render_team_row(&st, cookie, &c.set_cookies, &team_id).await;
+    match result {
+        Ok(_) => with_toast(resp, "success", "Member added"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 /// DELETE /organizations/teams/{tid}/members/{uid}: remove member, replaces team row.
@@ -407,8 +429,12 @@ pub async fn remove_team_member(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ = orgs_api::remove_team_member(&st.api, cookie, &team_id, &user_id).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let result = orgs_api::remove_team_member(&st.api, cookie, &team_id, &user_id).await;
+    let resp = render_team_row(&st, cookie, &c.set_cookies, &team_id).await;
+    match result {
+        Ok(_) => with_toast(resp, "success", "Member removed"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 /// PUT /organizations/teams/{tid}/members/{uid}/role: update member role.
@@ -423,9 +449,13 @@ pub async fn update_team_member_role(
         Err(r) => return r,
     };
     let cookie = c.forward.as_deref();
-    let _ =
+    let result =
         orgs_api::update_team_member_role(&st.api, cookie, &team_id, &user_id, &body.role).await;
-    render_team_row(&st, cookie, &c.set_cookies, &team_id).await
+    let resp = render_team_row(&st, cookie, &c.set_cookies, &team_id).await;
+    match result {
+        Ok(_) => with_toast(resp, "success", "Role updated"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
 }
 
 async fn render_team_row(
