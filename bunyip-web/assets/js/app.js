@@ -179,6 +179,17 @@
     }
   }
 
+  // An htmx partial-swap endpoint (e.g. organizations.rs) always answers 200
+  // whether the underlying mutation succeeded or failed, so it has no
+  // redirect to carry ?toast_ok=/?toast_err= on. It sends an `HX-Trigger:
+  // {"bunyip-toast":{"kind":...,"message":...}}` response header instead;
+  // htmx fires the named event on the element that made the request, and it
+  // bubbles up to <body>, where this listens.
+  document.body.addEventListener('bunyip-toast', function (e) {
+    var detail = (e && e.detail) || {};
+    if (detail.message) window.bunyipToast(detail.message, detail.kind || 'info');
+  });
+
   // SPEC-11.37.9
   // ------------------------------------------------------- OTP autosubmit --
   // BUNYIP-331: submit a 2FA form the moment its six-digit TOTP field is

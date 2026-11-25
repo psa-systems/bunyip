@@ -7,6 +7,7 @@ use url::Url;
 /// configs resolve through. The environment provider is `ENV_INVENTORY` below
 /// as it stands, so the default resolution is unchanged.
 use crate::config_providers::{ConfigProviderKind, ConfigStack, DatabaseProvider};
+use crate::errors::AppError;
 
 // SPEC-7.1.22: keep the shared file-or-env secret reader resolvable here
 /// The file-or-env secret reader now lives in dunite-core (PSA-37), shared by
@@ -475,6 +476,86 @@ pub struct EmailConfig {
     pub imap_mailbox: String,
     pub imap_enabled: bool,
     pub imap_poll_secs: u64,
+}
+
+/// BUNYIP-1096: operator-set secondary SMTP transport the email service tries
+/// when the primary relay fails. Deliberately OUT of `EmailConfig` + its admin
+/// row: this is an outage knob, not something the admin page edits. Set once
+/// at boot from `SMTP_FALLBACK_*` env vars; `None` means "no fallback, keep
+/// today's single-transport behaviour".
+///
+/// Loaded from env only. The password reads `SMTP_FALLBACK_PASSWORD` or, when
+/// unset, `SMTP_FALLBACK_PASSWORD_FILE`, mirroring the `{NAME}_FILE` convention
+/// the governed-secret pipeline uses in environment mode. It is not a full
+/// governed secret (no DB column, no Infisical path), because the ticket calls
+/// out fallback as an operator-only knob.
+#[derive(Debug, Clone)]
+pub struct SmtpFallbackConfig {
+    pub smtp_host: String,
+    pub smtp_port: u16,
+    pub smtp_tls: SmtpTls,
+    pub smtp_username: String,
+    pub smtp_password: String,
+    pub smtp_ehlo_name: Option<String>,
+}
+
+impl SmtpFallbackConfig {
+    /// Load the fallback transport from `SMTP_FALLBACK_*` env vars. Returns
+    /// `Ok(None)` when `SMTP_FALLBACK_HOST` is unset or empty, which is how
+    /// a deployment opts out of the fallback.
+    pub fn from_env() -> Result<Option<Self>, AppError> {
+        let host = match std::env::var("SMTP_FALLBACK_HOST") {
+            Ok(h) if !h.trim().is_empty() => h.trim().to_string(),
+            _ => return Ok(None),
+        };
+        let port: u16 = match std::env::var("SMTP_FALLBACK_PORT") {
+            Ok(s) => s.trim().parse().map_err(|e| {
+                AppError::internal(format!("SMTP_FALLBACK_PORT is not a port: {e}"))
+            })?,
+            Err(_) => 587,
+        };
+        let smtp_tls = match std::env::var("SMTP_FALLBACK_TLS")
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some("implicit") => SmtpTls::Implicit,
+            Some("starttls") | None => SmtpTls::Starttls,
+            Some(other) => {
+                return Err(AppError::internal(format!(
+                    "SMTP_FALLBACK_TLS must be `implicit` or `starttls`, not `{other}`"
+                )));
+            }
+        };
+        let smtp_username = std::env::var("SMTP_FALLBACK_USERNAME").unwrap_or_default();
+        let smtp_password = match std::env::var("SMTP_FALLBACK_PASSWORD") {
+            Ok(p) if !p.is_empty() => p,
+            _ => match std::env::var("SMTP_FALLBACK_PASSWORD_FILE") {
+                Ok(path) if !path.trim().is_empty() => std::fs::read_to_string(path.trim())
+                    .map_err(|e| {
+                        AppError::internal(format!(
+                            "SMTP_FALLBACK_PASSWORD_FILE could not be read: {e}"
+                        ))
+                    })?
+                    .trim_end()
+                    .to_string(),
+                _ => String::new(),
+            },
+        };
+        let smtp_ehlo_name = std::env::var("SMTP_FALLBACK_EHLO_NAME")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        Ok(Some(Self {
+            smtp_host: host,
+            smtp_port: port,
+            smtp_tls,
+            smtp_username,
+            smtp_password,
+            smtp_ehlo_name,
+        }))
+    }
 }
 
 impl EmailConfig {
@@ -2347,6 +2428,15 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
         "ISO alpha-2 countries refused sign-in, comma separated, applied after COUNTRY_ALLOW \
          (BUNYIP-581)",
     ),
+    // BUNYIP-1089: how often the URL health worker probes every hosted
+    // application entry. Clamped to [60, 3600] seconds by the worker. The
+    // `url_health_enabled` feature toggle is the on/off switch; this value is
+    // a cadence, not a gate.
+    EnvVarSpec::defaulted(
+        "URL_HEALTH_CHECK_INTERVAL_SECS",
+        "cadence of the application URL health probe, in seconds (default 300, clamped 60-3600). \
+         The url_health_enabled feature toggle is the on/off switch (BUNYIP-1089).",
+    ),
     // BUNYIP-561: demoted to a bootstrap default. The product name is the
     // admin-managed `branding.brand_name`; this value is used only while that
     // row is still empty, i.e. a database that has never been branded.
@@ -2592,6 +2682,34 @@ static WRITTEN_ENV_INVENTORY: &[EnvVarSpec] = &[
     EnvVarSpec::defaulted(
         "DRILLMARK_SUBDOMAIN",
         "subdomain of the Drillmark launch tile; written to `applications.subdomain` at boot. Empty clears the a8n-specific `drillmark` seed so a self-hoster's dashboard shows no bogus launch link (BUNYIP-862)",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_HOST",
+        "secondary SMTP relay host tried when the primary fails to deliver (BUNYIP-1096); empty disables the fallback",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_PORT",
+        "secondary SMTP relay port (BUNYIP-1096); default 587",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_TLS",
+        "secondary SMTP relay TLS mode: `implicit` or `starttls` (BUNYIP-1096); default starttls",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_USERNAME",
+        "secondary SMTP relay username (BUNYIP-1096); empty for a relay that needs no AUTH",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_PASSWORD",
+        "secondary SMTP relay password (BUNYIP-1096). Prefer the `SMTP_FALLBACK_PASSWORD_FILE` form, which reads the password from a file (mirroring the primary's governed-secret file-layer convention); the plain env var is read only when the file form is unset",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_PASSWORD_FILE",
+        "path to a file containing the secondary SMTP relay password (BUNYIP-1096); preferred over `SMTP_FALLBACK_PASSWORD` for secret-mount deployments",
+    ),
+    EnvVarSpec::defaulted(
+        "SMTP_FALLBACK_EHLO_NAME",
+        "EHLO/HELO name announced to the secondary relay (BUNYIP-1096); empty falls back to `SMTP_FALLBACK_HOST`",
     ),
     EnvVarSpec::defaulted(
         "CSP_CONNECT_SRC",

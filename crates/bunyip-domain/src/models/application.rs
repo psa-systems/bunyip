@@ -18,6 +18,11 @@ pub struct Application {
     pub description: Option<String>,
     pub icon_url: Option<String>,
     pub is_active: bool,
+    /// BUNYIP-797: coming-soon marker. Rendered as a pill on the dashboard tile
+    /// and keeps the entry visible even without a reachability signal (the
+    /// periodic health check is a separate ticket). Defaults FALSE so existing
+    /// entries stay unchanged.
+    pub coming_soon: bool,
     /// Whether this is a hosted app (appears as a hub launch tile) or a
     /// catalog-only distribution product (downloads / OCI registry only).
     pub is_hosted: bool,
@@ -75,6 +80,10 @@ pub struct ApplicationResponse {
     pub is_accessible: bool,
     pub maintenance_mode: bool,
     pub maintenance_message: Option<String>,
+    /// BUNYIP-797: coming-soon marker. When TRUE the web layer renders a
+    /// coming-soon pill and the tile is launch-disabled.
+    #[serde(default)]
+    pub coming_soon: bool,
     /// Group membership (BUNYIP-100), so the web layer can group apps under
     /// their group heading. `None` = ungrouped.
     pub group_id: Option<Uuid>,
@@ -94,13 +103,17 @@ impl ApplicationResponse {
             source_code_url: app.source_code_url,
             release_notes_url: app.release_notes_url,
             subdomain: app.subdomain,
-            is_accessible: has_access && app.is_active && !app.maintenance_mode,
+            // BUNYIP-797: a coming-soon tile is not launchable even though it
+            // stays visible. Keeping the accessibility branch narrow so the
+            // existing is_active + maintenance callers don't widen.
+            is_accessible: has_access && app.is_active && !app.maintenance_mode && !app.coming_soon,
             maintenance_mode: app.maintenance_mode,
             maintenance_message: if app.maintenance_mode {
                 app.maintenance_message
             } else {
                 None
             },
+            coming_soon: app.coming_soon,
             group_id: app.group_id,
         }
     }
@@ -372,6 +385,9 @@ pub struct CreateApplication {
     /// Whether this is a hosted app (hub launch tile) or a catalog-only
     /// distribution product. Defaults to hosted (the DB column default).
     pub is_hosted: Option<bool>,
+    /// BUNYIP-797: start the entry as coming-soon. Defaults to the DB column
+    /// default (FALSE) when omitted.
+    pub coming_soon: Option<bool>,
     pub maintenance_message: Option<String>,
     // Distribution config (all optional): Forgejo download coordinates and/or
     // OCI image coordinates, so a product can be fully created in one call.
@@ -441,6 +457,8 @@ pub struct UpdateApplication {
     /// Whether this is a hosted app (hub launch tile) or a catalog-only
     /// distribution product.
     pub is_hosted: Option<bool>,
+    /// BUNYIP-797: coming-soon toggle. `None` keeps the current value.
+    pub coming_soon: Option<bool>,
     pub maintenance_mode: Option<bool>,
     pub maintenance_message: Option<String>,
     pub webhook_url: Option<String>,
@@ -528,6 +546,7 @@ mod tests {
             description: Some("A test application".to_string()),
             icon_url: None,
             is_active: true,
+            coming_soon: false,
             is_hosted: true,
             requires_entitlement: false,
             maintenance_mode: false,
@@ -628,6 +647,30 @@ mod tests {
             response.maintenance_message.as_deref(),
             Some("Under maintenance")
         );
+    }
+
+    /// BUNYIP-797: a coming-soon application is not accessible even when every
+    /// other precondition would allow it, and the response carries the flag so
+    /// the web layer can render the pill without inferring from maintenance.
+    #[test]
+    fn application_response_coming_soon_is_not_accessible_but_is_visible() {
+        let mut app = test_app();
+        app.coming_soon = true;
+        let response = ApplicationResponse::from_application(app, true);
+        assert!(!response.is_accessible, "coming-soon disables launching");
+        assert!(response.coming_soon, "flag reaches the web layer");
+        assert!(!response.maintenance_mode, "coming-soon is not maintenance");
+    }
+
+    /// Toggle-off: the accessibility branch stays truthful when coming-soon is
+    /// FALSE, so the flip from off to on is what changes the response (not
+    /// something else).
+    #[test]
+    fn application_response_not_coming_soon_keeps_access() {
+        let app = test_app();
+        let response = ApplicationResponse::from_application(app, true);
+        assert!(response.is_accessible);
+        assert!(!response.coming_soon);
     }
 
     #[test]

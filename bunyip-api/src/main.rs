@@ -521,6 +521,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // BUNYIP-1089: the URL health worker. Flag-gated inside the worker on
+    // `url_health_enabled`; off means the ticker fires and does nothing.
+    {
+        let interval_secs = std::env::var("URL_HEALTH_CHECK_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(bunyip_domain::services::url_health::DEFAULT_CHECK_INTERVAL_SECS);
+        let policy = bunyip_domain::services::url_health::WorkerPolicy {
+            interval: std::time::Duration::from_secs(
+                bunyip_domain::services::url_health::clamp_interval(interval_secs),
+            ),
+            ..bunyip_domain::services::url_health::WorkerPolicy::default()
+        };
+        bunyip_domain::services::url_health::spawn(
+            pool.clone(),
+            Arc::clone(&feature_toggles),
+            policy,
+        );
+    }
+
     // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
     // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
@@ -664,18 +684,32 @@ async fn main() -> anyhow::Result<()> {
     // Dev / staging keep the new_dev() fallback so a local box without a
     // real SMTP still boots.
     let is_prod = config.is_production();
+    // BUNYIP-1096: load the optional operator-set secondary SMTP transport
+    // from `SMTP_FALLBACK_*`. `None` is the normal "no fallback configured"
+    // state and keeps today's single-transport behaviour.
+    let smtp_fallback = bunyip_domain::config::SmtpFallbackConfig::from_env().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "SMTP_FALLBACK_* config could not be loaded; running without a fallback relay");
+        None
+    });
+    if smtp_fallback.is_some() {
+        tracing::info!("SMTP fallback transport is configured (BUNYIP-1096)");
+    }
     // SPEC-9.7.1: suppression list guards every send path
-    let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
-        if is_prod {
-            fatal_config_error(
-                "SMTP_HOST",
-                &format!("EmailService could not be constructed in a production deployment: {e}"),
-                "Review the SMTP credentials on the admin Email page or in the api environment.",
-            );
-        }
-        tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
-        EmailService::new_dev()
-    }));
+    let email_service = Arc::new(
+        EmailService::new_with_fallback(email_config, smtp_fallback).unwrap_or_else(|e| {
+            if is_prod {
+                fatal_config_error(
+                    "SMTP_HOST",
+                    &format!(
+                        "EmailService could not be constructed in a production deployment: {e}"
+                    ),
+                    "Review the SMTP credentials on the admin Email page or in the api environment.",
+                );
+            }
+            tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
+            EmailService::new_dev()
+        }),
+    );
 
     // BUNYIP-561: subjects and the template `app_name` follow the branding
     // record from here on, so an admin rename lands without a restart.
