@@ -38,7 +38,7 @@ This page covers the environment-variable half. The admin pages describe the in-
 ## Email (SMTP)
 
 - `EMAIL_ENABLED` (default `false` in dev, required `true` in production).
-- `EMAIL_FROM` is the envelope sender on every piece of mail bunyip emits.
+- `SMTP_FROM` is the envelope sender on every piece of mail bunyip emits.
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME` name the relay.
 - The SMTP password is a Group-2 integration secret: it comes from the store `SECRETS_STORAGE` declares, never from the environment. See [Secrets](secrets.md).
 - `EMAIL_LOG_TOKENS` writes the magic-link URL to the api log at DEBUG. Allowed in dev; forced off in production boot.
@@ -47,7 +47,7 @@ This page covers the environment-variable half. The admin pages describe the in-
 
 - Discovery is served at `/.well-known/openid-configuration` on the api.
 - The signing keys above (`OIDC_JWT_PRIVATE_KEY_PATH`, `OIDC_JWT_ACTIVE_KID`) are the only OP-side material in the environment. Everything else (allowed scopes per client, grant types, audiences, redirect URIs) lives on `oidc_clients` rows and is edited on the admin page.
-- `OIDC_ACCESS_TOKEN_TTL` and `OIDC_REFRESH_TOKEN_TTL` cap bearer lifetimes.
+- `OIDC_ACCESS_TOKEN_TTL_SECONDS` and `OIDC_REFRESH_TOKEN_TTL_SECONDS` cap bearer lifetimes.
 
 ## Secrets storage (SECRETS_STORAGE)
 
@@ -56,13 +56,13 @@ Required; no default. One of `environment`, `database`, `infisical`. Governs whe
 ## Infisical (only when SECRETS_STORAGE=infisical)
 
 - `INFISICAL_ENABLED` turns the client on. A client that never reaches out is inert.
-- `INFISICAL_BASE_URL`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` name the project to read from.
+- `INFISICAL_ADDRESS`, `INFISICAL_PROJECT_ID`, `INFISICAL_ENVIRONMENT` name the project to read from.
 - `INFISICAL_CLIENT_ID` and the matching `INFISICAL_CLIENT_SECRET_FILE` authenticate the client.
 
 ## Rate limiting
 
-- `RATE_LIMIT_FLOOR` sets the baseline per-IP cap every api route sits under. Individual routes may add tighter per-user caps on top; the floor never raises them.
-- `RATE_LIMIT_WHITELIST` is a CIDR list that bypasses the floor. Reserved for trusted internal callers, not for broad allow-listing.
+- The baseline per-IP cap every api route sits under is the fixed constant `RateLimitConfig::API_UNAUTH`; there is no environment override. Individual routes may add tighter per-user caps on top; the floor never raises them.
+- The whitelist that bypasses the floor is not an environment variable: it is the admin-managed `rate_limit_whitelist` table, edited on the admin Rate Limits page.
 
 ## Feature flags
 
@@ -70,8 +70,7 @@ Feature flags are `features` rows in the database, not environment variables. A 
 
 ## IP geolocation
 
-- `IP2LOCATION_LITE_PATH` points at the `IP2LOCATION-LITE-DB` binary used by the geolocation enrichment. Not required; absent means country is never resolved.
-- `IP_POLICY_PATH` points at an optional allow/block ruleset for IP-level decisions ahead of the rate limit.
+- `IP2LOCATION_DB_PATH` points at the `IP2LOCATION-LITE-DB` binary used by the geolocation enrichment. Not required; absent means country is never resolved.
 
 ## What is not an environment variable
 
