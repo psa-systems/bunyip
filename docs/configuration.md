@@ -45,8 +45,18 @@ Configuration changes in the last 5 releases, newest first, rendered by `just co
 - [`BUNYIP_DOCS_URL`](#var-bunyip-docs-url) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_BACKCHANNEL_LOGOUT_URI`](#var-drillmark-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`DRILLMARK_RELEASE_NOTES_URL`](#var-drillmark-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`DRILLMARK_SUBDOMAIN`](#var-drillmark-subdomain) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_APPS_BACKCHANNEL_LOGOUT_URI`](#var-mokosh-apps-backchannel-logout-uri) (Required: no) - Optional. Leave it unset to keep the default.
 - [`MOKOSH_RELEASE_NOTES_URL`](#var-mokosh-release-notes-url) (Required: no) - Optional. Leave it unset to keep the default.
+- [`MOKOSH_SUBDOMAIN`](#var-mokosh-subdomain) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_HOST`](#var-smtp-fallback-host) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PORT`](#var-smtp-fallback-port) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_TLS`](#var-smtp-fallback-tls) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_USERNAME`](#var-smtp-fallback-username) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PASSWORD`](#var-smtp-fallback-password) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_PASSWORD_FILE`](#var-smtp-fallback-password-file) (Required: no) - Optional. Leave it unset to keep the default.
+- [`SMTP_FALLBACK_EHLO_NAME`](#var-smtp-fallback-ehlo-name) (Required: no) - Optional. Leave it unset to keep the default.
+- [`URL_HEALTH_CHECK_INTERVAL_SECS`](#var-url-health-check-interval-secs) (Required: no) - Optional. Leave it unset to keep the default.
 
 <a id="release-v0-21-0"></a>
 
@@ -461,6 +471,12 @@ Every variable below has a working default; set it only to tune the deployment.
   `BUNYIP_WEB_ORIGIN`, `COOKIE_DOMAIN`, `BUNYIP_COOKIE_SHARED_DOMAIN`.
 - **At-rest keys**: `APP_ENCRYPTION_KEY_PREV`, `APP_KEY_VERSION` (see [
   `encryption-key-rotation.md`](encryption-key-rotation.md)).
+- **SMTP fallback transport (BUNYIP-1096)**: `SMTP_FALLBACK_HOST`, `SMTP_FALLBACK_PORT`, `SMTP_FALLBACK_TLS`,
+  `SMTP_FALLBACK_USERNAME`, `SMTP_FALLBACK_PASSWORD` (or `SMTP_FALLBACK_PASSWORD_FILE` for a secret-mount deployment),
+  `SMTP_FALLBACK_EHLO_NAME`. An operator-only secondary SMTP relay the email service tries when the primary fails to
+  deliver. `SMTP_FALLBACK_HOST` unset keeps today's single-transport behaviour. No admin-page surface and no DB row; set
+  once at boot, not touched by admin saves of the email settings. The error returned when both relays fail names the
+  fallback (last tried); the primary's error is in the log line BUNYIP-1096 adds at `warn!`.
 - **Email**: `EMAIL_ENABLED`, `EMAIL_LOG_TOKENS`, `SMTP_PORT`, `SMTP_TLS`,
   `SMTP_USERNAME`, `SMTP_EHLO_NAME`, `SMTP_FROM`, `SUPPORT_INBOX_EMAIL` (Reply-To for system mail: the monitored support
   inbox replies are ingested into, BUNYIP-571), and the inbound IMAP poller settings `SUPPORT_IMAP_HOST`,
@@ -473,6 +489,9 @@ Every variable below has a working default; set it only to tune the deployment.
   `LOGIN_APPROVAL_ENABLED`, `SIGNUP_BOT_GUARD_ENABLED`, `COUNTRY_ALLOW`, `COUNTRY_DENY`. The last four are also the
   [admin System page's settings](#the-application-level-deployment-settings-and-the-admin-system-page-bunyip-579580622644),
   so a file in the layer directory overrides the variable of the same name.
+- **URL health worker (BUNYIP-1089)**: `URL_HEALTH_CHECK_INTERVAL_SECS` - cadence in seconds for the application URL
+  health worker; default 300, clamped to [60, 3600]. The `url_health_enabled` feature toggle is the on/off switch;
+  this value is the cadence.
 - **Rate limits**: `RATE_LIMIT_{ACTION}_MAX_REQUESTS` and `RATE_LIMIT_{ACTION}_WINDOW_SECONDS`, one pair per action
   (`crates/bunyip-domain/src/models/rate_limit.rs`). They are declared configuration keys, generated from the preset
   list, and resolve in the [declared provider order](#configuration-providers-and-their-precedence-bunyip-643644): the
@@ -525,6 +544,10 @@ Every variable below has a working default; set it only to tune the deployment.
   `applications.release_notes_url` on the matching `applications.slug` row at boot. Unset leaves the migration-seeded
   value in place (see migration `20260713000020_add_application_release_notes_url.sql`); an admin can also clear or
   change the value via the admin applications UI without a redeploy.
+  `MOKOSH_SUBDOMAIN`, `DRILLMARK_SUBDOMAIN` (BUNYIP-862). Overwrite `applications.subdomain` on the matching slug at
+  boot. Unset clears the a8n-specific seed (`msp` / `drillmark`) so a fresh self-hoster sees no launch tile linking to
+  a bogus host; an admin edit to any other value is left alone. The dashboard tile is absent whenever the column is
+  NULL, so a self-hoster can leave both unset until their deploy points real hostnames at Mokosh and Drillmark.
 - **Non-production tooling**: `BUNYIP_E2E_BOOTSTRAP_ALLOW`, `BUNYIP_E2E_TOTP_SECRET`, `BUNYIP_SEED_ALLOW`.
 
 ## Secret files and compose coverage
@@ -915,6 +938,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-drillmark-provider-status-url"></a>`DRILLMARK_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-drillmark-redirect-uris"></a>`DRILLMARK_REDIRECT_URIS` | no | v0.15.0 | Feature-gating |
 | <a id="var-drillmark-release-notes-url"></a>`DRILLMARK_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
+| <a id="var-drillmark-subdomain"></a>`DRILLMARK_SUBDOMAIN` | no | v0.22.0 | Defaulted |
 | <a id="var-dunite-argon2-max-concurrent"></a>`DUNITE_ARGON2_MAX_CONCURRENT` | no | v0.19.0 | Defaulted |
 | <a id="var-dunite-argon2-permit-timeout-secs"></a>`DUNITE_ARGON2_PERMIT_TIMEOUT_SECS` | no | v0.19.0 | Defaulted |
 | <a id="var-email-enabled"></a>`EMAIL_ENABLED` | no | v0.2.1 | Defaulted |
@@ -949,6 +973,7 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-mokosh-google-client-secret"></a>`MOKOSH_GOOGLE_CLIENT_SECRET` | no | v0.21.0 | Defaulted |
 | <a id="var-mokosh-provider-status-url"></a>`MOKOSH_PROVIDER_STATUS_URL` | no | v0.17.0 | Feature-gating |
 | <a id="var-mokosh-release-notes-url"></a>`MOKOSH_RELEASE_NOTES_URL` | no | v0.22.0 | Defaulted |
+| <a id="var-mokosh-subdomain"></a>`MOKOSH_SUBDOMAIN` | no | v0.22.0 | Defaulted |
 | <a id="var-mokosh-webhook-url"></a>`MOKOSH_WEBHOOK_URL` | no | v0.15.0 | Feature-gating |
 | <a id="var-oci-blob-cache-dir"></a>`OCI_BLOB_CACHE_DIR` | no | v0.2.1 | Defaulted |
 | <a id="var-oci-blob-cache-max-bytes"></a>`OCI_BLOB_CACHE_MAX_BYTES` | no | v0.2.1 | Defaulted |
@@ -979,6 +1004,13 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-setup-default-admin"></a>`SETUP_DEFAULT_ADMIN` | no | v0.15.0 | Feature-gating |
 | <a id="var-signup-bot-guard-enabled"></a>`SIGNUP_BOT_GUARD_ENABLED` | no | v0.8.0 | Defaulted |
 | <a id="var-smtp-ehlo-name"></a>`SMTP_EHLO_NAME` | no | v0.14.0 | Defaulted |
+| <a id="var-smtp-fallback-ehlo-name"></a>`SMTP_FALLBACK_EHLO_NAME` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-host"></a>`SMTP_FALLBACK_HOST` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-password"></a>`SMTP_FALLBACK_PASSWORD` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-password-file"></a>`SMTP_FALLBACK_PASSWORD_FILE` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-port"></a>`SMTP_FALLBACK_PORT` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-tls"></a>`SMTP_FALLBACK_TLS` | no | v0.22.0 | Defaulted |
+| <a id="var-smtp-fallback-username"></a>`SMTP_FALLBACK_USERNAME` | no | v0.22.0 | Defaulted |
 | <a id="var-smtp-from"></a>`SMTP_FROM` | no | v0.2.1 | Defaulted |
 | <a id="var-smtp-host"></a>`SMTP_HOST` | no | v0.2.1 | Feature-gating |
 | <a id="var-smtp-password"></a>`SMTP_PASSWORD` | no | v0.2.1 | Defaulted |
@@ -1000,5 +1032,6 @@ Every variable, with the release it first shipped in, rendered by `just config-d
 | <a id="var-tier-lifetime-slots"></a>`TIER_LIFETIME_SLOTS` | no | v0.2.1 | Defaulted |
 | <a id="var-tier-standard-trial-days"></a>`TIER_STANDARD_TRIAL_DAYS` | no | v0.2.1 | Defaulted |
 | <a id="var-trusted-proxy-cidr"></a>`TRUSTED_PROXY_CIDR` | no | v0.3.0 | Feature-gating |
+| <a id="var-url-health-check-interval-secs"></a>`URL_HEALTH_CHECK_INTERVAL_SECS` | no | v0.22.0 | Defaulted |
 
 <!-- END GENERATED: all-variables -->

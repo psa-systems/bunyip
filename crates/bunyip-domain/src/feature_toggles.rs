@@ -16,12 +16,20 @@ pub enum Feature {
     Pricing,
     /// Tenant hostnames (BUNYIP-591). Gates nothing yet; the routing writer lands with BUNYIP-679.
     TenantHostnames,
+    /// Application URL health worker (BUNYIP-1089). When off the worker is a
+    /// no-op; the migration and the admin "Last check" column are present either
+    /// way. Flip on to start probing; flip off during an incident to stop writes.
+    UrlHealth,
 }
 
 impl Feature {
     // SPEC-7.1.126: admin-page order
     /// Every registered feature, in admin-page order.
-    pub const ALL: &'static [Feature] = &[Feature::Pricing, Feature::TenantHostnames];
+    pub const ALL: &'static [Feature] = &[
+        Feature::Pricing,
+        Feature::TenantHostnames,
+        Feature::UrlHealth,
+    ];
 
     // SPEC-7.1.126: never rename; a rename reads as a new, off feature
     /// The stable key: the `feature_toggles.key` value and the wire name.
@@ -30,6 +38,7 @@ impl Feature {
         match self {
             Feature::Pricing => "pricing",
             Feature::TenantHostnames => "tenant_hostnames",
+            Feature::UrlHealth => "url_health_enabled",
         }
     }
 
@@ -39,6 +48,7 @@ impl Feature {
         match self {
             Feature::Pricing => "Pricing",
             Feature::TenantHostnames => "Tenant Hostnames",
+            Feature::UrlHealth => "URL Health",
         }
     }
 
@@ -52,6 +62,9 @@ impl Feature {
             Feature::TenantHostnames => {
                 "Custom hostnames per tenant. Nothing reads this switch yet, so flipping it changes nothing today."
             }
+            Feature::UrlHealth => {
+                "Periodic URL health probes of every hosted application entry. The worker writes one history row per probe and never fetches a private, loopback or link-local address. Off keeps the admin Last-check column empty."
+            }
         }
     }
 
@@ -61,6 +74,7 @@ impl Feature {
         match self {
             Feature::Pricing => "BUNYIP-841",
             Feature::TenantHostnames => "BUNYIP-591",
+            Feature::UrlHealth => "BUNYIP-1089",
         }
     }
 

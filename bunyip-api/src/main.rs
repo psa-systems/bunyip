@@ -394,6 +394,13 @@ async fn main() -> anyhow::Result<()> {
     // migration for a self-hoster whose releases live elsewhere.
     upsert_application_release_notes_urls(&pool).await?;
 
+    // BUNYIP-862 second slice: the hosted-application `subdomain` column
+    // (migrations 20260603000020 / 20260604000010 seed 'msp' / 'drillmark',
+    // both a8n.systems defaults). Overwrite from env when set; otherwise NULL
+    // the row when it still matches the a8n seed, so a fresh self-hoster boots
+    // with no bogus launch tile linking to someone else's host.
+    upsert_hosted_application_subdomains(&pool).await?;
+
     // Test database connection
     // SPEC-9.4.14: post-reconcile health check
     sqlx::query("SELECT 1").execute(&pool).await.map_err(|e| {
@@ -512,6 +519,26 @@ async fn main() -> anyhow::Result<()> {
                     .await;
             }
         });
+    }
+
+    // BUNYIP-1089: the URL health worker. Flag-gated inside the worker on
+    // `url_health_enabled`; off means the ticker fires and does nothing.
+    {
+        let interval_secs = std::env::var("URL_HEALTH_CHECK_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(bunyip_domain::services::url_health::DEFAULT_CHECK_INTERVAL_SECS);
+        let policy = bunyip_domain::services::url_health::WorkerPolicy {
+            interval: std::time::Duration::from_secs(
+                bunyip_domain::services::url_health::clamp_interval(interval_secs),
+            ),
+            ..bunyip_domain::services::url_health::WorkerPolicy::default()
+        };
+        bunyip_domain::services::url_health::spawn(
+            pool.clone(),
+            Arc::clone(&feature_toggles),
+            policy,
+        );
     }
 
     // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
@@ -657,18 +684,32 @@ async fn main() -> anyhow::Result<()> {
     // Dev / staging keep the new_dev() fallback so a local box without a
     // real SMTP still boots.
     let is_prod = config.is_production();
+    // BUNYIP-1096: load the optional operator-set secondary SMTP transport
+    // from `SMTP_FALLBACK_*`. `None` is the normal "no fallback configured"
+    // state and keeps today's single-transport behaviour.
+    let smtp_fallback = bunyip_domain::config::SmtpFallbackConfig::from_env().unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "SMTP_FALLBACK_* config could not be loaded; running without a fallback relay");
+        None
+    });
+    if smtp_fallback.is_some() {
+        tracing::info!("SMTP fallback transport is configured (BUNYIP-1096)");
+    }
     // SPEC-9.7.1: suppression list guards every send path
-    let email_service = Arc::new(EmailService::new(email_config).unwrap_or_else(|e| {
-        if is_prod {
-            fatal_config_error(
-                "SMTP_HOST",
-                &format!("EmailService could not be constructed in a production deployment: {e}"),
-                "Review the SMTP credentials on the admin Email page or in the api environment.",
-            );
-        }
-        tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
-        EmailService::new_dev()
-    }));
+    let email_service = Arc::new(
+        EmailService::new_with_fallback(email_config, smtp_fallback).unwrap_or_else(|e| {
+            if is_prod {
+                fatal_config_error(
+                    "SMTP_HOST",
+                    &format!(
+                        "EmailService could not be constructed in a production deployment: {e}"
+                    ),
+                    "Review the SMTP credentials on the admin Email page or in the api environment.",
+                );
+            }
+            tracing::warn!(error = %e, "Failed to initialize email service, using dev mode");
+            EmailService::new_dev()
+        }),
+    );
 
     // BUNYIP-561: subjects and the template `app_name` follow the branding
     // record from here on, so an admin rename lands without a restart.
@@ -2243,6 +2284,81 @@ async fn upsert_application_release_notes_urls(pool: &sqlx::PgPool) -> anyhow::R
                 release_notes_url = %url,
                 "applications.release_notes_url reconciled from environment"
             );
+        }
+    }
+    Ok(())
+}
+
+/// BUNYIP-862 second slice: `applications.subdomain` for the two hosted apps
+/// (Mokosh and Drillmark) is set per environment from `MOKOSH_SUBDOMAIN` /
+/// `DRILLMARK_SUBDOMAIN`. When the env var is unset AND the stored subdomain
+/// still matches the migration's a8n-specific seed, the column is set to
+/// NULL: a fresh self-hoster boots with no launch tile linking to a bogus
+/// host. An admin-edited value (anything other than the seed) is left alone.
+///
+/// The seed pair is `('msp', 'drillmark')`, from migrations
+/// `20260603000020_seed_mokosh_hosted_application.sql` and
+/// `20260604000010_seed_drillmark_hosted_application.sql`.
+async fn upsert_hosted_application_subdomains(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    // (slug, env var, seed value the migration wrote)
+    for (slug, env_var, seed) in [
+        ("mokosh", "MOKOSH_SUBDOMAIN", "msp"),
+        ("drillmark", "DRILLMARK_SUBDOMAIN", "drillmark"),
+    ] {
+        match secret_env(env_var) {
+            Some(value) => {
+                let rows = sqlx::query(
+                    r#"
+                    UPDATE applications
+                       SET subdomain = $1
+                     WHERE slug = $2
+                    "#,
+                )
+                .bind(&value)
+                .bind(slug)
+                .execute(pool)
+                .await?
+                .rows_affected();
+                if rows == 0 {
+                    tracing::warn!(
+                        slug,
+                        env_var,
+                        "no applications row matched; subdomain left at its \
+                         migration-seeded default. Expected the hosted-application \
+                         seed migration to have run first."
+                    );
+                } else {
+                    info!(
+                        slug,
+                        subdomain = %value,
+                        "applications.subdomain reconciled from environment"
+                    );
+                }
+            }
+            None => {
+                // Only clear the a8n-specific seed, never an admin's edit.
+                let rows = sqlx::query(
+                    r#"
+                    UPDATE applications
+                       SET subdomain = NULL
+                     WHERE slug = $1 AND subdomain = $2
+                    "#,
+                )
+                .bind(slug)
+                .bind(seed)
+                .execute(pool)
+                .await?
+                .rows_affected();
+                if rows > 0 {
+                    info!(
+                        slug,
+                        seed,
+                        "applications.subdomain cleared from the a8n-specific \
+                         seed (BUNYIP-862); the launch tile is invisible until \
+                         an admin or an env var sets a real subdomain"
+                    );
+                }
+            }
         }
     }
     Ok(())

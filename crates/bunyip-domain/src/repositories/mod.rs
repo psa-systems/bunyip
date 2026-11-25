@@ -7,6 +7,7 @@ pub mod account_delete_dispatch_failure;
 pub mod application;
 pub mod application_doc;
 pub mod application_group;
+pub mod application_url_check;
 pub mod audit;
 pub mod auto_ban;
 pub mod branding;
@@ -44,6 +45,7 @@ pub use account_delete_dispatch_failure::{
 pub use application::ApplicationRepository;
 pub use application_doc::ApplicationDocRepository;
 pub use application_group::ApplicationGroupRepository;
+pub use application_url_check::ApplicationUrlCheckRepository;
 pub use audit::AuditLogRepository;
 pub use auto_ban::AutoBanConfigRepository;
 pub use branding::BrandingRepository;

@@ -288,6 +288,10 @@ pub struct Application {
     pub maintenance_mode: bool,
     #[serde(default)]
     pub maintenance_message: Option<String>,
+    /// BUNYIP-797: coming-soon toggle. The card renders a pill and the launch
+    /// button is disabled when true.
+    #[serde(default)]
+    pub coming_soon: bool,
     /// Group membership (BUNYIP-100); `None` = ungrouped. Used to group the
     /// applications page under group headings.
     #[serde(default)]
@@ -1090,6 +1094,9 @@ pub struct AdminApplication {
     // distribution product. Defaults to hosted to match the DB column default.
     #[serde(default = "default_true")]
     pub is_hosted: bool,
+    /// BUNYIP-797: coming-soon toggle. Prefills the admin checkbox.
+    #[serde(default)]
+    pub coming_soon: bool,
     // Distribution config, for prefilling the admin edit form. The backend
     // serialises these straight off the `Application` model (snake_case).
     #[serde(default)]
@@ -1112,6 +1119,18 @@ pub struct AdminApplication {
     // selector on the application edit form.
     #[serde(default)]
     pub group_id: Option<String>,
+    /// BUNYIP-1089: most-recent URL health probe outcome. `None` means the
+    /// worker has not written a row yet (feature off, or no interval has
+    /// elapsed since bootstrap).
+    #[serde(default)]
+    pub last_check_status: Option<String>,
+    /// BUNYIP-1089: when the last probe wrote its row.
+    #[serde(default)]
+    pub last_check_at: Option<String>,
+    /// BUNYIP-1089: the probe's error-detail column, surfaced to the admin
+    /// list so a failure is attributable without a drill-down.
+    #[serde(default)]
+    pub last_check_error_detail: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

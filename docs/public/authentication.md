@@ -56,8 +56,8 @@ Create, revoke, and every verified use land in the audit log.
 
 ## Session lifetime
 
-- Access tokens are short (minutes, configurable through `OIDC_ACCESS_TOKEN_TTL`).
-- Refresh tokens are longer (hours to days through `OIDC_REFRESH_TOKEN_TTL`).
+- Access tokens are short (minutes, configurable through `OIDC_ACCESS_TOKEN_TTL_SECONDS`).
+- Refresh tokens are longer (hours to days through `OIDC_REFRESH_TOKEN_TTL_SECONDS`).
 - The session cookie is renewed on activity; a signed-out session invalidates the session cookie everywhere.
 
 ## What authentication does NOT grant
