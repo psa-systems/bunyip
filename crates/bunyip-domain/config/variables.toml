@@ -734,3 +734,8 @@ name = "TRUSTED_PROXY_CIDR"
 since = "v0.3.0"
 required = false
 
+[[variable]]
+name = "URL_HEALTH_CHECK_INTERVAL_SECS"
+since = "v0.22.0"
+required = false
+

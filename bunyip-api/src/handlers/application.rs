@@ -97,6 +97,19 @@ fn catalog_visible(
     !app.requires_entitlement || is_admin || entitled_ids.contains(&app.id)
 }
 
+// BUNYIP-1090: hide an unreachable tile from the public list.
+/// Reachability gate: keep the tile when `coming_soon` is on, when no probe
+/// has written a row yet (fresh install or the worker has not ticked since
+/// boot), or when the latest probe says `ok`. Anything else is a known-bad
+/// destination the user never sees. Pure, so the four cases (coming-soon,
+/// no-probe, ok, failing) are unit-tested without seeding `application_url_checks`.
+fn reachable_or_coming_soon(coming_soon: bool, latest_status: Option<&str>) -> bool {
+    if coming_soon {
+        return true;
+    }
+    matches!(latest_status, None | Some("ok"))
+}
+
 // SPEC-10.6.4, SPEC-10.6.5: hosted active apps only, restricted ones filtered per caller.
 /// GET /v1/applications
 /// List active HOSTED applications (hub launch tiles). Catalog-only
@@ -114,6 +127,7 @@ pub async fn list_applications(
     req: HttpRequest,
     user: OptionalUser,
     pool: web::Data<PgPool>,
+    feature_toggles: web::Data<bunyip_domain::feature_toggles::FeatureToggleSnapshot>,
 ) -> Result<HttpResponse, AppError> {
     let request_id = get_request_id(&req);
 
@@ -141,9 +155,40 @@ pub async fn list_applications(
         EntitlementRepository::active_application_ids(pool.as_ref(), user_id).await?
     };
 
+    // BUNYIP-1090: batch-fetch the latest URL probe per app so the filter
+    // reads one row per app in one query. Flag-gated on `url_health_enabled`:
+    // when off, no probe data is authoritative yet, so the filter is a no-op
+    // and every catalog-visible tile is kept.
+    let url_health_on = match feature_toggles.read() {
+        Ok(guard) => guard.enabled(bunyip_domain::feature_toggles::Feature::UrlHealth),
+        Err(poison) => poison
+            .into_inner()
+            .enabled(bunyip_domain::feature_toggles::Feature::UrlHealth),
+    };
+    let ids: Vec<uuid::Uuid> = apps.iter().map(|a| a.id).collect();
+    let latest = if url_health_on {
+        crate::repositories::ApplicationUrlCheckRepository::latest_per_application(
+            pool.as_ref(),
+            &ids,
+        )
+        .await?
+    } else {
+        Vec::new()
+    };
+
     let apps_response: Vec<ApplicationResponse> = apps
         .into_iter()
         .filter(|app| catalog_visible(app, is_admin, &entitled_ids))
+        .filter(|app| {
+            if !url_health_on {
+                return true;
+            }
+            let status = latest
+                .iter()
+                .find(|c| c.application_id == app.id)
+                .map(|c| c.status.as_str());
+            reachable_or_coming_soon(app.coming_soon, status)
+        })
         .map(|app| ApplicationResponse::from_application(app, has_access))
         .collect();
 
@@ -382,6 +427,7 @@ mod tests {
                 description: None,
                 icon_url: None,
                 is_active: true,
+                coming_soon: false,
                 is_hosted: true,
                 requires_entitlement,
                 maintenance_mode: false,
@@ -448,6 +494,53 @@ mod tests {
                 catalog_visible(&restricted, false, &[id]),
                 "an entitled caller sees the restricted product"
             );
+        }
+    }
+
+    /// BUNYIP-1090: slice 3's reachability gate. Pure classifier, four cases.
+    mod reachable_or_coming_soon {
+        use super::super::reachable_or_coming_soon;
+
+        #[test]
+        fn coming_soon_wins_over_a_failing_probe() {
+            // A coming-soon tile stays visible even when the worker has decided
+            // the destination is unreachable. The slice-1 pill + disabled Launch
+            // on the dashboard cover the UX; the user still sees the tile.
+            assert!(reachable_or_coming_soon(true, Some("network_error")));
+            assert!(reachable_or_coming_soon(true, Some("http_error")));
+            assert!(reachable_or_coming_soon(true, None));
+        }
+
+        #[test]
+        fn no_probe_yet_keeps_the_tile() {
+            // Freshly installed app, worker disabled, or worker not yet ticked
+            // since boot: no row in application_url_checks, so the tile is kept.
+            // Hiding these would produce the exact invisible-tile symptom this
+            // ticket exists to remove.
+            assert!(reachable_or_coming_soon(false, None));
+        }
+
+        #[test]
+        fn ok_probe_keeps_the_tile() {
+            assert!(reachable_or_coming_soon(false, Some("ok")));
+        }
+
+        #[test]
+        fn failing_probes_drop_the_tile() {
+            for status in ["http_error", "screen_refused", "timeout", "network_error"] {
+                assert!(
+                    !reachable_or_coming_soon(false, Some(status)),
+                    "status {status} must drop the tile"
+                );
+            }
+        }
+
+        #[test]
+        fn an_unknown_status_string_is_treated_as_failing() {
+            // A status the worker does not emit (e.g. a future variant that
+            // predates a client-side update) is conservatively failing: hide
+            // the tile rather than show something the server cannot vouch for.
+            assert!(!reachable_or_coming_soon(false, Some("mystery")));
         }
     }
 }

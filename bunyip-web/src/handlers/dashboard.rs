@@ -157,14 +157,20 @@ fn dashboard_apps_grid(
                         div class="flex flex-col space-y-1.5 p-6" {
                             div class="flex items-center justify-between" {
                                 h3 class="text-2xl font-semibold leading-none tracking-tight" { (app.display_name) }
-                                @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                                // BUNYIP-797: coming-soon wins over the maintenance/active/locked pill.
+                                @if app.coming_soon { (badge("secondary", "Coming Soon")) }
+                                @else if app.maintenance_mode { (badge("warning", "Maintenance")) }
                                 @else if app.is_accessible { (badge("success", "Active")) }
                                 @else { (badge("secondary", "Locked")) }
                             }
                             p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
                         }
                         div class="p-6 pt-0 mt-auto" {
-                            @if app.is_accessible {
+                            @if app.coming_soon {
+                                button type="button" disabled class=(button_class("default", "default", "w-full")) {
+                                    "Coming Soon"
+                                }
+                            } @else if app.is_accessible {
                                 // BUNYIP-684: no declared host, nothing to launch.
                                 // BUNYIP-755: also absent for the Community app
                                 // when BUNYIP_COMMUNITY_URL is unset.
@@ -381,7 +387,9 @@ fn app_card(
                     div class={ "flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-br " (gradient) } {
                         @if let Some(ic) = &app.icon_url { img src=(ic) alt=(app.display_name) class="h-6 w-6"; } @else { (icon("link-2", "h-6 w-6 text-white")) }
                     }
-                    @if app.maintenance_mode { (badge("warning", "Maintenance")) }
+                    // BUNYIP-797: coming-soon takes precedence over the maintenance pill.
+                    @if app.coming_soon { (badge("secondary", "Coming Soon")) }
+                    @else if app.maintenance_mode { (badge("warning", "Maintenance")) }
                 }
                 h3 class="text-2xl font-semibold leading-none tracking-tight mt-4" { (app.display_name) }
                 p class="text-sm text-muted-foreground" { (app.description.clone().unwrap_or_default()) }
@@ -389,7 +397,9 @@ fn app_card(
             div class="p-6 pt-0 mt-auto" {
                 // BUNYIP-684: host and Launch only for a declared subdomain.
                 @if let Some(host) = &host { p class="text-sm text-muted-foreground mb-4" { (host) } }
-                @if app.is_accessible {
+                @if app.coming_soon {
+                    (disabled_button("default", "default", "w-full", "Coming Soon"))
+                } @else if app.is_accessible {
                     // The `/dashboard` deep link, not the apex: see
                     // `util::app_launch_link` for why the suffix is load-bearing.
                     // BUNYIP-755: also absent for the Community app when
@@ -3115,6 +3125,7 @@ mod tests {
             is_accessible: true,
             maintenance_mode: false,
             maintenance_message: None,
+            coming_soon: false,
             group_id: None,
         }
     }
@@ -3139,6 +3150,39 @@ mod tests {
         assert!(
             !html.contains("Release notes"),
             "no release-notes link when the URL is unset"
+        );
+    }
+
+    /// BUNYIP-797: an app with `coming_soon = true` renders the pill, a disabled
+    /// Coming Soon button, and never a Launch link, even if `is_accessible` is
+    /// otherwise true.
+    #[test]
+    fn app_card_renders_coming_soon_pill_and_disables_launch() {
+        let mut app = app_with_release_notes(None);
+        app.coming_soon = true;
+        app.is_accessible = true; // would normally render a Launch link
+        let html = app_card(&app, "a8n.run", true, None).into_string();
+        assert!(html.contains("Coming Soon"), "pill + button: {html}");
+        assert!(
+            !html.contains(">Launch<"),
+            "a coming-soon tile never renders a Launch link: {html}"
+        );
+        assert!(
+            !html.contains("Not Available"),
+            "coming-soon replaces the Not Available fallback: {html}"
+        );
+    }
+
+    /// Validates the toggle-off behaviour: with `coming_soon = false` the card
+    /// renders its ordinary launch surfaces, so a flip-on changes the state the
+    /// test above locks in.
+    #[test]
+    fn app_card_without_coming_soon_renders_launch() {
+        let app = app_with_release_notes(None);
+        let html = app_card(&app, "a8n.run", true, None).into_string();
+        assert!(
+            !html.contains("Coming Soon"),
+            "no pill when the flag is off: {html}"
         );
     }
 
@@ -3839,6 +3883,7 @@ mod card_spacing_tests {
             is_accessible: true,
             maintenance_mode: false,
             maintenance_message: None,
+            coming_soon: false,
             group_id: None,
         }
     }
@@ -3905,6 +3950,7 @@ mod fetch_state_tests {
             is_accessible: true,
             maintenance_mode: false,
             maintenance_message: None,
+            coming_soon: false,
             group_id: None,
         }
     }

@@ -521,6 +521,26 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // BUNYIP-1089: the URL health worker. Flag-gated inside the worker on
+    // `url_health_enabled`; off means the ticker fires and does nothing.
+    {
+        let interval_secs = std::env::var("URL_HEALTH_CHECK_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(bunyip_domain::services::url_health::DEFAULT_CHECK_INTERVAL_SECS);
+        let policy = bunyip_domain::services::url_health::WorkerPolicy {
+            interval: std::time::Duration::from_secs(
+                bunyip_domain::services::url_health::clamp_interval(interval_secs),
+            ),
+            ..bunyip_domain::services::url_health::WorkerPolicy::default()
+        };
+        bunyip_domain::services::url_health::spawn(
+            pool.clone(),
+            Arc::clone(&feature_toggles),
+            policy,
+        );
+    }
+
     // BUNYIP-483: ONE at-rest key set (APP_ENCRYPTION_KEY, plus any
     // APP_ENCRYPTION_KEY_PREV entries for the rotation / consolidation window)
     // guards the TOTP secrets, the Stripe secrets and the SMTP password.
