@@ -24,10 +24,12 @@ pub mod mirzam;
 pub mod mirzam_backfill;
 pub mod mirzam_sync;
 pub mod organizations;
+pub mod outbound;
 pub mod password_breach;
 pub mod provider_status;
 pub mod stripe;
 pub mod totp;
+pub mod url_health;
 pub mod webhook;
 
 // BUNYIP-491 closes BUNYIP-483: `EncryptionKeySet` now owns multi-previous

@@ -695,7 +695,47 @@ since = "v0.2.1"
 required = false
 
 [[variable]]
+name = "SMTP_FALLBACK_HOST"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_PORT"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_TLS"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_USERNAME"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_PASSWORD"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_PASSWORD_FILE"
+since = "v0.22.0"
+required = false
+
+[[variable]]
+name = "SMTP_FALLBACK_EHLO_NAME"
+since = "v0.22.0"
+required = false
+
+[[variable]]
 name = "TRUSTED_PROXY_CIDR"
 since = "v0.3.0"
+required = false
+
+[[variable]]
+name = "URL_HEALTH_CHECK_INTERVAL_SECS"
+since = "v0.22.0"
 required = false
 

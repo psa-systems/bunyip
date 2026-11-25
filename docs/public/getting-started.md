@@ -29,7 +29,7 @@ Three URLs to know:
 
 On first boot, when no admin exists, `bunyip-api` seeds one from `SETUP_DEFAULT_ADMIN` (`email:password`). The development default in `.env.example` is `admin@bunyip.local` / `ChangeMeBunyip2026`. Open `http://localhost:4400/login` and sign in with those credentials.
 
-For a sign-up flow (the normal path for a second operator), set `EMAIL_LOG_TOKENS=true` in `.env` so the magic link is written to the log. Submit `http://localhost:4400/signup`, then read the link from `docker logs dev-bunyip-api-${USER}`.
+For a sign-up flow (the normal path for a second operator), set `EMAIL_LOG_TOKENS=true` AND `RUST_LOG=info,bunyip_api=debug,bunyip_core=info,bunyip_domain=debug` in `.env` so the magic link is written to the log (the token-logging calls are at DEBUG in `bunyip_domain`, which the compose default `RUST_LOG` does not enable). Submit `http://localhost:4400/signup`, then read the link from `docker logs dev-bunyip-api-${USER}`.
 
 After sign-in you land on `/dashboard`, the App Launcher. With no other apps deployed in dev there is nothing to launch; the launcher is the handoff surface to downstream RPs in production.
 

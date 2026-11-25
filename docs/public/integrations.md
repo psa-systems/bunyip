@@ -30,7 +30,7 @@ What breaks when Infisical is unreachable:
 
 ## SMTP (outbound mail)
 
-Bunyip sends magic links, approval emails, invite emails and recovery-code reminders through a configured SMTP relay. Set `EMAIL_ENABLED=true`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `EMAIL_FROM`; the password lives in the Group-2 store.
+Bunyip sends magic links, approval emails, invite emails and recovery-code reminders through a configured SMTP relay. Set `EMAIL_ENABLED=true`, `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_FROM`; the password lives in the Group-2 store.
 
 What breaks when SMTP is unreachable:
 
@@ -38,7 +38,7 @@ What breaks when SMTP is unreachable:
 - Login-approval emails do not arrive; every held sign-in stays held forever.
 - Password reset is broken.
 
-Operator recovery: flip the mail provider to `MAIL_PROVIDER=log` for a brief window while fixing SMTP. The approval link is written to the api log; the operator reads it and relays to the user out of band. This is a last resort, not a configuration.
+There is no production-usable fallback today while SMTP is down; the relay itself must be fixed. `EMAIL_LOG_TOKENS`, which writes tokens to the api log, is dev-only and is forced off in production.
 
 ## Stripe (billing)
 
@@ -63,7 +63,7 @@ Allow-listed machine clients also reach `/v1/host/secrets/{KEY}` and `/v1/host/c
 
 ## IP geolocation (IP2Location LITE)
 
-Bunyip can consume the IP2Location LITE binary database to resolve `country` from an IP for the login-approval country trigger. Point `IP2LOCATION_LITE_PATH` at the binary. Without it, the country trigger never fires.
+Bunyip can consume the IP2Location LITE binary database to resolve `country` from an IP for the login-approval country trigger. Point `IP2LOCATION_DB_PATH` at the binary. Without it, the country trigger never fires.
 
 The LITE database is a free download that refreshes periodically; the internal runbook covers the pull cadence. Nothing in bunyip phones home for updates.
 
