@@ -16,7 +16,7 @@ use crate::api::admin as admin_api;
 use crate::api::types::MailerSuppression;
 use crate::handlers::{admin_guard, admin_response, verification_gate};
 use crate::util::{rel_time, urlenc};
-use crate::views::ui::{empty_state, error_box_for, icon, pager};
+use crate::views::ui::{button_class, empty_state, error_box_for, icon, pager};
 use crate::web::redirect_cookies;
 use crate::web::AppState;
 
@@ -44,7 +44,7 @@ fn suppression_row(s: &MailerSuppression) -> Markup {
                 }
             }
             form method="post" action=(format!("/admin/mailer-suppressions/{}/delete", urlenc(&s.address))) data-confirm=(format!("Remove the suppression for {}? They will be mailed again.", s.address)) {
-                button type="submit" class="text-sm font-medium text-destructive-text hover:underline" { "Remove" }
+                button type="submit" class=(button_class("destructive", "sm", "")) { "Remove" }
             }
         }
     }
