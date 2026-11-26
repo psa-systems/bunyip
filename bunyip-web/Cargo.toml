@@ -16,6 +16,7 @@ path = "src/main.rs"
 # Web server.
 axum = { version = "0.7", features = ["macros", "multipart"] }
 tokio = { workspace = true }
+futures-util = "0.3"
 tower = { version = "0.5", features = ["util"] }
 # SPEC-14.4.4: feature set the router relies on
 tower-http = { version = "0.6", features = ["fs", "compression-gzip", "compression-br", "set-header", "trace"] }

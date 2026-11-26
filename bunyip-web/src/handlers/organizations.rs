@@ -258,13 +258,19 @@ async fn fetch_state(
     } else {
         Vec::new()
     };
-    let mut members = Vec::with_capacity(teams.len());
-    for t in &teams {
-        let list = orgs_api::list_team_members(&st.api, cookie, &t.id)
-            .await
-            .unwrap_or_default();
-        members.push((t.id.clone(), list));
-    }
+    // One HTTP round trip per team, fanned out concurrently instead of
+    // awaited one at a time, so page latency does not scale with team count.
+    let member_lists = futures_util::future::join_all(
+        teams
+            .iter()
+            .map(|t| orgs_api::list_team_members(&st.api, cookie, &t.id)),
+    )
+    .await;
+    let members = teams
+        .iter()
+        .zip(member_lists)
+        .map(|(t, r)| (t.id.clone(), r.unwrap_or_default()))
+        .collect();
     (org, teams, members)
 }
 
@@ -478,10 +484,13 @@ async fn render_team_row(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use axum::routing::get;
-    use axum::Router;
+    use axum::{Json, Router};
+    use serde_json::{json, Value};
     use tower::ServiceExt;
 
     use super::*;
@@ -557,5 +566,102 @@ mod tests {
         let markup = organizations_content().into_string();
         assert!(markup.contains("Organization"));
         assert!(markup.contains("Administer the organization you own"));
+    }
+
+    /// A stand-in for bunyip-api that answers one organization with several
+    /// teams, each `/members` call held open for `delay` before answering, so
+    /// the test below can tell a serial per-team loop (wall time grows with
+    /// team count) apart from a concurrent fan-out (wall time stays ~`delay`).
+    async fn mock_api_with_teams(team_count: usize, delay: Duration) -> String {
+        async fn organization() -> Json<Value> {
+            Json(json!({
+                "data": {
+                    "id": "org1",
+                    "name": "Acme",
+                    "owner_bunyip_user_id": "u1",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:00Z"
+                }
+            }))
+        }
+
+        let router = Router::new()
+            .route("/v1/organization", get(organization))
+            .route(
+                "/v1/organization/teams",
+                get(move || async move {
+                    let rows: Vec<Value> = (0..team_count)
+                        .map(|i| {
+                            json!({
+                                "id": format!("team{i}"),
+                                "organization_id": "org1",
+                                "name": format!("Team {i}"),
+                                "description": null,
+                                "created_at": "2026-01-01T00:00:00Z",
+                                "updated_at": "2026-01-01T00:00:00Z"
+                            })
+                        })
+                        .collect();
+                    Json(json!({ "data": rows }))
+                }),
+            )
+            .route(
+                "/v1/organization/teams/:id/members",
+                get(move |Path(team_id): Path<String>| async move {
+                    tokio::time::sleep(delay).await;
+                    Json(json!({
+                        "data": [{
+                            "team_id": team_id,
+                            "bunyip_user_id": "u2",
+                            "role": "member",
+                            "joined_at": "2026-01-01T00:00:00Z"
+                        }]
+                    }))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the mock API binds a port");
+        let addr = listener.local_addr().expect("the mock API has an address");
+        tokio::spawn(async move {
+            axum::serve(listener, router)
+                .await
+                .expect("the mock API serves");
+        });
+        format!("http://{addr}")
+    }
+
+    /// Acceptance criterion: `fetch_state`'s per-team member fetches run
+    /// concurrently. With N teams each held open for `DELAY`, a serial loop
+    /// costs N * DELAY; a concurrent fan-out costs ~DELAY regardless of N.
+    /// The threshold sits well above one concurrent round trip and well below
+    /// the serial total, so this fails if the fetch regresses to a loop.
+    #[tokio::test]
+    async fn member_fetches_for_multiple_teams_run_concurrently() {
+        const TEAM_COUNT: usize = 4;
+        const DELAY: Duration = Duration::from_millis(100);
+
+        let url = mock_api_with_teams(TEAM_COUNT, DELAY).await;
+        let st = AppState {
+            api: crate::api::Api::new(&url),
+            ..unreachable_api_state()
+        };
+
+        let start = std::time::Instant::now();
+        let (org, teams, members) = fetch_state(&st, None).await;
+        let elapsed = start.elapsed();
+
+        assert!(org.is_some());
+        assert_eq!(teams.len(), TEAM_COUNT);
+        assert_eq!(members.len(), TEAM_COUNT);
+        for (_, list) in &members {
+            assert_eq!(list.len(), 1);
+        }
+        let serial_total = DELAY * TEAM_COUNT as u32;
+        assert!(
+            elapsed < serial_total,
+            "took {elapsed:?} for {TEAM_COUNT} teams at {DELAY:?} each ({serial_total:?} if serial); \
+             fetch_state appears to await team-member fetches one at a time"
+        );
     }
 }
