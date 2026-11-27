@@ -16,7 +16,6 @@ pub fn configure(cfg: &mut web::ServiceConfig) {
             .route("", web::put().to(handlers::update_my_organization))
             .route("/teams", web::get().to(handlers::list_teams))
             .route("/teams", web::post().to(handlers::create_team))
-            .route("/teams/{id}", web::get().to(handlers::get_team))
             .route("/teams/{id}", web::put().to(handlers::update_team))
             .route("/teams/{id}", web::delete().to(handlers::delete_team))
             .route(

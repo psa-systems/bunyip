@@ -177,3 +177,42 @@ pub async fn remove_team_member(
     ok_data(&r)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    /// Every handler bunyip-api mounts under `/organization`
+    /// (`bunyip-api/src/routes/organization.rs`) must have a same-named caller
+    /// in this file, so a producer endpoint can never again ship with no BFF
+    /// client function reaching it (the `get_team` gap this test guards).
+    #[test]
+    fn every_mounted_organization_route_has_a_bff_caller() {
+        let routes_src = include_str!("../../../bunyip-api/src/routes/organization.rs");
+        let client_src = include_str!("organizations.rs");
+
+        let handler_names: Vec<&str> = routes_src
+            .split(".to(handlers::")
+            .skip(1)
+            .map(|chunk| {
+                chunk
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .next()
+                    .unwrap_or("")
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        assert!(
+            !handler_names.is_empty(),
+            "expected to find at least one handlers::* route mounted under /organization"
+        );
+
+        for name in handler_names {
+            let needle = format!("pub async fn {name}(");
+            assert!(
+                client_src.contains(&needle),
+                "bunyip-api mounts /organization route handlers::{name} but \
+                 bunyip-web/src/api/organizations.rs has no `{needle}` caller for it"
+            );
+        }
+    }
+}

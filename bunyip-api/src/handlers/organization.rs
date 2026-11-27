@@ -221,19 +221,6 @@ pub async fn create_team(
     Ok(success(TeamBody::from(team), request_id))
 }
 
-pub async fn get_team(
-    req: HttpRequest,
-    user: AuthenticatedUser,
-    pool: web::Data<PgPool>,
-    tier_config: web::Data<Arc<RwLock<TierConfig>>>,
-    path: web::Path<Uuid>,
-) -> Result<HttpResponse, AppError> {
-    let request_id = get_request_id(&req);
-    let flag = live_orgs_enabled(&tier_config);
-    let team = TeamService::get_team(&pool, flag, path.into_inner(), user.0.sub).await?;
-    Ok(success(TeamBody::from(team), request_id))
-}
-
 pub async fn update_team(
     req: HttpRequest,
     user: AuthenticatedUser,

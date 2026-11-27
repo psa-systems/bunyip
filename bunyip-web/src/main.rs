@@ -256,7 +256,8 @@ async fn main() {
         )
         .route(
             "/organizations/teams/{id}",
-            axum::routing::delete(handlers::organizations::delete_team),
+            axum::routing::put(handlers::organizations::update_team)
+                .delete(handlers::organizations::delete_team),
         )
         .route(
             "/organizations/teams/{id}/members",

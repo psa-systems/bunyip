@@ -173,18 +173,6 @@ impl TeamService {
         .await
     }
 
-    pub async fn get_team(
-        pool: &PgPool,
-        orgs_enabled: bool,
-        team_id: Uuid,
-        caller_bunyip_user_id: Uuid,
-    ) -> Result<Team, AppError> {
-        if !orgs_enabled {
-            return feature_off();
-        }
-        Self::team_in_caller_org(pool, team_id, caller_bunyip_user_id).await
-    }
-
     pub async fn update_team(
         pool: &PgPool,
         orgs_enabled: bool,

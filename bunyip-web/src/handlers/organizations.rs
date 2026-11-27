@@ -108,6 +108,31 @@ fn team_row(team: &TeamResponse, members: &[TeamMemberResponse]) -> Markup {
                     class=(button_class("destructive", "sm", ""))
                 { "Delete" }
             }
+            form
+                hx-put=(format!("/organizations/teams/{}", team.id))
+                hx-target=(format!("#team-{}", team.id))
+                hx-swap="outerHTML"
+                class="flex flex-wrap items-end gap-2"
+            {
+                div class="flex-1 min-w-[220px] space-y-1" {
+                    label class="text-xs font-medium" for=(format!("team-edit-name-{}", team.id)) { "Name" }
+                    input
+                        id=(format!("team-edit-name-{}", team.id))
+                        name="name"
+                        required
+                        value=(team.name)
+                        class=(dashboard_input());
+                }
+                div class="flex-1 min-w-[260px] space-y-1" {
+                    label class="text-xs font-medium" for=(format!("team-edit-description-{}", team.id)) { "Description" }
+                    input
+                        id=(format!("team-edit-description-{}", team.id))
+                        name="description"
+                        value=(team.description.clone().unwrap_or_default())
+                        class=(dashboard_input());
+                }
+                button type="submit" class=(button_class("secondary", "sm", "")) { "Save" }
+            }
             div class="space-y-2" {
                 h4 class="text-sm font-medium text-muted-foreground" { "Members" }
                 @if members.is_empty() {
@@ -378,6 +403,27 @@ pub async fn create_team(
     let resp = html_cookies(teams_section(&teams, &members), &c.set_cookies);
     match result {
         Ok(_) => with_toast(resp, "success", "Team created"),
+        Err(e) => with_toast(resp, "error", &e.user_message()),
+    }
+}
+
+/// PUT /organizations/teams/{id}: rename/redescribe a team. Replaces the team row.
+pub async fn update_team(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Form(body): Form<TeamForm>,
+) -> Response {
+    let c = match require_signed_in(&st, &headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let cookie = c.forward.as_deref();
+    let desc = body.description.as_deref().filter(|s| !s.is_empty());
+    let result = orgs_api::update_team(&st.api, cookie, &id, Some(&body.name), desc).await;
+    let resp = render_team_row(&st, cookie, &c.set_cookies, &id).await;
+    match result {
+        Ok(_) => with_toast(resp, "success", "Team updated"),
         Err(e) => with_toast(resp, "error", &e.user_message()),
     }
 }

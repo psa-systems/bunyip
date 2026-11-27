@@ -228,8 +228,8 @@ pub use membership::{
 };
 pub use organization::{
     add_team_member, create_my_organization, create_team, delete_team, get_my_organization,
-    get_team, list_team_members, list_teams, remove_team_member, update_my_organization,
-    update_team, update_team_member_role,
+    list_team_members, list_teams, remove_team_member, update_my_organization, update_team,
+    update_team_member_role,
 };
 pub use pricing::{
     admin_pricing_status, public_pricing, AdminPricingStatus, PricingCache, PricingReasonView,
