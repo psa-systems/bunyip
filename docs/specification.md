@@ -2537,11 +2537,12 @@ providers, system settings file layer, feature registry, device labels and the t
 
 #### Feature registry
 
-- `SPEC-7.1.126` The `Feature` registry must hold exactly `Pricing` (key `pricing`) and `TenantHostnames` (key
-  `tenant_hostnames`) in that order in `ALL`; every key must be unique, lowercase snake_case and never renamed (a renamed
-  key reads as a new, off feature).
-- `SPEC-7.1.127` Each feature must have a non-empty admin `label` (`Pricing`, `Tenant Hostnames`) and `help`, and an
-  `issue` identifier starting with `BUNYIP-` that is used only in code and logs, never in user-facing copy.
+- `SPEC-7.1.126` The `Feature` registry must hold exactly `Pricing` (key `pricing`), `TenantHostnames` (key
+  `tenant_hostnames`) and `UrlHealth` (key `url_health_enabled`) in that order in `ALL`; every key must be unique,
+  lowercase snake_case and never renamed (a renamed key reads as a new, off feature).
+- `SPEC-7.1.127` Each feature must have a non-empty admin `label` (`Pricing`, `Tenant Hostnames`, `URL Health`) and
+  `help`, and an `issue` identifier starting with `BUNYIP-` that is used only in code and logs, never in user-facing
+  copy.
 - `SPEC-7.1.128` `Feature::from_key` must return the matching variant or `None` for a key no variant has.
 - `SPEC-7.1.129` `FeatureToggles::from_rows` must turn a feature on only when a row for its key has `enabled = true`; a
   feature with no row, or with `enabled = false`, must be off.

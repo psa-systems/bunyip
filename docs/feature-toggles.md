@@ -46,6 +46,7 @@ all iterate the registry and the table.
 |--------------------|------------------------------------------------------------------------------------------------|
 | `pricing`          | public pricing surface (BUNYIP-841). Surface-only: the admin page and the setup-status probe read it, but `tier_config.pricing_enabled` stays the writer `GET /v1/pricing` reads |
 | `tenant_hostnames` | tenant hostnames (BUNYIP-591). Nothing reads it yet; the routing writer that will gate on it is BUNYIP-679 |
+| `url_health_enabled` | application URL health worker. Off keeps the worker a no-op and the admin Last-check column empty; the migration and column are present either way |
 
 Organizations and teams (`tier_config.orgs_enabled`, BUNYIP-493) are still a `tier_config` column, not a registry
 entry. `pricing_enabled` gained a registry entry via BUNYIP-841 (surface-only: the admin page and the setup-status

@@ -37,6 +37,13 @@ dev_bind_sources := "secrets/oidc target bunyip-web/node_modules"
 # ahead of it.
 pre_commit_prepare := "ensure-oidc-keys"
 
+# Mirrors .forgejo/workflows/check.yml's check-secrets `kingfisher_skip_regex`
+# input, so the local commit-msg secrets scan agrees with CI's full-history one
+# and does not flag the whole-token fixture values SPEC-3.6.3 documents (an
+# unqualified kingfisher run otherwise fails on any commit that merely touches
+# docs/specification.md, since those fixtures are already tracked there).
+secrets_kingfisher_skip_regex := '(^(\(\$pg_pass\)|CHANGE_ME|devpassword|nobody|pw|[rs]k_live_abcdefgh1234|rk_test_abcdefgh5678|sk_live_MIDDLE[s]ecretMATERIAL1234)$|MC4CAQAwBQYDK2VwBCIEIJ5gHv/Vi3V0Lk0k3jHN10sqRZ68P8fkNuLnF\+sNtVKR)'
+
 # Keep the containerized pre-push steps identical to the ones
 # .forgejo/workflows/check.yml runs, so the hook and CI agree.
 clippy_args := "--workspace --all-targets -- -D warnings"
