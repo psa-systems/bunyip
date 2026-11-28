@@ -100,6 +100,23 @@ Every mutating admin action lands in the audit log. The admin page is the only w
 
 See [Branding](branding.md).
 
+## Organizations and teams
+
+- `GET /v1/organization` returns the caller's organization.
+- `POST /v1/organization` creates the caller's organization.
+- `PUT /v1/organization` updates the caller's organization.
+- `GET /v1/organization/teams` lists teams.
+- `POST /v1/organization/teams` creates a team.
+- `GET /v1/organization/teams/{id}` returns a team.
+- `PUT /v1/organization/teams/{id}` updates a team.
+- `DELETE /v1/organization/teams/{id}` deletes a team.
+- `GET /v1/organization/teams/{id}/members` lists a team's members.
+- `POST /v1/organization/teams/{id}/members` adds a team member.
+- `PUT /v1/organization/teams/{id}/members/{user_id}` updates a member's role.
+- `DELETE /v1/organization/teams/{id}/members/{user_id}` removes a team member.
+
+The whole group answers 404 while the `orgs_enabled` tier flag is off; the routes stay mounted and the service layer is what refuses.
+
 ## Not covered here
 
 - The dev-only helpers under `/v1/dev/*`. They are gated on dev mode and absent in a production image.
